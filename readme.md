@@ -1,33 +1,12 @@
 # Codex Session Toolkit
 
-这是一个面向 Codex 会话管理的工程化工具箱，不再是“根目录直接跑几个 `.py` 脚本”的形态。
+这是一个面向 Codex 会话管理的工具箱。
 
-它以原来的 `codex-session-cloner` 为产品入口，把 `codex_sessions` 里的核心能力整合进统一的 TUI + CLI 体系，覆盖这三条主线：
+它以 `codex-session-cloner` 为统一入口，把会话克隆、Bundle 导出导入和 Desktop 可见性修复整合进同一套 TUI + CLI 体验，覆盖这三条主线：
 
 - Provider Clone：切换 provider 后继续复用历史会话
 - Bundle Transfer：跨机器导出 / 导入会话
 - Desktop Repair：修复 Codex Desktop 左侧线程不可见问题
-
-现在的源码已经收进标准 Python 包结构：
-
-- `src/codex_session_cloner/cli.py`
-  统一命令入口，负责兼容旧参数、分发 TUI / CLI
-- `src/codex_session_cloner/core.py`
-  clone / cleanup / bundle transfer / desktop repair 的核心逻辑
-- `src/codex_session_cloner/tui_app.py`
-  TUI 信息架构、菜单编排、浏览器流程和交互动作
-- `src/codex_session_cloner/terminal_ui.py`
-  终端渲染、布局、键盘输入和样式基础设施
-- `src/codex_session_cloner/__main__.py`
-  支持 `python -m codex_session_cloner`
-- `scripts/install/`
-  安装器的内部实现，根目录 `install.*` 只是对外入口包装
-- `scripts/release/`
-  发布构建脚本与 release manifest
-- `scripts/compat/`
-  旧入口兼容层，已经从根目录收纳出去
-- `pyproject.toml`
-  打包配置，支持安装后直接运行 `codex-session-cloner`
 
 ## 核心能力
 
@@ -477,52 +456,3 @@ Bundle 内默认包含：
 - `NO_COLOR=1`
 - `CSC_ASCII_UI=1`
 - `CSC_TUI_MAX_WIDTH=120`
-
-## 现在这个项目的封装状态
-
-和之前相比，当前仓库已经有这几个关键变化：
-
-- 根目录不再摆放核心业务 `.py` 文件
-- 代码收敛进 `src/codex_session_cloner/`
-- 可以通过 `pyproject.toml` 安装为命令行程序
-- 版本号现在由包源码单点维护，CLI 可直接 `--version`
-- 项目内已有 `install.sh` / `install.ps1` / `install.bat` 一键部署脚本
-- macOS 已补上 `.command` 双击入口
-- 主启动器已经统一成产品命名：`codex-session-cloner`
-- 内部脚本已经收纳进 `scripts/install`、`scripts/release`、`scripts/compat`
-- 兼容层 `csc-launcher.*` 仍保留，但已经移出根目录
-- 仓库内可直接执行 `./codex-session-cloner` 或 `.\codex-session-cloner.cmd`
-- 可以直接生成分发包：`./release.sh` / `make release`
-- GitHub 源码归档也已通过 `.gitattributes` 做了瘦身
-- `.venv`、`dist`、测试缓存、coverage 等本地产物都已加入 git ignore
-- 已补上基础 smoke tests，可用 `make test` / `python3 -m unittest`
-- 已补上 CI workflow，后续改动会自动校验打包、launcher 和安装脚本
-- TUI / CLI / README 的命令表述已经统一到 `codex-session-cloner`
-
-如果你要真人测试，最直接的方式就是：
-
-macOS / Linux:
-
-```bash
-./install.sh
-./codex-session-cloner
-```
-
-Windows:
-
-```powershell
-.\install.ps1
-.\codex-session-cloner.cmd
-```
-
-如果你要把它当成正式工具长期使用，推荐先执行一次：
-
-```bash
-./install.sh
-```
-
-之后直接运行：
-
-```bash
-./codex-session-cloner
-```
