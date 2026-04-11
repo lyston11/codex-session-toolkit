@@ -432,4 +432,25 @@ Bundle 内默认包含：
 
 ## 致谢
 
-感谢 [Linux Do](https://linux.do) 社区的讨论、分享和灵感。
+本项目基于 [yezannnnn/agentGroup](https://github.com/yezannnnn/agentGroup) 进行开发和扩展。感谢原作者 [@yezannnnn](https://github.com/yezannnnn) 提出的四 AI 专业分工协作框架理念，为本项目奠定了坚实的基础。
+
+## 社区支持
+
+<div align="center">
+
+**学 AI，上 L 站**
+
+[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-社区-gray?style=flat-square)](https://linux.do/) [![社区支持](https://img.shields.io/badge/社区支持-交流-blue?style=flat-square)](https://linux.do/)
+
+本项目在 [LINUX DO](https://linux.do/) 社区发布与交流，感谢佬友们的支持与反馈。
+
+</div>
+
+## 许可证
+
+MIT License
+
+本项目在 LINUX DO 社区发布与交流，感谢佬友们的支持与反馈。
+
+许可证
+MIT License
