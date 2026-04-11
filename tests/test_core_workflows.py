@@ -15,7 +15,7 @@ if str(SRC_DIR) not in os.sys.path:
 
 from codex_session_toolkit.paths import CodexPaths  # noqa: E402
 from codex_session_toolkit.models import BundleSummary  # noqa: E402
-from codex_session_toolkit.services.browse import get_bundle_summaries, validate_bundles  # noqa: E402
+from codex_session_toolkit.services.browse import get_bundle_summaries, get_session_summaries, validate_bundles  # noqa: E402
 from codex_session_toolkit.services.clone import clone_to_provider  # noqa: E402
 from codex_session_toolkit.services.exporting import export_active_desktop_all, export_session  # noqa: E402
 from codex_session_toolkit.services.importing import import_desktop_all, import_session  # noqa: E402
@@ -123,6 +123,8 @@ def write_session(
     cwd: Path,
     archived: bool = False,
     timestamp: str = "2026-04-10T10:00:00Z",
+    user_message: str = "",
+    include_env_context: bool = False,
 ) -> Path:
     base = home / ".codex" / ("archived_sessions" if archived else "sessions") / "2026" / "04" / "10"
     base.mkdir(parents=True, exist_ok=True)
@@ -141,22 +143,50 @@ def write_session(
                 "cli_version": "0.1.0",
             },
         },
-        {
-            "timestamp": "2026-04-10T10:05:00Z",
-            "type": "turn_context",
-            "payload": {
-                "sandbox_policy": {"mode": "workspace-write"},
-                "approval_policy": "on-request",
-                "model": "gpt-5",
-                "effort": "medium",
-            },
-        },
-        {
-            "timestamp": "2026-04-10T10:06:00Z",
-            "type": "message",
-            "payload": {"role": "assistant", "text": "reply"},
-        },
     ]
+    if include_env_context:
+        lines.append(
+            {
+                "timestamp": "2026-04-10T10:04:30Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "<environment_context>\n  <cwd>/tmp</cwd>\n</environment_context>"}],
+                },
+            }
+        )
+    if user_message:
+        lines.append(
+            {
+                "timestamp": "2026-04-10T10:04:45Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": user_message}],
+                },
+            }
+        )
+    lines.extend(
+        [
+            {
+                "timestamp": "2026-04-10T10:05:00Z",
+                "type": "turn_context",
+                "payload": {
+                    "sandbox_policy": {"mode": "workspace-write"},
+                    "approval_policy": "on-request",
+                    "model": "gpt-5",
+                    "effort": "medium",
+                },
+            },
+            {
+                "timestamp": "2026-04-10T10:06:00Z",
+                "type": "message",
+                "payload": {"role": "assistant", "text": "reply"},
+            },
+        ]
+    )
     with rollout.open("w", encoding="utf-8") as fh:
         for line in lines:
             fh.write(json.dumps(line, separators=(",", ":")) + "\n")
@@ -201,6 +231,52 @@ def write_bundle_manifest(
 
 
 class CoreWorkflowTests(unittest.TestCase):
+    def test_session_summaries_use_first_meaningful_user_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            write_config(home, "source-provider")
+
+            session_id = "10101010-1010-1010-1010-101010101010"
+            write_session(
+                home,
+                session_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=Path("/Users/example/project-a"),
+                archived=True,
+                user_message="https://github.com/xiaotian2333/newapi-checkin.git 把这个醒目拉下来看看",
+                include_env_context=True,
+            )
+
+            summaries = get_session_summaries(CodexPaths(home=home))
+            self.assertEqual(len(summaries), 1)
+            self.assertEqual(
+                summaries[0].preview,
+                "https://github.com/xiaotian2333/newapi-checkin.git 把这个醒目拉下来看看",
+            )
+
+    def test_session_summaries_fall_back_to_workspace_name_for_windows_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            write_config(home, "source-provider")
+
+            session_id = "20202020-2020-2020-2020-202020202020"
+            write_session(
+                home,
+                session_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=r"C:\Users\Alice\Projects\Cherry-Studio",
+                archived=True,
+            )
+
+            summaries = get_session_summaries(CodexPaths(home=home))
+            self.assertEqual(len(summaries), 1)
+            self.assertIn("Cherry-Studio", summaries[0].preview)
+            self.assertIn("2026-04-10 10:00", summaries[0].preview)
+
     def test_collect_known_bundle_summaries_infers_export_groups(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
