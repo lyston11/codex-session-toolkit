@@ -428,3 +428,8 @@ Bundle 内默认包含：
 - `CST_TUI_MAX_WIDTH=120`
 - `CST_MACHINE_LABEL=My-MacBook`
 - `CST_LAUNCH_MODE=auto|source|installed`
+
+
+## 致谢
+
+感谢 [Linux Do](https://linux.do) 社区的讨论、分享和灵感。
