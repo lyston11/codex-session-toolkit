@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Iterable, List, Optional, Tuple
 
 from ..errors import ToolkitError
@@ -26,6 +26,110 @@ def session_id_from_filename(path: Path) -> Optional[str]:
     name = path.name
     match = re.match(r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)\.jsonl$", name)
     return match.group(1) if match else None
+
+
+def session_timestamp_from_filename(path: Path) -> str:
+    match = re.match(r"^rollout-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(.+)\.jsonl$", path.name)
+    if not match:
+        return ""
+    return f"{match.group(1)} {match.group(2)}:{match.group(3)}"
+
+
+def normalize_session_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def looks_like_session_meta_text(text: str) -> bool:
+    normalized = normalize_session_text(text)
+    if not normalized:
+        return True
+
+    return normalized.lower().startswith(
+        (
+            "<environment_context>",
+            "<permissions instructions>",
+            "<app-context>",
+            "<collaboration_mode>",
+            "<skills_instructions>",
+            "<turn_aborted>",
+            "<image",
+        )
+    )
+
+
+def first_text_fragment(value: object) -> str:
+    if isinstance(value, str):
+        return normalize_session_text(value)
+    if isinstance(value, list):
+        for item in value:
+            text = first_text_fragment(item)
+            if text:
+                return text
+        return ""
+    if isinstance(value, dict):
+        for key in ("text", "message", "content"):
+            text = first_text_fragment(value.get(key))
+            if text:
+                return text
+    return ""
+
+
+def first_user_prompt_from_session(session_file: Path) -> str:
+    with session_file.open("r", encoding="utf-8") as fh:
+        for raw in fh:
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            try:
+                obj = json.loads(stripped)
+            except Exception:
+                continue
+            if not isinstance(obj, dict):
+                continue
+
+            payload = obj.get("payload")
+            candidate = ""
+            if obj.get("type") == "response_item" and isinstance(payload, dict) and payload.get("role") == "user":
+                candidate = first_text_fragment(payload.get("content"))
+            elif obj.get("type") == "message" and isinstance(payload, dict) and payload.get("role") == "user":
+                candidate = first_text_fragment(payload.get("text"))
+            elif obj.get("type") == "event_msg" and isinstance(payload, dict) and payload.get("type") == "user_message":
+                candidate = first_text_fragment(payload.get("message") or payload.get("text"))
+
+            if candidate and not looks_like_session_meta_text(candidate):
+                return candidate
+    return ""
+
+
+def workspace_name_from_cwd(cwd: str) -> str:
+    normalized = (cwd or "").strip()
+    if not normalized:
+        return ""
+
+    stripped = normalized.rstrip("\\/")
+    if not stripped:
+        return normalized
+
+    if "\\" in stripped:
+        return PureWindowsPath(stripped).name or stripped
+    return Path(stripped).name or PureWindowsPath(stripped).name or stripped
+
+
+def build_session_preview(history_preview: str, session_file: Path, cwd: str) -> str:
+    for candidate in (history_preview, first_user_prompt_from_session(session_file)):
+        normalized = normalize_session_text(candidate)
+        if normalized and not looks_like_session_meta_text(normalized):
+            return normalized
+
+    workspace_name = workspace_name_from_cwd(cwd)
+    timestamp_label = session_timestamp_from_filename(session_file)
+    if workspace_name and timestamp_label:
+        return f"{workspace_name} · {timestamp_label}"
+    if workspace_name:
+        return f"工作区：{workspace_name}"
+    if timestamp_label:
+        return f"会话开始于 {timestamp_label}"
+    return session_file.name
 
 
 def parse_jsonl_records(path: Path) -> List[Tuple[str, Optional[dict]]]:
@@ -131,15 +235,24 @@ def collect_session_summaries(
     for session_file in sorted(iter_session_files(paths, active_only=active_only), reverse=True):
         session_id = session_id_from_filename(session_file) or session_file.stem
         session_scope = "archived" if str(session_file).startswith(str(paths.archived_sessions_dir)) else "active"
-        preview = history_preview.get(session_id, "")
-        source_name = extract_session_field_from_file("source", session_file)
-        originator_name = extract_session_field_from_file("originator", session_file)
+        try:
+            session_meta = read_session_payload(session_file)
+        except ToolkitError:
+            session_meta = {}
+
+        source_name = session_meta.get("source", "") if isinstance(session_meta.get("source", ""), str) else ""
+        originator_name = (
+            session_meta.get("originator", "") if isinstance(session_meta.get("originator", ""), str) else ""
+        )
         session_kind = classify_session_kind(source_name, originator_name)
         if desktop_only and session_kind != "desktop":
             continue
 
-        cwd = extract_session_field_from_file("cwd", session_file)
-        model_provider = extract_session_field_from_file("model_provider", session_file)
+        cwd = session_meta.get("cwd", "") if isinstance(session_meta.get("cwd", ""), str) else ""
+        model_provider = (
+            session_meta.get("model_provider", "") if isinstance(session_meta.get("model_provider", ""), str) else ""
+        )
+        preview = build_session_preview(history_preview.get(session_id, ""), session_file, cwd)
         summary = SessionSummary(
             session_id=session_id,
             scope=session_scope,

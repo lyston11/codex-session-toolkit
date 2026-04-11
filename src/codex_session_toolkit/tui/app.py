@@ -114,7 +114,7 @@ TUI_ACTION_NOTES = {
     "clone_dry": ["只预览将创建哪些 clone，不写入任何文件。"],
     "clean": ["删除早期版本生成、但没有 cloned_from 标记的旧副本。", "执行前需要输入 DELETE 二次确认。"],
     "clean_dry": ["只预览哪些旧副本会被删除。"],
-    "list_sessions": ["内置会话浏览器，支持过滤、预览和详情查看。"],
+    "list_sessions": ["内置会话浏览器，支持搜索、预览和详情查看。"],
     "browse_bundles": ["独立浏览 Bundle 导出记录，而不是只在导入时顺手选择。", "默认显示全部历史，支持按导出方式、机器和最新视图切换。"],
     "validate_bundles": ["扫描 Bundle 导出目录里的 manifest、session JSONL 和 history JSONL。", "适合在批量导入前先找出坏包。"],
     "export_one": ["从会话列表中选择要导出的 session。", "默认归档到 ./codex_sessions/<machine>/single/<timestamp>/。"],
@@ -648,9 +648,9 @@ class ToolkitTuiApp:
 
             selected_index = max(0, min(selected_index, len(entries) - 1)) if entries else 0
             subtitle = (
-                "↑/↓ 选择 · Enter 打开导出面板 · / 过滤 · e 直接导出 · d 查看详情 · q 返回"
+                "↑/↓ 选择 · Enter 打开导出面板 · / 搜索 · e 直接导出 · d 查看详情 · q 返回"
                 if mode == "view"
-                else "↑/↓ 选择 · Enter 确认 · / 过滤 · d 查看详情 · q 返回"
+                else "↑/↓ 选择 · Enter 确认 · / 搜索 · d 查看详情 · q 返回"
             )
             box_width = self._print_branded_header(
                 "浏览本机会话" if mode == "view" else "选择要导出的会话",
@@ -658,7 +658,7 @@ class ToolkitTuiApp:
             )
 
             info_lines = [
-                f"{style_text('过滤词', Ansi.DIM)} : {filter_text or '（无）'}",
+                f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
                 f"{style_text('匹配数量', Ansi.DIM)} : {len(entries)}",
                 f"{style_text('模式', Ansi.DIM)}   : {'浏览 / 直接操作' if mode == 'view' else '选择后导出'}",
             ]
@@ -668,7 +668,7 @@ class ToolkitTuiApp:
 
             list_lines: List[str] = []
             if not entries:
-                list_lines.append("没有匹配会话。按 / 修改过滤词，或按 q 返回。")
+                list_lines.append("没有匹配会话。按 / 修改搜索词，或按 q 返回。")
             else:
                 start = max(0, selected_index - 5)
                 start = min(start, max(0, len(entries) - 10))
@@ -678,13 +678,23 @@ class ToolkitTuiApp:
                     preview = summary.preview or summary.path.name
                     line = (
                         f"{pointer if idx == selected_index else ' '} "
-                        f"{summary.session_id} | {summary.kind}/{summary.scope} | "
-                        f"{summary.model_provider or '-'} | {preview}"
+                        f"{summary.session_id} | {summary.kind}/{summary.scope} | {preview}"
                     )
                     if idx == selected_index:
                         list_lines.append(style_text(line, Ansi.BOLD, Ansi.CYAN))
+                        extra_parts: List[str] = []
                         if summary.cwd:
-                            list_lines.append("  " + style_text(ellipsize_middle(summary.cwd, max(10, box_width - 10)), Ansi.DIM))
+                            extra_parts.append(summary.cwd)
+                        if summary.model_provider:
+                            extra_parts.append(summary.model_provider)
+                        if extra_parts:
+                            list_lines.append(
+                                "  "
+                                + style_text(
+                                    ellipsize_middle(" · ".join(extra_parts), max(10, box_width - 10)),
+                                    Ansi.DIM,
+                                )
+                            )
                     else:
                         list_lines.append(line)
             for line in render_box(list_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.MAGENTA)):
@@ -720,10 +730,10 @@ class ToolkitTuiApp:
             if key_str in {"/", "f"}:
                 new_filter = self._prompt_value(
                     title="浏览本机会话" if mode == "view" else "选择要导出的会话",
-                    prompt_label="输入过滤词",
+                    prompt_label="输入搜索词",
                     help_lines=[
-                        "可按 session_id / provider / 路径 / cwd / 预览文本过滤。",
-                        "留空表示不过滤。",
+                        "可按 session_id / 标题 / provider / 路径 / cwd 搜索。",
+                        "留空表示不搜索。",
                     ],
                     allow_empty=True,
                 )
@@ -768,10 +778,10 @@ class ToolkitTuiApp:
 
             selected_index = max(0, min(selected_index, len(entries) - 1)) if entries else 0
             subtitle = (
-                "↑/↓ 选择 · Enter 打开导入面板 · / 过滤 · s 切换导出方式 · m 切换机器 · "
+                "↑/↓ 选择 · Enter 打开导入面板 · / 搜索 · s 切换导出方式 · m 切换机器 · "
                 "l 切换历史视图 · i 导入 · v 自动建目录 · d 查看详情 · q 返回"
                 if mode == "view"
-                else "↑/↓ 选择 · Enter 确认 · / 过滤 · s 切换导出方式 · m 切换机器 · "
+                else "↑/↓ 选择 · Enter 确认 · / 搜索 · s 切换导出方式 · m 切换机器 · "
                 "l 切换历史视图 · d 查看详情 · q 返回"
             )
             box_width = self._print_branded_header(
@@ -780,7 +790,7 @@ class ToolkitTuiApp:
             )
 
             info_lines = [
-                f"{style_text('过滤词', Ansi.DIM)} : {filter_text or '（无）'}",
+                f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
                 f"{style_text('匹配数量', Ansi.DIM)} : {len(entries)}",
                 f"{style_text('导出方式', Ansi.DIM)} : {snapshot.current_export_group_label}",
                 f"{style_text('导出机器', Ansi.DIM)} : {snapshot.current_machine_label}",
@@ -792,7 +802,7 @@ class ToolkitTuiApp:
 
             list_lines: List[str] = []
             if not entries:
-                list_lines.append("没有匹配 Bundle。按 / 修改过滤词，按 s/m/l 切换视图，或按 q 返回。")
+                list_lines.append("没有匹配 Bundle。按 / 修改搜索词，按 s/m/l 切换视图，或按 q 返回。")
             else:
                 start = max(0, selected_index - 5)
                 start = min(start, max(0, len(entries) - 10))
@@ -850,10 +860,10 @@ class ToolkitTuiApp:
             if key_str in {"/", "f"}:
                 new_filter = self._prompt_value(
                     title="浏览 Bundle" if mode == "view" else "选择要导入的 Bundle",
-                    prompt_label="输入过滤词",
+                    prompt_label="输入搜索词",
                     help_lines=[
-                        "可按 session_id / 标题 / 导出方式 / 机器 / kind / cwd / 路径过滤。",
-                        "留空表示不过滤。",
+                        "可按 session_id / 标题 / 导出方式 / 机器 / kind / cwd / 路径搜索。",
+                        "留空表示不搜索。",
                     ],
                     allow_empty=True,
                 )
@@ -1188,7 +1198,7 @@ class ToolkitTuiApp:
             "  0                  直接退出",
             "",
             style_text("浏览器说明：", Ansi.BOLD),
-            "  /                  在会话列表 / Bundle 列表中过滤",
+            "  /                  在会话列表 / Bundle 列表中搜索",
             "  Enter              在浏览模式下进入单条操作面板，在选择模式下直接确认",
             "  d                  只打开详情面板，不执行导入/导出",
             "  e                  在会话列表直接导出为 Bundle",
