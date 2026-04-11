@@ -23,6 +23,7 @@ from codex_session_toolkit.services.repair import repair_desktop  # noqa: E402
 from codex_session_toolkit.support import machine_label_to_key  # noqa: E402
 from codex_session_toolkit.stores.bundles import collect_known_bundle_summaries, latest_distinct_bundle_summaries  # noqa: E402
 from codex_session_toolkit.stores.session_files import iter_session_files, read_session_payload  # noqa: E402
+from codex_session_toolkit.validation import load_manifest, validate_relative_path  # noqa: E402
 
 
 @contextmanager
@@ -619,6 +620,100 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertTrue(result.resolved_from_session_id)
             self.assertIn("active", result.bundle_dir.parts)
             self.assertIn(machine_label_to_key("Studio-Mac"), result.bundle_dir.parts)
+
+    def test_export_session_normalizes_manifest_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "source-provider")
+
+            session_id = "99999999-9999-9999-9999-999999999999"
+            project_dir = workspace / "project"
+            project_dir.mkdir()
+            write_session(
+                home,
+                session_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=project_dir,
+            )
+            write_history(home, session_id, "normalize manifest path")
+
+            paths = CodexPaths(home=home)
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "Win-Machine"):
+                result = export_session(paths, session_id)
+
+            manifest = load_manifest(result.bundle_dir / "manifest.env")
+            self.assertEqual(
+                manifest["RELATIVE_PATH"],
+                f"sessions/2026/04/10/rollout-2026-04-10T10-00-00-{session_id}.jsonl",
+            )
+
+    def test_import_and_validate_accept_windows_manifest_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_config(dst_home, "target-provider")
+            write_state_file(dst_home)
+            create_threads_db(dst_home)
+
+            session_id = "12121212-3434-5656-7878-909090909090"
+            bundle_dir = (
+                workspace
+                / "codex_sessions"
+                / "Windows-PC"
+                / "single"
+                / "20260411-100000-000001"
+                / session_id
+            )
+            session_rel = Path("sessions/2026/03/19") / f"rollout-2026-03-19T22-00-41-{session_id}.jsonl"
+            bundled_session = bundle_dir / "codex" / session_rel
+            bundled_session.parent.mkdir(parents=True, exist_ok=True)
+            bundled_session.write_text(
+                "\n".join([
+                    '{"timestamp":"2026-03-19T22:00:41Z","type":"session_meta","payload":{"id":"' + session_id + '","model_provider":"source-provider","source":"vscode","originator":"Codex Desktop","cwd":"' + str(workspace / "project") + '","timestamp":"2026-03-19T22:00:41Z","cli_version":"0.1.0"}}',
+                    '{"timestamp":"2026-03-19T22:05:00Z","type":"message","payload":{"role":"assistant","text":"reply"}}',
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            (bundle_dir / "history.jsonl").write_text(
+                '{"session_id":"' + session_id + '","text":"windows bundle"}\n',
+                encoding="utf-8",
+            )
+            write_bundle_manifest(
+                bundle_dir,
+                session_id=session_id,
+                relative_path=f"sessions\\2026\\03\\19\\rollout-2026-03-19T22-00-41-{session_id}.jsonl",
+                export_machine="Windows-PC",
+                export_machine_key="Windows-PC",
+                session_cwd=str(workspace / "project"),
+            )
+
+            paths = CodexPaths(home=dst_home)
+            with pushd(workspace):
+                validation = validate_bundles(paths)
+                self.assertEqual(len(validation.results), 1)
+                self.assertTrue(validation.results[0].is_valid, validation.results[0].message)
+                result = import_session(paths, str(bundle_dir), desktop_visible=True)
+
+            self.assertEqual(
+                result.relative_path,
+                f"sessions/2026/03/19/rollout-2026-03-19T22-00-41-{session_id}.jsonl",
+            )
+            self.assertTrue(
+                (
+                    dst_home
+                    / ".codex"
+                    / "sessions"
+                    / "2026"
+                    / "03"
+                    / "19"
+                    / f"rollout-2026-03-19T22-00-41-{session_id}.jsonl"
+                ).exists()
+            )
 
     def test_import_desktop_all_filters_machine_and_latest_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

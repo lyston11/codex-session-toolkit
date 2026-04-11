@@ -395,10 +395,9 @@ def validate_bundle_directory(
 
         manifest = load_manifest(manifest_file)
         session_id = validate_session_id(manifest.get("SESSION_ID", ""))
-        relative_path = manifest.get("RELATIVE_PATH", "")
-        validate_relative_path(relative_path, session_id)
+        relative_path = validate_relative_path(manifest.get("RELATIVE_PATH", ""), session_id)
 
-        source_session = bundle_dir / "codex" / relative_path
+        source_session = bundle_dir / "codex" / Path(*relative_path.split("/"))
         ensure_path_within_dir(source_session, bundle_dir / "codex", "Bundled session file")
         validate_jsonl_file(source_session, "Bundled session file", "session", session_id)
         if bundle_history.exists():

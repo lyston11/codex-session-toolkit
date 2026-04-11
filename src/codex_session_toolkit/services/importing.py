@@ -75,14 +75,14 @@ def import_session(
 
     manifest = load_manifest(manifest_file)
     session_id = validate_session_id(manifest["SESSION_ID"])
-    relative_path = manifest["RELATIVE_PATH"]
-    validate_relative_path(relative_path, session_id)
+    relative_path = validate_relative_path(manifest["RELATIVE_PATH"], session_id)
 
     if not Path(input_value).expanduser().is_dir() and input_value != session_id:
         raise ToolkitError(f"Manifest session id does not match requested session id: {session_id}")
 
-    source_session = bundle_dir / "codex" / relative_path
-    target_session = paths.code_dir / relative_path
+    relative_path_obj = Path(*relative_path.split("/"))
+    source_session = bundle_dir / "codex" / relative_path_obj
+    target_session = paths.code_dir / relative_path_obj
 
     validate_jsonl_file(source_session, "Bundled session file", "session", session_id)
     if bundle_history.exists():

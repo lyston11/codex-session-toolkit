@@ -30,7 +30,7 @@ from ..support import (
     detect_machine_label,
     normalize_bundle_root,
 )
-from ..validation import validate_jsonl_file, validate_session_id
+from ..validation import normalize_relative_path, validate_jsonl_file, validate_session_id
 
 
 def export_session(
@@ -89,7 +89,7 @@ def export_session(
 
         manifest_data = OrderedDict(
             SESSION_ID=session_id,
-            RELATIVE_PATH=str(relative_path),
+            RELATIVE_PATH=normalize_relative_path(str(relative_path)),
             EXPORTED_AT=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             UPDATED_AT=last_updated,
             THREAD_NAME=first_prompt[:80],
@@ -117,7 +117,7 @@ def export_session(
         return ExportResult(
             session_id=session_id,
             bundle_dir=final_bundle_dir,
-            relative_path=str(relative_path),
+            relative_path=normalize_relative_path(str(relative_path)),
             session_kind=session_kind,
             session_cwd=session_cwd,
             source_machine=machine_label,
