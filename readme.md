@@ -36,14 +36,14 @@
 
 ### Repair / Maintenance
 
-- 克隆到当前 provider
-- Dry-run 预演 clone / clean / repair
-- 清理旧版无标记 clone
-- 修复 Desktop 可见性
-- 修复并纳入 CLI 线程
+- 迁移到当前 Provider
+- 修复会话在 Desktop 中显示
+- 清理旧版无标记副本
+- 支持 Dry-run 预演
 - 自动修复 / 重建 `session_index.jsonl`
 - 自动 upsert `state_*.sqlite` 的 `threads` 表
 - 自动补充 Desktop workspace roots
+- 可选将 CLI 会话纳入 Desktop
 
 ## 安装与启动
 
@@ -216,7 +216,8 @@ make check
 
 - 首页先选择功能域
 - 回车进入该功能页
-- 在功能页中选择具体动作再执行
+- 在功能页中选择具体动作
+- 需要补充执行方式或修复范围时，再进入二级选择菜单
 
 常用按键：
 
@@ -227,6 +228,12 @@ make check
 - `h`：帮助
 - `q`：返回或退出
 - `0`：直接退出
+
+二级选择菜单按键：
+
+- `↑/↓` 或 `j/k`：选择执行方式或修复范围
+- `Enter`：确认当前选项
+- `q / ← / Esc`：返回上一步
 
 浏览器相关按键：
 
@@ -278,8 +285,11 @@ codex-session-toolkit --version
 Repair / Maintenance:
 
 ```bash
+# 迁移到当前 Provider
 codex-session-toolkit clone-provider
 codex-session-toolkit clone-provider --dry-run
+
+# 清理旧版无标记副本
 codex-session-toolkit clean-clones
 codex-session-toolkit clean-clones --dry-run
 ```
@@ -358,7 +368,7 @@ codex-session-toolkit import-desktop-all --export-group active
 
 说明：命令名保留为 `import-desktop-all` 以兼容旧版本，但现在实际可结合 `--export-group` 导入 `desktop / active / cli / single` 四类 Bundle。
 
-修复 Desktop 可见性：
+修复会话在 Desktop 中显示：
 
 ```bash
 codex-session-toolkit repair-desktop
