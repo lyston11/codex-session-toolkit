@@ -110,10 +110,12 @@ class BundleCategoryFolderOption:
 
 
 TUI_ACTION_NOTES = {
-    "clone": ["会为非当前 provider 的会话生成带血缘信息的新副本。"],
-    "clone_dry": ["只预览将创建哪些 clone，不写入任何文件。"],
-    "clean": ["删除早期版本生成、但没有 cloned_from 标记的旧副本。", "执行前需要输入 DELETE 二次确认。"],
-    "clean_dry": ["只预览哪些旧副本会被删除。"],
+    "provider_migration": [
+        "为当前会话创建一份适配当前 Provider 的副本。",
+    ],
+    "clean_legacy": [
+        "清理旧版本遗留的无标记副本文件。",
+    ],
     "list_sessions": ["内置会话浏览器，支持搜索、预览和详情查看。"],
     "browse_bundles": ["独立浏览 Bundle 导出记录，而不是只在导入时顺手选择。", "默认显示全部历史，支持按导出方式、机器和最新视图切换。"],
     "validate_bundles": ["扫描 Bundle 导出目录里的 manifest、session JSONL 和 history JSONL。", "适合在批量导入前先找出坏包。"],
@@ -123,10 +125,9 @@ TUI_ACTION_NOTES = {
     "export_cli_all": ["默认归档到 ./codex_sessions/<machine>/cli/<timestamp>/。", "范围包含 active + archived 的 CLI 会话，并分别生成 Bundle。"],
     "import_one": ["从 Bundle 列表中选择要导入为会话的条目。", "可先按导出机器和导出方式筛选。", "导入时会顺手修复 history / index / Desktop 元数据。"],
     "import_desktop_all": ["先选择设备文件夹，再选择该设备下的分类文件夹，然后批量导入。", "分类文件夹会显示为 desktop / active / cli / single。", "可选：自动创建缺失工作目录。"],
-    "repair_desktop": ["对齐 provider、重建 session_index、补 threads 表与工作区根目录。"],
-    "repair_desktop_dry": ["只预览将修改哪些会话和索引，不真正写入。"],
-    "repair_desktop_cli": ["会把旧 CLI 线程改写成 Desktop 兼容元数据。"],
-    "repair_desktop_cli_dry": ["预览哪些 CLI 线程会被纳入 Desktop 视图。"],
+    "desktop_repair": [
+        "修复会话在 Desktop 中的显示、索引和登记信息。",
+    ],
     "exit": ["退出工具箱。"],
 }
 
@@ -140,8 +141,8 @@ SECTION_NOTES = {
         "包含浏览、校验、批量导出与批量导入。",
     ],
     "repair": [
-        "聚焦 provider 迁移、旧副本清理与 Desktop 修复。",
-        "适合处理 provider / index / threads / workspace roots 问题。",
+        "按目标处理 Provider 迁移、Desktop 显示修复与旧副本清理。",
+        "动作内部只保留必要选项，避免把底层实现细节直接摊给使用者。",
     ],
 }
 
@@ -159,14 +160,9 @@ def build_tui_menu_actions() -> List[TuiMenuAction]:
         TuiMenuAction("export_cli_all", "c", "批量导出全部 CLI 会话为 Bundle", "bundle", ("export-cli-all",)),
         TuiMenuAction("import_one", "i", "导入单个 Bundle 为会话", "bundle", ("import", "<session_id|bundle_dir>")),
         TuiMenuAction("import_desktop_all", "m", "批量导入 Bundle 为会话", "bundle", ("import-desktop-all",)),
-        TuiMenuAction("clone", "1", "克隆到当前 provider", "repair", ("clone-provider",)),
-        TuiMenuAction("clone_dry", "2", "模拟克隆（Dry-run）", "repair", ("clone-provider", "--dry-run"), is_dry_run=True),
-        TuiMenuAction("clean", "3", "清理旧版无标记副本", "repair", ("clean-clones",), is_dangerous=True),
-        TuiMenuAction("clean_dry", "4", "模拟清理旧版副本", "repair", ("clean-clones", "--dry-run"), is_dangerous=True, is_dry_run=True),
-        TuiMenuAction("repair_desktop", "r", "修复 Desktop 可见性", "repair", ("repair-desktop",)),
-        TuiMenuAction("repair_desktop_dry", "v", "模拟修复 Desktop", "repair", ("repair-desktop", "--dry-run"), is_dry_run=True),
-        TuiMenuAction("repair_desktop_cli", "x", "修复并纳入 CLI 线程", "repair", ("repair-desktop", "--include-cli")),
-        TuiMenuAction("repair_desktop_cli_dry", "g", "模拟修复并纳入 CLI", "repair", ("repair-desktop", "--include-cli", "--dry-run"), is_dry_run=True),
+        TuiMenuAction("provider_migration", "1", "迁移到当前 Provider", "repair", tuple()),
+        TuiMenuAction("desktop_repair", "2", "修复会话在 Desktop 中显示", "repair", tuple()),
+        TuiMenuAction("clean_legacy", "3", "清理旧版无标记副本", "repair", ("clean-clones",), is_dangerous=True),
         TuiMenuAction("exit", "0", "退出", "system", tuple()),
     ]
 
@@ -509,6 +505,184 @@ class ToolkitTuiApp:
             allow_empty=False,
         )
         return str(answer).strip().lower() == yes_label.lower()
+
+    def _render_prompt_choice(
+        self,
+        *,
+        title: str,
+        prompt_label: str,
+        help_lines: List[str],
+        choices: Sequence[Tuple[str, str]],
+        selected_index: int,
+        allow_cancel: bool = True,
+    ) -> None:
+        box_width, center = self._screen_layout()
+        pointer = glyphs().get("pointer", ">")
+        output_lines: List[str] = []
+
+        selected_index = max(0, min(selected_index, len(choices) - 1))
+        _, selected_label = choices[selected_index]
+
+        for line in app_logo_lines(max_width=FIXED_THEME_LOGO_WIDTH):
+            output_lines.append(align_line(line, box_width, center=center))
+        output_lines.append(align_line(style_text("Codex 会话工具箱", Ansi.BOLD, Ansi.CYAN), box_width, center=center))
+        output_lines.append(align_line(style_text(title, Ansi.DIM), box_width, center=center))
+        output_lines.append(align_line(style_text(f"当前选择：{selected_label}", Ansi.DIM), box_width, center=center))
+        output_lines.append("")
+
+        for line in render_box(help_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
+            output_lines.append(line)
+        output_lines.append("")
+
+        choice_lines = [style_text(prompt_label, Ansi.BOLD)]
+        for idx, (key, label) in enumerate(choices):
+            hotkey = f"[{key}]"
+            item_label = f"{hotkey} {label}"
+            if idx == selected_index:
+                prefix = style_text(pointer, Ansi.BOLD, Ansi.BRIGHT_CYAN) + " "
+                choice_lines.append(prefix + style_text(item_label, Ansi.BOLD, Ansi.UNDERLINE, Ansi.CYAN))
+            else:
+                choice_lines.append("  " + style_text(hotkey, Ansi.DIM, Ansi.CYAN) + " " + label)
+        for line in render_box(choice_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.CYAN)):
+            output_lines.append(line)
+        output_lines.append("")
+
+        shortcut_labels = "/".join(key for key, _ in choices)
+        footer = "↑/↓ 选择  |  Enter 确认"
+        if shortcut_labels:
+            footer += f"  |  {shortcut_labels} 快捷选择"
+        if allow_cancel:
+            footer += "  |  q/←/Esc 返回"
+        output_lines.append(style_text(footer, Ansi.DIM))
+
+        hide_cursor = "\033[?25l"
+        show_cursor = "\033[?25h"
+        home_cursor = "\033[H"
+        clear_to_eol = "\033[K"
+        clear_to_eos = "\033[J"
+        visible_lines = self._fit_lines_to_screen(output_lines)
+        full_output = "\n".join(line + clear_to_eol for line in visible_lines) + "\n"
+        sys.stdout.write(hide_cursor + home_cursor + full_output + clear_to_eos + show_cursor)
+        sys.stdout.flush()
+
+    def _prompt_choice(
+        self,
+        *,
+        title: str,
+        prompt_label: str,
+        help_lines: List[str],
+        choices: Sequence[Tuple[str, str]],
+        default: str = "",
+        allow_cancel: bool = True,
+    ) -> Optional[str]:
+        if not choices:
+            return None
+
+        stdin_tty = getattr(sys.stdin, "isatty", lambda: False)()
+        stdout_tty = getattr(sys.stdout, "isatty", lambda: False)()
+        if not (stdin_tty and stdout_tty):
+            base_help = list(help_lines)
+            valid_keys = {key.lower() for key, _ in choices}
+
+            while True:
+                rendered_help = list(base_help)
+                rendered_help.append("")
+                for key, label in choices:
+                    rendered_help.append(f"{key} : {label}")
+                if allow_cancel:
+                    rendered_help.append("输入 q 取消。")
+
+                answer = self._prompt_value(
+                    title=title,
+                    prompt_label=prompt_label,
+                    help_lines=rendered_help,
+                    default=default,
+                    allow_empty=bool(default),
+                )
+                if answer is None:
+                    return None
+
+                normalized = str(answer).strip().lower()
+                if not normalized and default:
+                    normalized = default.lower()
+                if allow_cancel and normalized in {"q", "quit", "esc", "0"}:
+                    return None
+                if normalized in valid_keys:
+                    return normalized
+
+                base_help = [style_text("输入无效，请重新选择。", Ansi.BOLD, Ansi.YELLOW)] + list(help_lines)
+
+        normalized_choices = [(key.lower(), label) for key, label in choices]
+        key_to_index = {key: idx for idx, (key, _) in enumerate(normalized_choices)}
+        selected_index = key_to_index.get(default.lower(), 0) if default else 0
+        last_size = (term_width(), term_height())
+
+        while True:
+            self._render_prompt_choice(
+                title=title,
+                prompt_label=prompt_label,
+                help_lines=help_lines,
+                choices=choices,
+                selected_index=selected_index,
+                allow_cancel=allow_cancel,
+            )
+            key = read_key(timeout_ms=200)
+            current_size = (term_width(), term_height())
+            if current_size != last_size:
+                last_size = current_size
+                continue
+            if key is None:
+                continue
+            if key in ("UP", "k", "K"):
+                selected_index = (selected_index - 1) % len(choices)
+                continue
+            if key in ("DOWN", "j", "J"):
+                selected_index = (selected_index + 1) % len(choices)
+                continue
+            if key == "ENTER":
+                return normalized_choices[selected_index][0]
+            if allow_cancel and key in ("LEFT", "ESC"):
+                return None
+
+            key_str = str(key).strip().lower()
+            if allow_cancel and key_str in {"q", "quit", "0"}:
+                return None
+            if key_str in key_to_index:
+                return normalized_choices[key_to_index[key_str]][0]
+
+    def _prompt_execution_mode(
+        self,
+        *,
+        title: str,
+        default_dry_run: bool = False,
+    ) -> Optional[bool]:
+        choice = self._prompt_choice(
+            title=title,
+            prompt_label="选择执行方式",
+            help_lines=["同一动作支持直接执行，也支持 Dry-run 预演。"],
+            choices=[("r", "直接执行"), ("d", "Dry-run 预演")],
+            default=("d" if default_dry_run else "r"),
+        )
+        if choice is None:
+            return None
+        return choice == "d"
+
+    def _prompt_desktop_repair_scope(self) -> Optional[bool]:
+        choice = self._prompt_choice(
+            title="修复会话在 Desktop 中显示",
+            prompt_label="选择修复范围",
+            help_lines=[
+                "可只修复 Desktop 会话，也可顺手把 CLI 会话纳入 Desktop。",
+            ],
+            choices=[
+                ("d", "仅修复 Desktop 会话"),
+                ("c", "同时纳入 CLI 会话"),
+            ],
+            default="d",
+        )
+        if choice is None:
+            return None
+        return choice == "c"
 
     def _show_detail_panel(
         self,
@@ -1149,7 +1323,7 @@ class ToolkitTuiApp:
             style_text("菜单分组：", Ansi.BOLD),
             "  Session / Browse   : 浏览本机会话、查看详情、导出单个会话为 Bundle",
             "  Bundle / Transfer  : 浏览 Bundle、校验 Bundle、批量导出与批量导入",
-            "  Repair / Maintenance : provider clone、旧副本清理、Desktop/CLI 修复",
+            "  Repair / Maintenance : 先按目标选择 Provider 迁移、Desktop 显示修复或旧副本清理",
             "",
             style_text("常用 CLI（更完整的工具链能力）：", Ansi.BOLD),
             "  clone-provider                克隆活动会话到当前 provider",
@@ -1163,7 +1337,7 @@ class ToolkitTuiApp:
             "  export-cli-all                批量导出全部 CLI 会话为 Bundle",
             "  import <session_id|bundle_dir> 导入单个 Bundle 为会话",
             "  import-desktop-all            先选设备文件夹，再选分类文件夹后批量导入",
-            "  repair-desktop                修复 Desktop 左侧线程可见性",
+            "  repair-desktop                修复会话在 Desktop 中的显示与登记",
             "",
             style_text("兼容入口参数：", Ansi.BOLD),
             "  --dry-run          模拟运行（不写入/不删除）",
@@ -1188,12 +1362,13 @@ class ToolkitTuiApp:
             "",
             style_text("TUI 结构：", Ansi.BOLD),
             "  首页先选择功能域，再回车进入该功能页。",
-            "  功能页内部再选择具体动作执行。",
+            "  功能页内部再选择必要范围和是否 Dry-run；二级菜单同样支持 ↑/↓/Enter。",
             "",
             style_text("TUI 快捷键：", Ansi.BOLD),
             "  首页：↑/↓ 选择功能域，Enter 进入，q 退出",
             "  功能页：↑/↓ 选择动作，Enter 执行，q / ← 返回首页",
             "  功能页：←/→ 或 PgUp/PgDn 切换上一个 / 下一个功能页",
+            "  二级菜单：↑/↓ 选择执行方式或范围，Enter 确认，q / ← 返回",
             "  h                  打开帮助",
             "  0                  直接退出",
             "",
@@ -1343,41 +1518,86 @@ class ToolkitTuiApp:
 
     def _execute_menu_action(self, chosen_action: TuiMenuAction) -> None:
         choice_id = chosen_action.action_id
-        if choice_id == "clone":
-            self._run_action(
-                "克隆会话（幂等）",
-                chosen_action.cli_args,
-                dry_run=False,
-                runner=lambda: run_clone_mode(target_provider=self.context.target_provider, dry_run=False),
-                danger=False,
+        if choice_id == "provider_migration":
+            dry_run = self._prompt_execution_mode(
+                title="迁移到当前 Provider",
+                default_dry_run=False,
             )
-            return
-        if choice_id == "clone_dry":
-            self._run_action(
-                "模拟克隆（Dry-run）",
-                chosen_action.cli_args,
-                dry_run=True,
-                runner=lambda: run_clone_mode(target_provider=self.context.target_provider, dry_run=True),
-                danger=False,
-            )
-            return
-        if choice_id == "clean":
-            if not self._confirm_dangerous_action(chosen_action.cli_args):
+            if dry_run is None:
                 return
+
+            cli_args = ["clone-provider"]
+            if dry_run:
+                cli_args.append("--dry-run")
+            action_name = "迁移到当前 Provider（保留原会话，创建副本）"
+            if dry_run:
+                action_name += "（Dry-run）"
             self._run_action(
-                "清理旧版无标记副本（删除）",
-                chosen_action.cli_args,
-                dry_run=False,
-                runner=lambda: run_cleanup_mode(target_provider=self.context.target_provider, dry_run=False),
-                danger=True,
+                action_name,
+                cli_args,
+                dry_run=dry_run,
+                runner=lambda dry_run=dry_run: run_clone_mode(
+                    target_provider=self.context.target_provider,
+                    dry_run=dry_run,
+                ),
+                danger=False,
             )
             return
-        if choice_id == "clean_dry":
+
+        if choice_id == "desktop_repair":
+            include_cli = self._prompt_desktop_repair_scope()
+            if include_cli is None:
+                return
+
+            dry_run = self._prompt_execution_mode(
+                title="修复会话在 Desktop 中显示",
+                default_dry_run=True,
+            )
+            if dry_run is None:
+                return
+
+            cli_args = ["repair-desktop"]
+            action_name = "修复会话在 Desktop 中显示"
+            if include_cli:
+                cli_args.append("--include-cli")
+                action_name += "并纳入 CLI 会话"
+            if dry_run:
+                cli_args.append("--dry-run")
+                action_name += "（Dry-run）"
             self._run_action(
-                "模拟清理（Dry-run）",
-                chosen_action.cli_args,
-                dry_run=True,
-                runner=lambda: run_cleanup_mode(target_provider=self.context.target_provider, dry_run=True),
+                action_name,
+                cli_args,
+                dry_run=dry_run,
+                runner=lambda args=cli_args: self._run_toolkit(args),
+                danger=False,
+            )
+            return
+
+        if choice_id == "clean_legacy":
+            dry_run = self._prompt_execution_mode(
+                title="清理旧版无标记副本",
+                default_dry_run=True,
+            )
+            if dry_run is None:
+                return
+
+            cli_args = ["clean-clones"]
+            action_name = "清理旧版无标记副本"
+            if dry_run:
+                cli_args.append("--dry-run")
+                action_name += "（Dry-run）"
+            else:
+                if not self._confirm_dangerous_action(cli_args):
+                    return
+                action_name += "（删除）"
+            self._run_action(
+                action_name,
+                cli_args,
+                dry_run=dry_run,
+                runner=lambda dry_run=dry_run: run_cleanup_mode(
+                    target_provider=self.context.target_provider,
+                    dry_run=dry_run,
+                ),
                 danger=True,
             )
             return
