@@ -126,6 +126,12 @@ def print_batch_export_result(result: BatchExportResult) -> int:
     print(f"Bundle root: {result.bundle_root}")
     print(f"Machine folder: {result.machine_root}")
     print(f"Source machine: {result.source_machine or result.source_machine_key}")
+    if result.export_group:
+        print(f"Export group: {result.export_group}")
+    if result.selection_label:
+        print(f"Selection: {result.selection_label}")
+    if result.selection_path:
+        print(f"Selection path: {result.selection_path}")
     print(f"Export batch: {result.export_root}")
     print(f"Dry run: {'yes' if result.dry_run else 'no'}")
     print(f"Active only: {'yes' if result.active_only else 'no'}")
@@ -181,6 +187,12 @@ def print_batch_import_result(result: BatchImportResult) -> int:
     print(f"Desktop visible: {'yes' if result.desktop_visible else 'no'}")
     print(f"Machine filter: {result.machine_label or result.machine_filter or '全部机器'}")
     print(f"Export group filter: {result.export_group_label or result.export_group_filter or '全部导出方式'}")
+    if result.project_label or result.project_filter:
+        print(f"Project filter: {result.project_label or result.project_filter}")
+    if result.project_source_path:
+        print(f"Project source path: {result.project_source_path}")
+    if result.target_project_path:
+        print(f"Target project path: {result.target_project_path}")
     print(f"History view: {'仅最新' if result.latest_only else '全部历史'}")
     print(f"Bundle directories found: {len(result.bundle_dirs)}")
     print(f"Imported bundle directories: {len(result.success_dirs)}")

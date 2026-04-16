@@ -32,9 +32,9 @@ from .presenters.reports import (
     print_session_rows,
     print_validation_report,
 )
-from .services.browse import get_bundle_summaries, get_session_summaries, validate_bundles
+from .services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles
 from .services.clone import build_clone_index, cleanup_clones, clone_session_file, clone_to_provider
-from .services.exporting import export_active_desktop_all, export_cli_all, export_desktop_all, export_session
+from .services.exporting import export_active_desktop_all, export_cli_all, export_desktop_all, export_project_sessions, export_session
 from .services.importing import import_desktop_all, import_session
 from .services.provider import detect_provider
 from .services.repair import repair_desktop
@@ -106,6 +106,23 @@ def list_bundles(
     )
 
 
+def list_project_sessions(
+    paths: CodexPaths,
+    *,
+    project_path: str,
+    pattern: str = "",
+    limit: int = 30,
+) -> int:
+    return print_session_rows(
+        get_project_session_summaries(
+            paths,
+            project_path=project_path,
+            pattern=pattern,
+            limit=max(1, limit),
+        )
+    )
+
+
 __all__ = [
     "BatchExportResult",
     "BatchImportResult",
@@ -143,6 +160,7 @@ __all__ = [
     "export_batch_slug",
     "export_cli_all",
     "export_desktop_all",
+    "export_project_sessions",
     "export_session",
     "extract_iso_timestamp",
     "extract_last_timestamp",
@@ -152,6 +170,7 @@ __all__ = [
     "first_history_messages",
     "first_history_text",
     "get_bundle_summaries",
+    "get_project_session_summaries",
     "get_session_summaries",
     "import_desktop_all",
     "import_session",
@@ -160,6 +179,7 @@ __all__ = [
     "iter_known_bundle_directories",
     "iter_session_files",
     "list_bundles",
+    "list_project_sessions",
     "list_sessions",
     "load_existing_index",
     "load_manifest",

@@ -29,6 +29,9 @@ from ..support import (
     iso_to_epoch,
     nearest_existing_parent,
     normalize_bundle_root,
+    normalize_project_path,
+    project_filter_to_key,
+    remap_session_cwd_to_project,
     restrict_to_local_bundle_workspace,
 )
 from ..validation import (
@@ -49,6 +52,7 @@ def import_session(
     machine_filter: str = "",
     export_group_filter: str = "",
     desktop_visible: bool = False,
+    session_cwd_override: str = "",
 ) -> ImportResult:
     input_path = Path(input_value).expanduser()
     resolved_from_session_id = False
@@ -115,6 +119,7 @@ def import_session(
             auto_desktop_compat=auto_desktop_compat,
             session_kind=session_kind,
             target_desktop_model_provider=target_desktop_model_provider,
+            session_cwd_override=session_cwd_override,
         )
         validate_jsonl_file(prepared_source_session, "Prepared session file", "session", session_id)
 
@@ -254,6 +259,8 @@ def import_desktop_all(
     bundle_root: Optional[Path] = None,
     machine_filter: str = "",
     export_group_filter: str = "",
+    project_filter: str = "",
+    target_project_path: str = "",
     latest_only: bool = False,
     desktop_visible: bool = False,
 ) -> BatchImportResult:
@@ -261,25 +268,53 @@ def import_desktop_all(
     if not bundle_root.is_dir():
         raise ToolkitError(f"Missing bundle root: {bundle_root}")
 
+    normalized_project_filter = project_filter_to_key(project_filter)
+    normalized_target_project_path = normalize_project_path(target_project_path)
+    resolved_export_group_filter = export_group_filter
+    if normalized_project_filter:
+        if resolved_export_group_filter and resolved_export_group_filter != "project":
+            raise ToolkitError("Project filter can only be used with project bundle imports.")
+        resolved_export_group_filter = "project"
+    if normalized_target_project_path and not normalized_project_filter:
+        raise ToolkitError("Target project path requires a project filter.")
+
     bundle_summaries = collect_bundle_summaries(
         bundle_root,
         source_group="all",
         machine_filter=machine_filter,
-        export_group_filter=export_group_filter,
+        export_group_filter=resolved_export_group_filter,
         limit=None,
     )
+    if normalized_project_filter:
+        bundle_summaries = [summary for summary in bundle_summaries if summary.project_key == normalized_project_filter]
     if latest_only:
         bundle_summaries = latest_distinct_bundle_summaries(bundle_summaries)
+
+    if normalized_target_project_path and desktop_visible and not Path(normalized_target_project_path).is_dir():
+        Path(normalized_target_project_path).mkdir(parents=True, exist_ok=True)
 
     bundle_dirs = [summary.bundle_dir for summary in bundle_summaries]
     success_dirs: list[Path] = []
     failed_imports: list[tuple[Path, str]] = []
-    for bundle_dir in bundle_dirs:
+    for summary in bundle_summaries:
         try:
-            import_session(paths, str(bundle_dir), bundle_root=bundle_root, desktop_visible=desktop_visible)
-            success_dirs.append(bundle_dir)
+            session_cwd_override = ""
+            if normalized_target_project_path and summary.export_group == "project":
+                session_cwd_override = remap_session_cwd_to_project(
+                    summary.session_cwd,
+                    summary.project_path,
+                    normalized_target_project_path,
+                )
+            import_session(
+                paths,
+                str(summary.bundle_dir),
+                bundle_root=bundle_root,
+                desktop_visible=desktop_visible,
+                session_cwd_override=session_cwd_override,
+            )
+            success_dirs.append(summary.bundle_dir)
         except Exception as exc:
-            failed_imports.append((bundle_dir, str(exc)))
+            failed_imports.append((summary.bundle_dir, str(exc)))
 
     machine_label = ""
     if machine_filter:
@@ -293,7 +328,16 @@ def import_desktop_all(
         )
         machine_label = matching_machine or machine_filter
 
-    export_group_label = bundle_export_group_label(export_group_filter) if export_group_filter else ""
+    export_group_label = bundle_export_group_label(resolved_export_group_filter) if resolved_export_group_filter else ""
+    project_label = ""
+    project_source_path = ""
+    if normalized_project_filter:
+        for summary in bundle_summaries:
+            if summary.project_key != normalized_project_filter:
+                continue
+            project_label = summary.project_label or summary.project_key
+            project_source_path = summary.project_path
+            break
 
     return BatchImportResult(
         bundle_root=bundle_root,
@@ -303,7 +347,11 @@ def import_desktop_all(
         failed_imports=failed_imports,
         machine_filter=machine_filter,
         machine_label=machine_label,
-        export_group_filter=export_group_filter,
+        export_group_filter=resolved_export_group_filter,
         export_group_label=export_group_label,
         latest_only=latest_only,
+        project_filter=normalized_project_filter,
+        project_label=project_label,
+        project_source_path=project_source_path,
+        target_project_path=normalized_target_project_path,
     )

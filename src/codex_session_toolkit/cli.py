@@ -45,9 +45,11 @@ CLI_SUBCOMMANDS = {
     "clone-provider",
     "clean-clones",
     "list",
+    "list-project-sessions",
     "list-bundles",
     "validate-bundles",
     "export",
+    "export-project",
     "export-desktop-all",
     "export-active-desktop-all",
     "export-cli-all",
@@ -67,14 +69,16 @@ def create_arg_parser() -> argparse.ArgumentParser:
             "  clone-provider        Clone active sessions to the current provider\n"
             "  clean-clones          Remove legacy unmarked clone files\n"
             "  list                  Browse local sessions\n"
+            "  list-project-sessions Browse sessions under one project path\n"
             "  list-bundles          Browse exported bundle folders\n"
             "  validate-bundles      Validate bundle folder health\n"
             "  export                Export one session bundle\n"
+            "  export-project        Batch export all sessions under one project path\n"
             "  export-desktop-all    Batch export all Desktop sessions\n"
             "  export-active-desktop-all Batch export all active Desktop sessions\n"
             "  export-cli-all        Batch export all CLI sessions\n"
             "  import                Import one bundle\n"
-            "  import-desktop-all    Batch import one machine/category folder\n"
+            "  import-desktop-all    Batch import one machine/category or project folder\n"
             "  repair-desktop        Repair Desktop visibility/index/provider\n\n"
             "Legacy flags still work:\n"
             "  --dry-run             Preview clone mode\n"

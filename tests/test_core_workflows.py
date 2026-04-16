@@ -15,12 +15,12 @@ if str(SRC_DIR) not in os.sys.path:
 
 from codex_session_toolkit.paths import CodexPaths  # noqa: E402
 from codex_session_toolkit.models import BundleSummary  # noqa: E402
-from codex_session_toolkit.services.browse import get_bundle_summaries, get_session_summaries, validate_bundles  # noqa: E402
+from codex_session_toolkit.services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles  # noqa: E402
 from codex_session_toolkit.services.clone import clone_to_provider  # noqa: E402
-from codex_session_toolkit.services.exporting import export_active_desktop_all, export_session  # noqa: E402
+from codex_session_toolkit.services.exporting import export_active_desktop_all, export_project_sessions, export_session  # noqa: E402
 from codex_session_toolkit.services.importing import import_desktop_all, import_session  # noqa: E402
 from codex_session_toolkit.services.repair import repair_desktop  # noqa: E402
-from codex_session_toolkit.support import machine_label_to_key  # noqa: E402
+from codex_session_toolkit.support import default_local_project_target, machine_label_to_key  # noqa: E402
 from codex_session_toolkit.stores.bundles import collect_known_bundle_summaries, latest_distinct_bundle_summaries  # noqa: E402
 from codex_session_toolkit.stores.session_files import iter_session_files, read_session_payload  # noqa: E402
 from codex_session_toolkit.validation import load_manifest, validate_relative_path  # noqa: E402
@@ -472,6 +472,194 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertEqual(cloned_payload["model_provider"], "target-provider")
             self.assertEqual(cloned_payload["cloned_from"], original_id)
             self.assertEqual(cloned_payload["original_provider"], "old-provider")
+
+    def test_project_session_listing_and_export_grouping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "source-provider")
+
+            project_root = workspace / "project-a"
+            nested_root = project_root / "packages" / "ui"
+            other_root = workspace / "project-b"
+            project_root.mkdir(parents=True)
+            nested_root.mkdir(parents=True)
+            other_root.mkdir(parents=True)
+
+            project_session_id = "12341234-1234-1234-1234-123412341234"
+            nested_session_id = "23452345-2345-2345-2345-234523452345"
+            other_session_id = "34563456-3456-3456-3456-345634563456"
+
+            write_session(
+                home,
+                project_session_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=project_root,
+                user_message="project root session",
+            )
+            write_session(
+                home,
+                nested_session_id,
+                provider="source-provider",
+                source="cli",
+                originator="codex_cli_rs",
+                cwd=nested_root,
+                user_message="nested project session",
+            )
+            write_session(
+                home,
+                other_session_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=other_root,
+                user_message="other project session",
+            )
+            write_history(home, project_session_id, "project root history")
+            write_history(home, nested_session_id, "nested project history")
+            write_history(home, other_session_id, "other project history")
+
+            paths = CodexPaths(home=home)
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "Studio-Mac"):
+                summaries = get_project_session_summaries(paths, project_path=str(project_root), limit=None)
+                export_result = export_project_sessions(paths, str(project_root))
+                bundle_summaries = get_bundle_summaries(paths, source_group="bundle")
+
+            self.assertEqual(
+                [summary.session_id for summary in summaries],
+                [nested_session_id, project_session_id],
+            )
+            self.assertEqual(sorted(export_result.success_ids), sorted([project_session_id, nested_session_id]))
+            self.assertEqual(export_result.selection_label, "project-a")
+            self.assertEqual(export_result.export_group, "project")
+            self.assertIn("project", export_result.export_root.parts)
+            self.assertIn("project-a", export_result.export_root.parts)
+
+            by_id = {summary.session_id: summary for summary in bundle_summaries}
+            self.assertEqual(by_id[project_session_id].export_group, "project")
+            self.assertEqual(by_id[nested_session_id].export_group, "project")
+            self.assertEqual(by_id[project_session_id].project_key, "project-a")
+            self.assertEqual(by_id[project_session_id].project_label, "project-a")
+            self.assertEqual(by_id[project_session_id].project_path, str(project_root))
+            self.assertNotIn(other_session_id, by_id)
+
+    def test_default_local_project_target_prefers_exact_path_then_same_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            toolkit_dir = workspace / "codex-session-toolkit"
+            sibling_project = workspace / "project-a"
+            exact_project = workspace / "exact-project"
+            toolkit_dir.mkdir(parents=True)
+            sibling_project.mkdir()
+            exact_project.mkdir()
+
+            with pushd(toolkit_dir):
+                target_path, status = default_local_project_target("exact-project", str(exact_project))
+                self.assertEqual((str(Path(target_path).resolve()), status), (str(exact_project.resolve()), "same_path"))
+
+                sibling_target, sibling_status = default_local_project_target("project-a", str(workspace / "missing-project-a"))
+                self.assertEqual((str(Path(sibling_target).resolve()), sibling_status), (str(sibling_project.resolve()), "same_name"))
+
+    def test_import_desktop_all_filters_project_and_remaps_cwd_to_target_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_config(src_home, "source-provider")
+            write_config(dst_home, "target-provider")
+            write_state_file(dst_home)
+            create_threads_db(dst_home)
+
+            source_project = workspace / "source-project"
+            nested_project = source_project / "packages" / "ui"
+            other_project = workspace / "other-project"
+            target_project = workspace / "local-project"
+            nested_project.mkdir(parents=True)
+            other_project.mkdir()
+
+            source_root_session = "45674567-4567-4567-4567-456745674567"
+            source_nested_session = "56785678-5678-5678-5678-567856785678"
+            other_session = "67896789-6789-6789-6789-678967896789"
+
+            write_session(
+                src_home,
+                source_root_session,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=source_project,
+                timestamp="2026-04-10T10:00:00Z",
+            )
+            write_history(src_home, source_root_session, "source root history")
+            write_session(
+                src_home,
+                source_nested_session,
+                provider="source-provider",
+                source="cli",
+                originator="codex_cli_rs",
+                cwd=nested_project,
+                timestamp="2026-04-10T10:05:00Z",
+            )
+            write_history(src_home, source_nested_session, "source nested history")
+            write_session(
+                src_home,
+                other_session,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=other_project,
+                timestamp="2026-04-10T10:10:00Z",
+            )
+            write_history(src_home, other_session, "other project history")
+
+            src_paths = CodexPaths(home=src_home)
+            dst_paths = CodexPaths(home=dst_home)
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "Work-Laptop"):
+                export_project_sessions(src_paths, str(source_project))
+                export_project_sessions(src_paths, str(other_project))
+
+            with pushd(workspace):
+                result = import_desktop_all(
+                    dst_paths,
+                    machine_filter=machine_label_to_key("Work-Laptop"),
+                    project_filter="source-project",
+                    target_project_path=str(target_project),
+                    desktop_visible=True,
+                )
+
+            self.assertEqual(sorted(path.name for path in result.success_dirs), sorted([source_root_session, source_nested_session]))
+            self.assertEqual(result.project_filter, "source-project")
+            self.assertEqual(result.project_label, "source-project")
+            self.assertEqual(result.project_source_path, str(source_project))
+            self.assertEqual(result.target_project_path, str(target_project))
+            self.assertTrue(target_project.is_dir())
+            self.assertTrue((target_project / "packages" / "ui").is_dir())
+
+            imported_sessions = list(iter_session_files(dst_paths, active_only=False))
+            self.assertEqual(len(imported_sessions), 2)
+            payload_by_id = {read_session_payload(path)["id"]: read_session_payload(path) for path in imported_sessions}
+            self.assertEqual(payload_by_id[source_root_session]["cwd"], str(target_project))
+            self.assertEqual(payload_by_id[source_nested_session]["cwd"], str(target_project / "packages" / "ui"))
+            self.assertNotIn(other_session, payload_by_id)
+
+            state_data = json.loads((dst_home / ".codex" / ".codex-global-state.json").read_text(encoding="utf-8"))
+            self.assertIn(str(target_project), state_data["electron-saved-workspace-roots"])
+
+            conn = sqlite3.connect(dst_home / ".codex" / "state_0001.sqlite")
+            rows = conn.execute("select id, cwd from threads order by id").fetchall()
+            conn.close()
+            self.assertEqual(
+                rows,
+                [
+                    (source_root_session, str(target_project)),
+                    (source_nested_session, str(target_project / "packages" / "ui")),
+                ],
+            )
 
     def test_export_validate_and_import_roundtrip_updates_desktop_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

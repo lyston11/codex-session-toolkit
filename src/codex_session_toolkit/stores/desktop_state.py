@@ -47,6 +47,7 @@ def prepare_session_for_import(
     auto_desktop_compat: bool,
     session_kind: str,
     target_desktop_model_provider: str,
+    session_cwd_override: str = "",
 ) -> None:
     with source_session.open("r", encoding="utf-8") as in_fh, prepared_session.open("w", encoding="utf-8") as out_fh:
         for raw in in_fh:
@@ -68,6 +69,8 @@ def prepare_session_for_import(
                     payload["originator"] = "Codex Desktop"
                 if target_desktop_model_provider:
                     payload["model_provider"] = target_desktop_model_provider
+                if session_cwd_override:
+                    payload["cwd"] = session_cwd_override
 
                 obj = dict(obj)
                 obj["payload"] = payload

@@ -16,6 +16,7 @@ from ..models import BatchExportResult, ExportResult
 from ..paths import CodexPaths
 from ..stores.history import collect_history_lines_for_session, first_history_text
 from ..stores.session_files import (
+    collect_session_ids_for_project,
     collect_session_ids_for_kind,
     extract_last_timestamp,
     extract_session_field_from_file,
@@ -24,11 +25,15 @@ from ..stores.session_files import (
 from ..support import (
     build_batch_export_root,
     build_machine_bundle_root,
+    build_project_export_root,
     build_single_export_root,
     classify_session_kind,
     detect_machine_key,
     detect_machine_label,
     normalize_bundle_root,
+    normalize_project_path,
+    project_label_from_path,
+    project_label_to_key,
 )
 from ..validation import normalize_relative_path, validate_jsonl_file, validate_session_id
 
@@ -163,6 +168,7 @@ def export_sessions_for_kind(
             success_ids=[],
             failed_exports=[],
             manifest_file=None,
+            export_group=archive_group,
         )
 
     if not session_ids:
@@ -180,6 +186,7 @@ def export_sessions_for_kind(
             success_ids=[],
             failed_exports=[],
             manifest_file=None,
+            export_group=archive_group,
         )
 
     export_root.mkdir(parents=True, exist_ok=True)
@@ -216,6 +223,7 @@ def export_sessions_for_kind(
         success_ids=success_ids,
         failed_exports=failed_exports,
         manifest_file=manifest_file,
+        export_group=archive_group,
     )
 
 
@@ -262,4 +270,111 @@ def export_cli_all(
         manifest_stem="cli",
         summary_label="CLI",
         archive_group="cli",
+    )
+
+
+def export_project_sessions(
+    paths: CodexPaths,
+    project_path: str,
+    *,
+    bundle_root: Optional[Path] = None,
+    dry_run: bool = False,
+    active_only: bool = False,
+) -> BatchExportResult:
+    normalized_project_path = normalize_project_path(project_path)
+    if not normalized_project_path:
+        raise ToolkitError("Project path cannot be empty.")
+
+    project_label = project_label_from_path(normalized_project_path) or "root"
+    project_key = project_label_to_key(project_label)
+    resolved_bundle_root = normalize_bundle_root(paths, bundle_root, paths.default_bundle_root)
+    session_ids = collect_session_ids_for_project(
+        paths,
+        project_path=normalized_project_path,
+        active_only=active_only,
+    )
+    machine_key = detect_machine_key()
+    machine_label = detect_machine_label()
+    machine_root = build_machine_bundle_root(resolved_bundle_root, machine_key)
+    export_root = build_project_export_root(resolved_bundle_root, project_key, machine_key)
+    summary_label = f"项目 {project_label}"
+
+    if dry_run:
+        return BatchExportResult(
+            summary_label=summary_label,
+            bundle_root=resolved_bundle_root,
+            export_root=export_root,
+            machine_root=machine_root,
+            source_machine=machine_label,
+            source_machine_key=machine_key,
+            dry_run=True,
+            active_only=active_only,
+            session_kind="project",
+            session_ids=session_ids,
+            success_ids=[],
+            failed_exports=[],
+            manifest_file=None,
+            selection_label=project_label,
+            selection_path=normalized_project_path,
+            export_group="project",
+        )
+
+    if not session_ids:
+        return BatchExportResult(
+            summary_label=summary_label,
+            bundle_root=resolved_bundle_root,
+            export_root=export_root,
+            machine_root=machine_root,
+            source_machine=machine_label,
+            source_machine_key=machine_key,
+            dry_run=False,
+            active_only=active_only,
+            session_kind="project",
+            session_ids=[],
+            success_ids=[],
+            failed_exports=[],
+            manifest_file=None,
+            selection_label=project_label,
+            selection_path=normalized_project_path,
+            export_group="project",
+        )
+
+    export_root.mkdir(parents=True, exist_ok=True)
+    success_ids: list[str] = []
+    failed_exports: list[tuple[str, str]] = []
+
+    for session_id in session_ids:
+        try:
+            export_session(paths, session_id, bundle_root=export_root)
+            success_ids.append(session_id)
+        except Exception as exc:
+            failed_exports.append((session_id, str(exc)))
+
+    manifest_file = export_root / "_project_export_manifest.txt"
+    with manifest_file.open("w", encoding="utf-8") as fh:
+        fh.write(f"# exported_at={datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n")
+        fh.write(f"# project_label={project_label}\n")
+        fh.write(f"# project_path={normalized_project_path}\n")
+        fh.write(f"# active_only={1 if active_only else 0}\n")
+        fh.write(f"# count={len(success_ids)}\n")
+        for session_id in success_ids:
+            fh.write(session_id + "\n")
+
+    return BatchExportResult(
+        summary_label=summary_label,
+        bundle_root=resolved_bundle_root,
+        export_root=export_root,
+        machine_root=machine_root,
+        source_machine=machine_label,
+        source_machine_key=machine_key,
+        dry_run=False,
+        active_only=active_only,
+        session_kind="project",
+        session_ids=session_ids,
+        success_ids=success_ids,
+        failed_exports=failed_exports,
+        manifest_file=manifest_file,
+        selection_label=project_label,
+        selection_path=normalized_project_path,
+        export_group="project",
     )

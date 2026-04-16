@@ -15,6 +15,12 @@
 - 在切换 provider 后继续复用旧会话，又不覆盖原始 rollout
 - 修复 Codex Desktop 左侧线程不可见、`session_index.jsonl` 缺失、`threads` 表不同步等问题
 
+## 最近增强
+
+- `Session / Browse` 新增按项目路径查看与导出：粘贴项目路径后，可只浏览该项目下的会话，并批量导出到 `./codex_sessions/<machine>/project/<project>/<timestamp>/`
+- `Bundle / Transfer` 新增按项目文件夹导入：在 `project` 分类下继续选择具体项目文件夹，并把会话 `cwd` 映射到当前机器的目标项目路径
+- 项目导入会显示本机匹配状态：优先复用原路径，其次尝试同名项目目录；若目标路径不存在，可直接选择是否创建后再导入
+
 ## 功能概览
 
 ### Session / Browse
@@ -22,6 +28,8 @@
 - 浏览最近会话
 - 搜索并查看会话详情
 - 导出单个会话为 Bundle
+- 按项目路径查看该项目下的全部会话
+- 按项目路径批量导出该项目下的全部会话为 Bundle
 
 ### Bundle / Transfer
 
@@ -32,7 +40,30 @@
 - 批量导出全部 CLI 会话为 Bundle
 - 导入单个 Bundle 为会话
 - 先选设备文件夹、再选分类文件夹，批量导入整类 Bundle
+- `project` 分类支持继续选择项目文件夹，显示本机同名/同路径项目状态，并映射到本机项目路径后批量导入
 - 导入时保留本地更新更晚的 rollout，只补齐缺失 history，避免覆盖更新过的会话
+
+## 最常见的工作流
+
+### 1. 按项目整理并导出会话
+
+- 进入 `Session / Browse`
+- 选择 `按项目路径查看并导出会话`
+- 粘贴项目根目录路径
+- 确认匹配到的会话列表后，按 `x` 批量导出
+
+### 2. 把另一台机器上的某个项目会话导入到本机项目目录
+
+- 进入 `Bundle / Transfer`
+- 选择 `批量导入 Bundle 为会话`
+- 依次选择 `设备 -> project 分类 -> 项目文件夹`
+- 查看本机匹配状态和默认目标路径
+- 如有需要，改成你的本机项目目录后导入
+
+### 3. 导入后补齐 Desktop 可见性
+
+- 如果导入的是 Desktop / CLI 会话，工具会顺手维护 `session_index.jsonl`、`threads` 表和 workspace roots
+- 如果工作目录或目标项目目录缺失，可直接选择自动创建
 
 ### Repair / Maintenance
 
@@ -212,12 +243,13 @@ make check
 2. `Bundle / Transfer`
 3. `Repair / Maintenance`
 
-当前交互方式是两级结构：
+当前交互方式以两级结构为主：
 
 - 首页先选择功能域
 - 回车进入该功能页
 - 在功能页中选择具体动作
 - 需要补充执行方式或修复范围时，再进入二级选择菜单
+- `project` 分类导入会进入第三级：`设备 -> 分类 -> 项目文件夹`
 
 常用按键：
 
@@ -241,6 +273,8 @@ make check
 - `Enter`：在浏览模式下进入当前条目的操作面板，在选择模式下直接确认
 - `d`：只查看详情，不直接执行导入 / 导出
 - `e`：在会话列表中直接导出为 Bundle
+- `p`：在项目会话浏览器中重新输入项目路径
+- `x`：在项目会话浏览器中批量导出当前项目下全部会话
 - `s`：切换 Bundle 导出方式
 - `m`：按导出机器切换 Bundle 搜索范围
 - `l`：切换“显示全部历史 Bundle / 仅显示最新 Bundle”
@@ -302,6 +336,14 @@ codex-session-toolkit list desktop
 codex-session-toolkit list 019d58
 ```
 
+按项目路径浏览会话：
+
+```bash
+codex-session-toolkit list-project-sessions /Users/example/project-a
+codex-session-toolkit list-project-sessions /Users/example/project-a --limit 100
+codex-session-toolkit list-project-sessions /Users/example/project-a --pattern cli
+```
+
 浏览 Bundle 导出记录：
 
 ```bash
@@ -322,6 +364,14 @@ codex-session-toolkit validate-bundles --source desktop --verbose
 
 ```bash
 codex-session-toolkit export <session_id>
+```
+
+按项目路径批量导出会话：
+
+```bash
+codex-session-toolkit export-project /Users/example/project-a
+codex-session-toolkit export-project /Users/example/project-a --dry-run
+codex-session-toolkit export-project /Users/example/project-a --active-only
 ```
 
 批量导出 Desktop 会话为 Bundle：
@@ -364,9 +414,17 @@ codex-session-toolkit import-desktop-all --desktop-visible
 codex-session-toolkit import-desktop-all --machine Work-Laptop
 codex-session-toolkit import-desktop-all --machine Work-Laptop --latest-only
 codex-session-toolkit import-desktop-all --export-group active
+codex-session-toolkit import-desktop-all --machine Work-Laptop --export-group project
+codex-session-toolkit import-desktop-all --machine Work-Laptop --project project-a --target-project-path /Users/example/project-a --desktop-visible
 ```
 
-说明：命令名保留为 `import-desktop-all` 以兼容旧版本，但现在实际可结合 `--export-group` 导入 `desktop / active / cli / single` 四类 Bundle。
+说明：命令名保留为 `import-desktop-all` 以兼容旧版本，但现在实际可结合 `--export-group` 导入 `desktop / active / cli / project / single` 五类 Bundle。
+
+项目导入补充说明：
+
+- `--project` 用于锁定 `project` 分类下的某一个项目文件夹
+- `--target-project-path` 用于把导入会话中的 `cwd` 统一映射到当前机器的项目根目录
+- 如果目标目录不存在，可配合 `--desktop-visible` 在导入时自动创建缺失目录
 
 修复会话在 Desktop 中显示：
 
@@ -403,8 +461,17 @@ codex-session-toolkit repair-desktop --include-cli --dry-run
 - `./codex_sessions/<machine>/desktop/<timestamp>/<session_id>/`
 - `./codex_sessions/<machine>/active/<timestamp>/<session_id>/`
 - `./codex_sessions/<machine>/cli/<timestamp>/<session_id>/`
+- `./codex_sessions/<machine>/project/<project>/<timestamp>/<session_id>/`
 
 其中 `<machine>` 默认来自当前电脑主机名；如需手动指定，可以在导出前设置环境变量 `CST_MACHINE_LABEL`。
+
+其中 `project` 分类会额外记录：
+
+- 导出项目名
+- 导出项目原路径
+- 每个会话原始 `cwd`
+
+这样在另一台机器导入时，工具就可以先按项目文件夹筛选，再决定映射到本机哪个项目路径。
 
 兼容旧布局：
 
