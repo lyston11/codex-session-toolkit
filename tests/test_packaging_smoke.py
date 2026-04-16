@@ -47,7 +47,7 @@ class PackagingSmokeTests(unittest.TestCase):
             actions_by_section.setdefault(action.section_id, set()).add(action.action_id)
             labels_by_action[action.action_id] = action.label
 
-        self.assertEqual(actions_by_section["session"], {"list_sessions", "export_one"})
+        self.assertEqual(actions_by_section["session"], {"list_sessions", "export_one", "project_sessions"})
         self.assertEqual(
             actions_by_section["bundle"],
             {
@@ -71,6 +71,7 @@ class PackagingSmokeTests(unittest.TestCase):
         self.assertEqual(labels_by_action["provider_migration"], "迁移到当前 Provider")
         self.assertEqual(labels_by_action["desktop_repair"], "修复会话在 Desktop 中显示")
         self.assertEqual(labels_by_action["clean_legacy"], "清理旧版无标记副本")
+        self.assertEqual(labels_by_action["project_sessions"], "按项目路径查看并导出会话")
 
     def test_logo_font_covers_toolkit_wordmark(self) -> None:
         missing = {ch for ch in "CODEX SESSION TOOLKIT" if ch != " " and ch not in LOGO_FONT_BANNER}

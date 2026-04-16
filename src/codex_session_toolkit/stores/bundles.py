@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple
 from ..errors import ToolkitError
 from ..models import BundleSummary, BundleValidationResult
 from ..paths import CodexPaths
-from ..support import ensure_path_within_dir, iso_to_epoch
+from ..support import ensure_path_within_dir, iso_to_epoch, normalize_project_path, project_label_from_path
 from ..validation import (
     load_manifest,
     validate_jsonl_file,
@@ -26,6 +26,7 @@ CANONICAL_EXPORT_GROUPS = {
     "cli",
     "desktop",
     "active",
+    "project",
 }
 LEGACY_EXPORT_GROUP_ALIASES = {
     "single_exports": "single",
@@ -39,6 +40,7 @@ EXPORT_GROUP_LABELS = {
     "cli": "cli",
     "desktop": "desktop",
     "active": "active",
+    "project": "project",
     LEGACY_EXPORT_GROUP: "旧布局",
     CUSTOM_EXPORT_GROUP: "自定义目录",
 }
@@ -46,6 +48,7 @@ EXPORT_GROUP_ORDER = (
     "desktop",
     "active",
     "cli",
+    "project",
     "single",
     LEGACY_EXPORT_GROUP,
     CUSTOM_EXPORT_GROUP,
@@ -69,7 +72,7 @@ def source_group_allows_export_group(source_group: str, export_group: str) -> bo
     if source_group in {"", "all"}:
         return True
     if source_group == "bundle":
-        return canonical in {"single", "cli"}
+        return canonical in {"single", "cli", "project"}
     if source_group == "desktop":
         return canonical in {"desktop", "active"}
     return True
@@ -110,6 +113,63 @@ def infer_bundle_export_group(bundle_root: Path, bundle_dir: Path) -> tuple[str,
     return export_group, bundle_export_group_label(export_group)
 
 
+def load_project_export_metadata(batch_dir: Path) -> tuple[str, str]:
+    manifest_file = batch_dir / "_project_export_manifest.txt"
+    if not manifest_file.is_file():
+        return "", ""
+
+    project_label = ""
+    project_path = ""
+    try:
+        with manifest_file.open("r", encoding="utf-8") as fh:
+            for raw in fh:
+                stripped = raw.strip()
+                if not stripped.startswith("#"):
+                    continue
+                payload = stripped[1:].strip()
+                if "=" not in payload:
+                    continue
+                key, value = payload.split("=", 1)
+                if key == "project_label":
+                    project_label = value.strip()
+                elif key == "project_path":
+                    project_path = normalize_project_path(value.strip())
+    except OSError:
+        return "", ""
+    return project_label, project_path
+
+
+def infer_bundle_project_metadata(
+    bundle_root: Path,
+    bundle_dir: Path,
+    export_group: str,
+    project_batch_cache: dict[Path, tuple[str, str]],
+) -> tuple[str, str, str]:
+    if export_group != "project":
+        return "", "", ""
+
+    try:
+        relative_parts = bundle_dir.relative_to(bundle_root).parts
+    except ValueError:
+        relative_parts = ()
+
+    project_key = ""
+    if len(relative_parts) >= 5 and relative_parts[1] == "project":
+        project_key = relative_parts[2]
+    elif len(relative_parts) >= 4 and relative_parts[0] == "project":
+        project_key = relative_parts[1]
+    if not project_key:
+        return "", "", ""
+
+    batch_dir = bundle_dir.parent
+    if batch_dir not in project_batch_cache:
+        project_batch_cache[batch_dir] = load_project_export_metadata(batch_dir)
+    project_label, project_path = project_batch_cache[batch_dir]
+    if not project_label:
+        project_label = project_label_from_path(project_path) or project_key
+    return project_key, project_label, project_path
+
+
 def collect_bundle_summaries(
     bundle_root: Path,
     *,
@@ -125,6 +185,7 @@ def collect_bundle_summaries(
     export_group_filter = canonical_export_group_name(export_group_filter)
 
     summaries: List[BundleSummary] = []
+    project_batch_cache: dict[Path, tuple[str, str]] = {}
     for bundle_dir in iter_bundle_directories_under_root(bundle_root):
         try:
             relative_parts = bundle_dir.relative_to(bundle_root).parts
@@ -145,6 +206,12 @@ def collect_bundle_summaries(
             continue
         if export_group_filter and export_group != export_group_filter:
             continue
+        project_key, project_label, project_path = infer_bundle_project_metadata(
+            bundle_root,
+            bundle_dir,
+            export_group,
+            project_batch_cache,
+        )
 
         summary = BundleSummary(
             source_group=source_group,
@@ -160,6 +227,9 @@ def collect_bundle_summaries(
             source_machine_key=machine_key,
             export_group=export_group,
             export_group_label=export_group_label,
+            project_key=project_key,
+            project_label=project_label,
+            project_path=project_path,
         )
         if pattern:
             combined = " ".join(
@@ -173,6 +243,9 @@ def collect_bundle_summaries(
                     summary.source_machine_key,
                     summary.export_group,
                     summary.export_group_label,
+                    summary.project_key,
+                    summary.project_label,
+                    summary.project_path,
                     str(summary.bundle_dir),
                 ]
             )

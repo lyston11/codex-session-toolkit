@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple
 
 from .. import APP_COMMAND
@@ -22,7 +23,7 @@ from ..presenters.reports import (
     print_cleanup_result,
     print_clone_run_result,
 )
-from ..services.browse import get_session_summaries
+from ..services.browse import get_project_session_summaries, get_session_summaries
 from ..services.clone import cleanup_clones, clone_to_provider
 from ..stores.bundles import (
     EXPORT_GROUP_ORDER,
@@ -30,6 +31,7 @@ from ..stores.bundles import (
     collect_known_bundle_summaries,
     latest_distinct_bundle_summaries,
 )
+from ..support import default_local_project_target, detect_machine_key, normalize_project_path, project_label_from_path, project_label_to_key
 from .terminal import (
     Ansi,
     align_line,
@@ -91,6 +93,10 @@ class BatchBundleImportSelection:
     export_group_filter: str
     export_group_label: str
     latest_only: bool
+    project_filter: str = ""
+    project_label: str = ""
+    project_source_path: str = ""
+    target_project_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -109,6 +115,18 @@ class BundleCategoryFolderOption:
     entries: List[BundleSummary]
 
 
+@dataclass(frozen=True)
+class BundleProjectFolderOption:
+    project_key: str
+    project_label: str
+    project_path: str
+    bundle_count: int
+    entries: List[BundleSummary]
+    local_status: str
+    local_status_label: str
+    local_target_path: str
+
+
 TUI_ACTION_NOTES = {
     "provider_migration": [
         "为当前会话创建一份适配当前 Provider 的副本。",
@@ -117,6 +135,10 @@ TUI_ACTION_NOTES = {
         "清理旧版本遗留的无标记副本文件。",
     ],
     "list_sessions": ["内置会话浏览器，支持搜索、预览和详情查看。"],
+    "project_sessions": [
+        "粘贴项目路径后，只查看这个项目下的全部会话。",
+        "可直接批量导出到 ./codex_sessions/<machine>/project/<project_name>/<timestamp>/。",
+    ],
     "browse_bundles": ["独立浏览 Bundle 导出记录，而不是只在导入时顺手选择。", "默认显示全部历史，支持按导出方式、机器和最新视图切换。"],
     "validate_bundles": ["扫描 Bundle 导出目录里的 manifest、session JSONL 和 history JSONL。", "适合在批量导入前先找出坏包。"],
     "export_one": ["从会话列表中选择要导出的 session。", "默认归档到 ./codex_sessions/<machine>/single/<timestamp>/。"],
@@ -124,7 +146,11 @@ TUI_ACTION_NOTES = {
     "export_desktop_active": ["默认归档到 ./codex_sessions/<machine>/active/<timestamp>/。", "仅导出 ~/.codex/sessions/ 下的 Desktop 会话，不会扫描 ~/.codex/archived_sessions/。"],
     "export_cli_all": ["默认归档到 ./codex_sessions/<machine>/cli/<timestamp>/。", "范围包含 active + archived 的 CLI 会话，并分别生成 Bundle。"],
     "import_one": ["从 Bundle 列表中选择要导入为会话的条目。", "可先按导出机器和导出方式筛选。", "导入时会顺手修复 history / index / Desktop 元数据。"],
-    "import_desktop_all": ["先选择设备文件夹，再选择该设备下的分类文件夹，然后批量导入。", "分类文件夹会显示为 desktop / active / cli / single。", "可选：自动创建缺失工作目录。"],
+    "import_desktop_all": [
+        "先选择设备文件夹，再选择该设备下的分类文件夹，然后批量导入。",
+        "分类文件夹会显示为 desktop / active / cli / project / single。",
+        "如果选择 project，还会继续选择项目文件夹，并显示本机是否已有同名/同路径项目。",
+    ],
     "desktop_repair": [
         "修复会话在 Desktop 中的显示、索引和登记信息。",
     ],
@@ -153,6 +179,7 @@ def build_tui_menu_actions() -> List[TuiMenuAction]:
     return [
         TuiMenuAction("list_sessions", "l", "浏览最近会话", "session", ("list", "--limit", "20")),
         TuiMenuAction("export_one", "e", "导出单个会话为 Bundle", "session", ("export", "<session_id>")),
+        TuiMenuAction("project_sessions", "p", "按项目路径查看并导出会话", "session", tuple()),
         TuiMenuAction("browse_bundles", "o", "浏览 Bundle", "bundle", ("list-bundles", "--limit", "20")),
         TuiMenuAction("validate_bundles", "y", "校验 Bundle", "bundle", ("validate-bundles", "--source", "all")),
         TuiMenuAction("export_desktop_all", "b", "批量导出全部 Desktop 会话为 Bundle", "bundle", ("export-desktop-all",)),
@@ -318,8 +345,175 @@ class ToolkitTuiApp:
             f"{style_text('预览', Ansi.DIM)}      : {summary.preview or '（无）'}",
         ]
 
+    def _prompt_project_path(self, *, default: str = "") -> Optional[str]:
+        answer = self._prompt_value(
+            title="按项目路径查看并导出会话",
+            prompt_label="输入项目路径",
+            help_lines=[
+                "可直接粘贴项目根目录路径。",
+                "会匹配 cwd 等于该路径，或位于该路径之下的全部会话。",
+                "如果输入的是文件路径，已存在时会自动回退到其所在目录。",
+            ],
+            default=default or str(Path.cwd()),
+            allow_empty=False,
+        )
+        normalized = normalize_project_path(answer or "")
+        return normalized or None
+
+    def _open_project_session_browser(self) -> None:
+        project_path = self._prompt_project_path(default=str(Path.cwd()))
+        if not project_path:
+            return
+
+        filter_text = ""
+        selected_index = 0
+        pointer = glyphs().get("pointer", ">")
+
+        while True:
+            project_label = project_label_from_path(project_path) or "root"
+            project_key = project_label_to_key(project_label)
+            export_root_preview = (
+                f"{self.context.bundle_root_label}/{detect_machine_key()}/project/{project_key}/<timestamp>"
+            )
+            try:
+                entries = get_project_session_summaries(
+                    self.paths,
+                    project_path=project_path,
+                    pattern=filter_text,
+                    limit=200,
+                )
+            except ToolkitError as exc:
+                self._show_detail_panel("读取项目会话失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+                return
+
+            selected_index = max(0, min(selected_index, len(entries) - 1)) if entries else 0
+            subtitle = "↑/↓ 选择 · Enter 打开会话详情 · x 导出该项目全部会话 · / 搜索 · p 修改路径 · q 返回"
+            box_width = self._print_branded_header("按项目路径查看并导出会话", subtitle)
+
+            info_lines = [
+                f"{style_text('项目名', Ansi.DIM)} : {project_label}",
+                f"{style_text('项目路径', Ansi.DIM)} : {project_path}",
+                f"{style_text('匹配数量', Ansi.DIM)} : {len(entries)}",
+                f"{style_text('导出目录', Ansi.DIM)} : {export_root_preview}",
+                f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
+            ]
+            for line in render_box(info_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
+                print(line)
+            print("")
+
+            list_lines: List[str] = []
+            if not entries:
+                list_lines.append("这个项目路径下没有匹配会话。按 p 重新输入路径，或按 q 返回。")
+            else:
+                start = max(0, selected_index - 5)
+                start = min(start, max(0, len(entries) - 10))
+                end = min(len(entries), start + 10)
+                for idx in range(start, end):
+                    summary = entries[idx]
+                    preview = summary.preview or summary.path.name
+                    line = (
+                        f"{pointer if idx == selected_index else ' '} "
+                        f"{summary.session_id} | {summary.kind}/{summary.scope} | {preview}"
+                    )
+                    if idx == selected_index:
+                        list_lines.append(style_text(line, Ansi.BOLD, Ansi.CYAN))
+                        extra_parts: List[str] = []
+                        if summary.cwd:
+                            extra_parts.append(summary.cwd)
+                        if summary.model_provider:
+                            extra_parts.append(summary.model_provider)
+                        if extra_parts:
+                            list_lines.append(
+                                "  "
+                                + style_text(
+                                    ellipsize_middle(" · ".join(extra_parts), max(10, box_width - 10)),
+                                    Ansi.DIM,
+                                )
+                            )
+                    else:
+                        list_lines.append(line)
+            for line in render_box(list_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.MAGENTA)):
+                print(line)
+
+            key = read_key()
+            if key is None:
+                raw = input("命令 [Enter/x/\\/p/q]：").strip()
+                key = raw if raw else "ENTER"
+
+            if key in ("UP", "k", "K"):
+                if entries:
+                    selected_index = (selected_index - 1) % len(entries)
+                continue
+            if key in ("DOWN", "j", "J"):
+                if entries:
+                    selected_index = (selected_index + 1) % len(entries)
+                continue
+
+            if key == "ENTER":
+                if not entries:
+                    continue
+                self._session_action_center(entries[selected_index])
+                continue
+
+            key_str = str(key).strip().lower()
+            if key_str in {"q", "quit", "esc", "0"} or key == "ESC":
+                return
+            if key_str in {"/", "f"}:
+                new_filter = self._prompt_value(
+                    title="按项目路径查看并导出会话",
+                    prompt_label="输入搜索词",
+                    help_lines=[
+                        "只在当前项目路径匹配到的会话中搜索。",
+                        "可按 session_id / 预览 / provider / cwd / 路径搜索。",
+                        "留空表示不搜索。",
+                    ],
+                    allow_empty=True,
+                )
+                filter_text = new_filter or ""
+                selected_index = 0
+                continue
+            if key_str == "p":
+                new_project_path = self._prompt_project_path(default=project_path)
+                if not new_project_path:
+                    continue
+                project_path = new_project_path
+                filter_text = ""
+                selected_index = 0
+                continue
+            if key_str == "x":
+                if not entries:
+                    self._show_detail_panel(
+                        "项目会话导出",
+                        ["当前项目路径下没有匹配会话，无法执行批量导出。"],
+                        border_codes=(Ansi.DIM, Ansi.YELLOW),
+                    )
+                    continue
+                dry_run = self._prompt_execution_mode(
+                    title=f"导出项目 {project_label} 下的全部会话",
+                    default_dry_run=False,
+                )
+                if dry_run is None:
+                    continue
+                cli_args = ["export-project"]
+                if dry_run:
+                    cli_args.append("--dry-run")
+                cli_args.append(project_path)
+                action_name = f"导出项目 {project_label} 下的 {len(entries)} 个会话为 Bundle"
+                if dry_run:
+                    action_name += "（Dry-run）"
+                self._run_action(
+                    action_name,
+                    cli_args,
+                    dry_run=dry_run,
+                    runner=lambda args=cli_args: self._run_toolkit(list(args)),
+                    danger=False,
+                )
+                continue
+            if key_str in {"d", " "} and entries:
+                self._show_detail_panel("会话详情", self._session_detail_lines(entries[selected_index]))
+
     def _bundle_detail_lines(self, bundle: BundleSummary) -> List[str]:
-        return [
+        lines = [
             f"{style_text('Session ID', Ansi.DIM)} : {bundle.session_id}",
             f"{style_text('导出机器', Ansi.DIM)}  : {bundle.source_machine or '（旧布局）'}",
             f"{style_text('导出方式', Ansi.DIM)}  : {bundle.export_group_label or '（未识别）'}",
@@ -330,6 +524,11 @@ class ToolkitTuiApp:
             f"{style_text('标题', Ansi.DIM)}      : {bundle.thread_name or '（无标题）'}",
             f"{style_text('Rollout 路径', Ansi.DIM)} : {bundle.relative_path or '（空）'}",
         ]
+        if bundle.project_label or bundle.project_key:
+            lines.append(f"{style_text('项目文件夹', Ansi.DIM)} : {bundle.project_label or bundle.project_key}")
+        if bundle.project_path:
+            lines.append(f"{style_text('项目原路径', Ansi.DIM)} : {bundle.project_path}")
+        return lines
 
     def _bundle_browser_snapshot(
         self,
@@ -459,6 +658,188 @@ class ToolkitTuiApp:
             )
             for export_group in ordered_groups
         ]
+
+    def _bundle_project_folder_options(self, entries: List[BundleSummary]) -> List[BundleProjectFolderOption]:
+        grouped: dict[str, dict[str, object]] = {}
+        for bundle in entries:
+            project_key = bundle.project_key or project_label_to_key(bundle.project_label or bundle.bundle_dir.parents[1].name)
+            if not project_key:
+                continue
+            if project_key not in grouped:
+                grouped[project_key] = {
+                    "label": bundle.project_label or project_key,
+                    "path": bundle.project_path,
+                    "entries": [],
+                }
+            payload = grouped[project_key]
+            if bundle.project_label and not payload["label"]:
+                payload["label"] = bundle.project_label
+            if bundle.project_path and not payload["path"]:
+                payload["path"] = bundle.project_path
+            project_entries = payload["entries"]
+            if isinstance(project_entries, list):
+                project_entries.append(bundle)
+
+        ordered_keys = sorted(
+            grouped,
+            key=lambda key: (str(grouped[key]["label"]).lower(), key.lower()),
+        )
+        project_options: List[BundleProjectFolderOption] = []
+        for project_key in ordered_keys:
+            project_label = str(grouped[project_key]["label"])
+            project_path = str(grouped[project_key]["path"])
+            local_target_path, local_status = default_local_project_target(project_label, project_path)
+            local_status_label = {
+                "same_path": "原路径可用",
+                "same_name": "同名项目可用",
+            }.get(local_status, "本机未找到")
+            project_options.append(
+                BundleProjectFolderOption(
+                    project_key=project_key,
+                    project_label=project_label,
+                    project_path=project_path,
+                    bundle_count=len(grouped[project_key]["entries"]),
+                    entries=list(grouped[project_key]["entries"]),
+                    local_status=local_status,
+                    local_status_label=local_status_label,
+                    local_target_path=local_target_path,
+                )
+            )
+        return project_options
+
+    def _default_target_project_path(self, project_option: BundleProjectFolderOption) -> str:
+        return project_option.local_target_path
+
+    def _select_project_bundle_import_scope(
+        self,
+        *,
+        selected_machine: BundleMachineFolderOption,
+        selected_category: BundleCategoryFolderOption,
+    ) -> Optional[BatchBundleImportSelection]:
+        pointer = glyphs().get("pointer", ">")
+        project_selected_index = 0
+
+        while True:
+            project_options = self._bundle_project_folder_options(selected_category.entries)
+            project_selected_index = max(0, min(project_selected_index, len(project_options) - 1)) if project_options else 0
+            box_width = self._print_branded_header(
+                "选择项目文件夹",
+                "↑/↓ 选择项目 · Enter 设置本机项目路径并导入 · d 查看摘要 · q 返回上一步",
+            )
+
+            info_lines = [
+                f"{style_text('当前设备', Ansi.DIM)} : {selected_machine.machine_label}",
+                f"{style_text('当前分类', Ansi.DIM)} : {selected_category.export_group_label}",
+                f"{style_text('项目数量', Ansi.DIM)} : {len(project_options)}",
+                f"{style_text('导入方式', Ansi.DIM)} : 先看本机匹配状态，再把会话 cwd 映射到目标项目路径",
+            ]
+            for line in render_box(info_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
+                print(line)
+            print("")
+
+            project_lines: List[str] = []
+            if not project_options:
+                project_lines.append("这个设备的 project 分类下没有可导入的项目文件夹。按 q 返回。")
+            else:
+                start = max(0, project_selected_index - 5)
+                start = min(start, max(0, len(project_options) - 10))
+                end = min(len(project_options), start + 10)
+                for idx in range(start, end):
+                    option = project_options[idx]
+                    line = (
+                        f"{pointer if idx == project_selected_index else ' '} "
+                        f"{option.project_label} | {option.bundle_count} 个 Bundle | {option.local_status_label}"
+                    )
+                    if idx == project_selected_index:
+                        project_lines.append(style_text(line, Ansi.BOLD, Ansi.CYAN))
+                        if option.project_path:
+                            project_lines.append(
+                                "  "
+                                + style_text(
+                                    ellipsize_middle(option.project_path, max(10, box_width - 10)),
+                                    Ansi.DIM,
+                                )
+                            )
+                        if option.local_target_path:
+                            project_lines.append(
+                                "  "
+                                + style_text(
+                                    ellipsize_middle(
+                                        f"默认导入到：{option.local_target_path}",
+                                        max(10, box_width - 10),
+                                    ),
+                                    Ansi.DIM,
+                                )
+                            )
+                    else:
+                        project_lines.append(line)
+            for line in render_box(project_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.GREEN)):
+                print(line)
+
+            key = read_key()
+            if key is None:
+                raw = input("命令 [Enter/d/q]：").strip()
+                key = raw if raw else "ENTER"
+
+            if key in ("UP", "k", "K"):
+                if project_options:
+                    project_selected_index = (project_selected_index - 1) % len(project_options)
+                continue
+            if key in ("DOWN", "j", "J"):
+                if project_options:
+                    project_selected_index = (project_selected_index + 1) % len(project_options)
+                continue
+
+            key_str = str(key).strip().lower()
+            if key == "ENTER":
+                if not project_options:
+                    continue
+                selected_project = project_options[project_selected_index]
+                target_project_path = self._prompt_value(
+                    title=f"导入项目 {selected_project.project_label}",
+                    prompt_label="输入本机目标项目路径",
+                    help_lines=[
+                        f"导出项目文件夹：{selected_project.project_label}",
+                        f"原项目路径：{selected_project.project_path or '（未记录）'}",
+                        f"本机匹配状态：{selected_project.local_status_label}",
+                        f"默认目标路径：{selected_project.local_target_path or '（未设置）'}",
+                        "导入时会把这个项目下所有会话的 cwd 映射到新的本机路径。",
+                    ],
+                    default=self._default_target_project_path(selected_project),
+                    allow_empty=False,
+                )
+                normalized_target_path = normalize_project_path(target_project_path or "")
+                if not normalized_target_path:
+                    continue
+                return BatchBundleImportSelection(
+                    entries=selected_project.entries,
+                    machine_filter=selected_machine.machine_key,
+                    machine_label=selected_machine.machine_label,
+                    export_group_filter=selected_category.export_group,
+                    export_group_label=selected_category.export_group_label,
+                    latest_only=False,
+                    project_filter=selected_project.project_key,
+                    project_label=selected_project.project_label,
+                    project_source_path=selected_project.project_path,
+                    target_project_path=normalized_target_path,
+                )
+            if key_str in {"q", "quit", "esc", "0"} or key == "ESC":
+                return None
+            if key_str in {"d", " "} and project_options:
+                selected_project = project_options[project_selected_index]
+                self._show_detail_panel(
+                    "项目文件夹摘要",
+                    [
+                        f"{style_text('设备', Ansi.DIM)}       : {selected_machine.machine_label}",
+                        f"{style_text('分类', Ansi.DIM)}       : {selected_category.export_group_label}",
+                        f"{style_text('项目文件夹', Ansi.DIM)} : {selected_project.project_label}",
+                        f"{style_text('项目原路径', Ansi.DIM)} : {selected_project.project_path or '（未记录）'}",
+                        f"{style_text('本机状态', Ansi.DIM)}   : {selected_project.local_status_label}",
+                        f"{style_text('默认导入到', Ansi.DIM)} : {selected_project.local_target_path or '（未设置）'}",
+                        f"{style_text('Bundle 数', Ansi.DIM)}  : {selected_project.bundle_count}",
+                    ],
+                    border_codes=(Ansi.DIM, Ansi.GREEN),
+                )
 
     def _prompt_value(
         self,
@@ -1110,7 +1491,7 @@ class ToolkitTuiApp:
             info_lines = [
                 f"{style_text('导出根目录', Ansi.DIM)} : {self.context.bundle_root_label}",
                 f"{style_text('设备数量', Ansi.DIM)}   : {len(machine_options)}",
-                f"{style_text('下一步', Ansi.DIM)}   : 进入设备后选择 desktop / active / cli / single",
+                f"{style_text('下一步', Ansi.DIM)}   : 进入设备后选择 desktop / active / cli / project / single",
             ]
             for line in render_box(info_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
                 print(line)
@@ -1186,7 +1567,7 @@ class ToolkitTuiApp:
                 info_lines = [
                     f"{style_text('当前设备', Ansi.DIM)} : {selected_machine.machine_label}",
                     f"{style_text('分类数量', Ansi.DIM)} : {len(category_options)}",
-                    f"{style_text('导入方式', Ansi.DIM)} : 选中一个分类文件夹后，导入该文件夹下全部 Bundle",
+                    f"{style_text('导入方式', Ansi.DIM)} : 选中分类后直接导入；若为 project，会继续选择项目文件夹",
                 ]
                 for line in render_box(info_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
                     print(line)
@@ -1231,6 +1612,14 @@ class ToolkitTuiApp:
                     if not category_options:
                         continue
                     selected_category = category_options[category_selected_index]
+                    if selected_category.export_group == "project":
+                        project_selection = self._select_project_bundle_import_scope(
+                            selected_machine=selected_machine,
+                            selected_category=selected_category,
+                        )
+                        if not project_selection:
+                            continue
+                        return project_selection
                     return BatchBundleImportSelection(
                         entries=selected_category.entries,
                         machine_filter=selected_machine.machine_key,
@@ -1249,7 +1638,8 @@ class ToolkitTuiApp:
                             f"{style_text('设备', Ansi.DIM)}     : {selected_machine.machine_label}",
                             f"{style_text('分类', Ansi.DIM)}     : {selected_category.export_group_label}",
                             f"{style_text('Bundle 数', Ansi.DIM)} : {selected_category.bundle_count}",
-                            f"{style_text('分类路径', Ansi.DIM)} : {selected_category.entries[0].bundle_dir.parents[1] if selected_category.entries else '（空）'}",
+                            f"{style_text('分类路径', Ansi.DIM)} : "
+                            f"{(selected_category.entries[0].bundle_dir.parents[2] if selected_category.entries and selected_category.export_group == 'project' else selected_category.entries[0].bundle_dir.parents[1]) if selected_category.entries else '（空）'}",
                         ],
                         border_codes=(Ansi.DIM, Ansi.GREEN),
                     )
@@ -1260,6 +1650,10 @@ class ToolkitTuiApp:
 
         if menu_action.action_id == "list_sessions":
             self._open_session_browser(mode="view")
+            return None, None
+
+        if menu_action.action_id == "project_sessions":
+            self._open_project_session_browser()
             return None, None
 
         if menu_action.action_id == "browse_bundles":
@@ -1296,21 +1690,38 @@ class ToolkitTuiApp:
             selection = self._select_batch_bundle_import_scope()
             if not selection:
                 return None, None
+            create_question = "如果工作目录缺失，是否自动创建"
+            default_yes = False
+            if selection.target_project_path:
+                if Path(selection.target_project_path).exists():
+                    create_question = "如果目标项目路径或其子目录缺失，是否自动创建"
+                else:
+                    create_question = "目标项目路径不存在，是否先创建后再导入"
+                    default_yes = True
             desktop_visible = self._confirm_toggle(
                 title="批量导入 Bundle 为会话",
-                question="如果工作目录缺失，是否自动创建",
+                question=create_question,
                 yes_label="y",
                 no_label="n",
-                default_yes=False,
+                default_yes=default_yes,
             )
             args = ["import-desktop-all"]
             if selection.machine_filter:
                 args.extend(["--machine", selection.machine_filter])
             if selection.export_group_filter:
                 args.extend(["--export-group", selection.export_group_filter])
+            if selection.project_filter:
+                args.extend(["--project", selection.project_filter])
+            if selection.target_project_path:
+                args.extend(["--target-project-path", selection.target_project_path])
             if desktop_visible:
                 args.append("--desktop-visible")
             action_name = f"批量导入 {selection.machine_label}/{selection.export_group_label}（{len(selection.entries)} 个 Bundle）"
+            if selection.project_label:
+                action_name = (
+                    f"批量导入 {selection.machine_label}/{selection.export_group_label}/"
+                    f"{selection.project_label}（{len(selection.entries)} 个 Bundle）"
+                )
             if desktop_visible:
                 action_name += "（自动创建目录）"
             return action_name, args
@@ -1321,22 +1732,24 @@ class ToolkitTuiApp:
         box_width = self._print_branded_header("帮助 / 使用说明")
         lines = [
             style_text("菜单分组：", Ansi.BOLD),
-            "  Session / Browse   : 浏览本机会话、查看详情、导出单个会话为 Bundle",
-            "  Bundle / Transfer  : 浏览 Bundle、校验 Bundle、批量导出与批量导入",
+            "  Session / Browse   : 浏览本机会话、按项目路径筛会话、导出单个会话或整项目会话",
+            "  Bundle / Transfer  : 浏览 Bundle、校验 Bundle、批量导出与批量导入（project 分类支持按项目文件夹导入）",
             "  Repair / Maintenance : 先按目标选择 Provider 迁移、Desktop 显示修复或旧副本清理",
             "",
             style_text("常用 CLI（更完整的工具链能力）：", Ansi.BOLD),
             "  clone-provider                克隆活动会话到当前 provider",
             "  clean-clones                  清理旧版无标记副本",
             "  list [pattern]                列出本机会话",
+            "  list-project-sessions <path>  列出某个项目路径下的全部会话",
             "  list-bundles [pattern]        列出 Bundle 导出记录",
             "  validate-bundles              校验 Bundle 导出目录健康度",
             "  export <session_id>           导出单个会话为 Bundle",
+            "  export-project <path>         批量导出某个项目路径下的全部会话",
             "  export-desktop-all            批量导出全部 Desktop 会话为 Bundle（含 archived）",
             "  export-active-desktop-all     批量导出全部 Active Desktop 会话为 Bundle",
             "  export-cli-all                批量导出全部 CLI 会话为 Bundle",
             "  import <session_id|bundle_dir> 导入单个 Bundle 为会话",
-            "  import-desktop-all            先选设备文件夹，再选分类文件夹后批量导入",
+            "  import-desktop-all            先选设备文件夹，再选分类文件夹；project 分类会继续选项目文件夹",
             "  repair-desktop                修复会话在 Desktop 中的显示与登记",
             "",
             style_text("兼容入口参数：", Ansi.BOLD),
@@ -1346,11 +1759,14 @@ class ToolkitTuiApp:
             "",
             style_text("示例：", Ansi.BOLD),
             f"  {self._cli_preview(('clone-provider', '--dry-run'))}",
+            f"  {self._cli_preview(('list-project-sessions', '/Users/example/project-a'))}",
             f"  {self._cli_preview(('list-bundles', '--source', 'desktop'))}",
             f"  {self._cli_preview(('validate-bundles', '--source', 'desktop'))}",
+            f"  {self._cli_preview(('export-project', '/Users/example/project-a'))}",
             f"  {self._cli_preview(('export-cli-all', '--dry-run'))}",
             f"  {self._cli_preview(('export', '019d582f-e8f4-7ce3-9948-c0406b4faaf2'))}",
             f"  {self._cli_preview(('import-desktop-all',))}",
+            f"  {self._cli_preview(('import-desktop-all', '--machine', 'Work-Laptop', '--project', 'project-a', '--target-project-path', '/Users/example/project-a'))}",
             f"  {self._cli_preview(('import-desktop-all', '--machine', 'Work-Laptop', '--export-group', 'active'))}",
             f"  {self._cli_preview(('repair-desktop', '--dry-run'))}",
             "",
@@ -1377,6 +1793,8 @@ class ToolkitTuiApp:
             "  Enter              在浏览模式下进入单条操作面板，在选择模式下直接确认",
             "  d                  只打开详情面板，不执行导入/导出",
             "  e                  在会话列表直接导出为 Bundle",
+            "  x                  在项目会话列表直接导出这个项目下的全部会话",
+            "  p                  在项目会话列表重新输入项目路径",
             "  s                  在 Bundle 列表切换导出方式",
             "  m                  在 Bundle 列表按导出机器切换",
             "  l                  在 Bundle 列表切换“全部历史 / 仅最新”",

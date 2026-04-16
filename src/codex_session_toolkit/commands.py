@@ -21,9 +21,9 @@ from .presenters.reports import (
     print_session_rows,
     print_validation_report,
 )
-from .services.browse import get_bundle_summaries, get_session_summaries, validate_bundles
+from .services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles
 from .services.clone import cleanup_clones, clone_to_provider
-from .services.exporting import export_active_desktop_all, export_cli_all, export_desktop_all, export_session
+from .services.exporting import export_active_desktop_all, export_cli_all, export_desktop_all, export_project_sessions, export_session
 from .services.importing import import_desktop_all, import_session
 from .services.repair import repair_desktop
 from .support import build_single_export_root
@@ -39,6 +39,11 @@ def create_parser() -> argparse.ArgumentParser:
     list_parser = subparsers.add_parser("list", help="List local sessions")
     list_parser.add_argument("pattern", nargs="?", default="", help="Optional filter substring")
     list_parser.add_argument("--limit", type=int, default=30, help="Maximum rows to print")
+
+    list_project_parser = subparsers.add_parser("list-project-sessions", help="List sessions under a project path")
+    list_project_parser.add_argument("project_path", help="Project root path used to match session cwd")
+    list_project_parser.add_argument("--pattern", default="", help="Optional filter substring")
+    list_project_parser.add_argument("--limit", type=int, default=30, help="Maximum rows to print")
 
     list_bundles_parser = subparsers.add_parser("list-bundles", help="List available bundle exports")
     list_bundles_parser.add_argument("pattern", nargs="?", default="", help="Optional filter substring")
@@ -77,6 +82,11 @@ def create_parser() -> argparse.ArgumentParser:
     export_parser = subparsers.add_parser("export", help="Export one session bundle")
     export_parser.add_argument("session_id")
 
+    export_project_parser = subparsers.add_parser("export-project", help="Export all sessions under one project path")
+    export_project_parser.add_argument("project_path", help="Project root path used to match session cwd")
+    export_project_parser.add_argument("--dry-run", action="store_true")
+    export_project_parser.add_argument("--active-only", action="store_true", help="Only export active sessions")
+
     export_all_parser = subparsers.add_parser("export-desktop-all", help="Export all Desktop sessions in bulk")
     export_all_parser.add_argument("--dry-run", action="store_true")
     export_all_parser.add_argument("--active-only", action="store_true", help="Legacy compatibility flag")
@@ -100,12 +110,14 @@ def create_parser() -> argparse.ArgumentParser:
         help="Which bundle categories to scan when importing by session id",
     )
     import_parser.add_argument("--machine", default="", help="Only search bundles from this machine key")
-    import_parser.add_argument("--export-group", default="", help="Only search bundles from this export folder (desktop/active/cli/single)")
+    import_parser.add_argument("--export-group", default="", help="Only search bundles from this export folder (desktop/active/cli/project/single)")
 
-    import_all_parser = subparsers.add_parser("import-desktop-all", help="Import one machine/category bundle folder in bulk")
+    import_all_parser = subparsers.add_parser("import-desktop-all", help="Import one machine/category/project bundle folder in bulk")
     import_all_parser.add_argument("--desktop-visible", action="store_true")
     import_all_parser.add_argument("--machine", default="", help="Only import bundles from this machine key")
-    import_all_parser.add_argument("--export-group", default="", help="Only import bundles from this export folder (desktop/active/cli/single)")
+    import_all_parser.add_argument("--export-group", default="", help="Only import bundles from this export folder (desktop/active/cli/project/single)")
+    import_all_parser.add_argument("--project", default="", help="Only import one project folder under project exports")
+    import_all_parser.add_argument("--target-project-path", default="", help="Remap imported project cwd values to this local project path")
     import_all_parser.add_argument("--latest-only", action="store_true", help="Only import the latest bundle per machine and session id")
 
     repair_parser = subparsers.add_parser("repair-desktop", help="Repair Desktop sidebar visibility")
@@ -123,6 +135,15 @@ def run_cli(argv: Sequence[str], *, paths: Optional[CodexPaths] = None) -> int:
 
     if args.command == "list":
         return print_session_rows(get_session_summaries(paths, pattern=args.pattern, limit=max(1, args.limit)))
+    if args.command == "list-project-sessions":
+        return print_session_rows(
+            get_project_session_summaries(
+                paths,
+                project_path=args.project_path,
+                pattern=args.pattern,
+                limit=max(1, args.limit),
+            )
+        )
     if args.command == "list-bundles":
         return print_bundle_rows(
             get_bundle_summaries(
@@ -154,6 +175,15 @@ def run_cli(argv: Sequence[str], *, paths: Optional[CodexPaths] = None) -> int:
                 bundle_root=build_single_export_root(paths.default_bundle_root),
             )
         )
+    if args.command == "export-project":
+        return print_batch_export_result(
+            export_project_sessions(
+                paths,
+                args.project_path,
+                dry_run=args.dry_run,
+                active_only=args.active_only,
+            )
+        )
     if args.command == "export-desktop-all":
         return print_batch_export_result(export_desktop_all(paths, dry_run=args.dry_run, active_only=args.active_only))
     if args.command == "export-active-desktop-all":
@@ -177,6 +207,8 @@ def run_cli(argv: Sequence[str], *, paths: Optional[CodexPaths] = None) -> int:
                 paths,
                 machine_filter=args.machine,
                 export_group_filter=args.export_group,
+                project_filter=args.project,
+                target_project_path=args.target_project_path,
                 latest_only=args.latest_only,
                 desktop_visible=args.desktop_visible,
             )

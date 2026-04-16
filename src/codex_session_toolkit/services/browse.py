@@ -19,8 +19,19 @@ def get_session_summaries(
     *,
     pattern: str = "",
     limit: Optional[int] = None,
+    project_path: str = "",
 ) -> list[SessionSummary]:
-    return collect_session_summaries(paths, pattern=pattern, limit=limit)
+    return collect_session_summaries(paths, pattern=pattern, limit=limit, project_path=project_path)
+
+
+def get_project_session_summaries(
+    paths: CodexPaths,
+    *,
+    project_path: str,
+    pattern: str = "",
+    limit: Optional[int] = None,
+) -> list[SessionSummary]:
+    return collect_session_summaries(paths, pattern=pattern, limit=limit, project_path=project_path)
 
 
 def get_bundle_summaries(

@@ -33,6 +33,9 @@ class BundleSummary:
     source_machine_key: str = ""
     export_group: str = ""
     export_group_label: str = ""
+    project_key: str = ""
+    project_label: str = ""
+    project_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,6 +113,9 @@ class BatchExportResult:
     success_ids: List[str]
     failed_exports: List[Tuple[str, str]]
     manifest_file: Optional[Path] = None
+    selection_label: str = ""
+    selection_path: str = ""
+    export_group: str = ""
 
 
 @dataclass(frozen=True)
@@ -143,6 +149,10 @@ class BatchImportResult:
     export_group_filter: str = ""
     export_group_label: str = ""
     latest_only: bool = False
+    project_filter: str = ""
+    project_label: str = ""
+    project_source_path: str = ""
+    target_project_path: str = ""
 
 
 @dataclass(frozen=True)

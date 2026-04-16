@@ -10,7 +10,7 @@ from typing import Iterable, List, Optional, Tuple
 from ..errors import ToolkitError
 from ..models import SessionSummary
 from ..paths import CodexPaths
-from ..support import classify_session_kind
+from ..support import classify_session_kind, project_path_matches
 from ..validation import validate_session_id
 from .history import first_history_messages
 
@@ -228,6 +228,7 @@ def collect_session_summaries(
     limit: Optional[int] = None,
     active_only: bool = False,
     desktop_only: bool = False,
+    project_path: str = "",
 ) -> List[SessionSummary]:
     history_preview = first_history_messages(paths.history_file)
     summaries: List[SessionSummary] = []
@@ -249,6 +250,8 @@ def collect_session_summaries(
             continue
 
         cwd = session_meta.get("cwd", "") if isinstance(session_meta.get("cwd", ""), str) else ""
+        if project_path and not project_path_matches(cwd, project_path):
+            continue
         model_provider = (
             session_meta.get("model_provider", "") if isinstance(session_meta.get("model_provider", ""), str) else ""
         )
@@ -322,6 +325,31 @@ def collect_session_ids_for_kind(
         except Exception:
             continue
 
+    return session_ids
+
+
+def collect_session_ids_for_project(
+    paths: CodexPaths,
+    *,
+    project_path: str,
+    active_only: bool = False,
+) -> List[str]:
+    if not project_path:
+        return []
+
+    session_ids: List[str] = []
+    seen_session_ids: set[str] = set()
+    for summary in collect_session_summaries(
+        paths,
+        pattern="",
+        limit=None,
+        active_only=active_only,
+        project_path=project_path,
+    ):
+        if summary.session_id in seen_session_ids:
+            continue
+        session_ids.append(summary.session_id)
+        seen_session_ids.add(summary.session_id)
     return session_ids
 
 
