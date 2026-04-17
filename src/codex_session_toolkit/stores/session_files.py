@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path, PureWindowsPath
 from typing import Iterable, List, Optional, Tuple
@@ -10,9 +9,15 @@ from typing import Iterable, List, Optional, Tuple
 from ..errors import ToolkitError
 from ..models import SessionSummary
 from ..paths import CodexPaths
-from ..support import classify_session_kind, project_path_matches
+from ..support import project_path_matches
 from ..validation import validate_session_id
 from .history import first_history_messages
+from .session_parser import (
+    looks_like_session_meta_text,
+    normalize_session_text,
+    parse_jsonl_records as _parse_jsonl_records,
+    parse_session_file,
+)
 
 
 def iter_session_files(paths: CodexPaths, *, active_only: bool = False) -> Iterable[Path]:
@@ -35,70 +40,11 @@ def session_timestamp_from_filename(path: Path) -> str:
     return f"{match.group(1)} {match.group(2)}:{match.group(3)}"
 
 
-def normalize_session_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text or "").strip()
-
-
-def looks_like_session_meta_text(text: str) -> bool:
-    normalized = normalize_session_text(text)
-    if not normalized:
-        return True
-
-    return normalized.lower().startswith(
-        (
-            "<environment_context>",
-            "<permissions instructions>",
-            "<app-context>",
-            "<collaboration_mode>",
-            "<skills_instructions>",
-            "<turn_aborted>",
-            "<image",
-        )
-    )
-
-
-def first_text_fragment(value: object) -> str:
-    if isinstance(value, str):
-        return normalize_session_text(value)
-    if isinstance(value, list):
-        for item in value:
-            text = first_text_fragment(item)
-            if text:
-                return text
-        return ""
-    if isinstance(value, dict):
-        for key in ("text", "message", "content"):
-            text = first_text_fragment(value.get(key))
-            if text:
-                return text
-    return ""
-
-
 def first_user_prompt_from_session(session_file: Path) -> str:
-    with session_file.open("r", encoding="utf-8") as fh:
-        for raw in fh:
-            stripped = raw.strip()
-            if not stripped:
-                continue
-            try:
-                obj = json.loads(stripped)
-            except Exception:
-                continue
-            if not isinstance(obj, dict):
-                continue
-
-            payload = obj.get("payload")
-            candidate = ""
-            if obj.get("type") == "response_item" and isinstance(payload, dict) and payload.get("role") == "user":
-                candidate = first_text_fragment(payload.get("content"))
-            elif obj.get("type") == "message" and isinstance(payload, dict) and payload.get("role") == "user":
-                candidate = first_text_fragment(payload.get("text"))
-            elif obj.get("type") == "event_msg" and isinstance(payload, dict) and payload.get("type") == "user_message":
-                candidate = first_text_fragment(payload.get("message") or payload.get("text"))
-
-            if candidate and not looks_like_session_meta_text(candidate):
-                return candidate
-    return ""
+    try:
+        return parse_session_file(session_file).first_user_prompt
+    except ToolkitError:
+        return ""
 
 
 def workspace_name_from_cwd(cwd: str) -> str:
@@ -133,84 +79,26 @@ def build_session_preview(history_preview: str, session_file: Path, cwd: str) ->
 
 
 def parse_jsonl_records(path: Path) -> List[Tuple[str, Optional[dict]]]:
-    records: List[Tuple[str, Optional[dict]]] = []
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            for line_number, raw in enumerate(fh, 1):
-                stripped = raw.strip()
-                if not stripped:
-                    records.append((raw, None))
-                    continue
-                try:
-                    obj = json.loads(stripped)
-                except Exception as exc:
-                    raise ToolkitError(f"{path} line {line_number}: {exc}") from exc
-                if not isinstance(obj, dict):
-                    raise ToolkitError(f"{path} line {line_number}: JSON value is not an object")
-                records.append((raw, obj))
-    except FileNotFoundError as exc:
-        raise ToolkitError(f"Missing file: {path}") from exc
-    return records
+    return _parse_jsonl_records(path)
 
 
 def read_session_payload(path: Path) -> dict:
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            for line_number, raw in enumerate(fh, 1):
-                stripped = raw.strip()
-                if not stripped:
-                    continue
-                try:
-                    obj = json.loads(stripped)
-                except Exception as exc:
-                    raise ToolkitError(f"{path} line {line_number}: {exc}") from exc
-                if obj.get("type") != "session_meta":
-                    continue
-                payload = obj.get("payload")
-                if not isinstance(payload, dict):
-                    raise ToolkitError(f"{path} line {line_number}: session_meta payload is not an object")
-                return dict(payload)
-    except FileNotFoundError as exc:
-        raise ToolkitError(f"Missing file: {path}") from exc
-
-    raise ToolkitError(f"{path}: session_meta not found")
+    return dict(parse_session_file(path).session_meta)
 
 
 def extract_session_field_from_file(field_name: str, session_file: Path) -> str:
-    with session_file.open("r", encoding="utf-8") as fh:
-        for raw in fh:
-            stripped = raw.strip()
-            if not stripped:
-                continue
-            try:
-                obj = json.loads(stripped)
-            except Exception:
-                continue
-            if obj.get("type") != "session_meta":
-                continue
-            payload = obj.get("payload")
-            if not isinstance(payload, dict):
-                break
-            value = payload.get(field_name)
-            return value if isinstance(value, str) else ""
-    return ""
+    try:
+        value = parse_session_file(session_file).session_meta.get(field_name)
+    except ToolkitError:
+        return ""
+    return value if isinstance(value, str) else ""
 
 
 def extract_last_timestamp(session_file: Path) -> str:
-    last_timestamp = ""
-    with session_file.open("r", encoding="utf-8") as fh:
-        for raw in fh:
-            stripped = raw.strip()
-            if not stripped:
-                continue
-            try:
-                obj = json.loads(stripped)
-            except Exception:
-                continue
-            timestamp = obj.get("timestamp")
-            if isinstance(timestamp, str) and timestamp:
-                last_timestamp = timestamp
-    return last_timestamp
+    try:
+        return parse_session_file(session_file).last_timestamp
+    except ToolkitError:
+        return ""
 
 
 def find_session_file(paths: CodexPaths, session_id: str) -> Optional[Path]:
@@ -237,25 +125,23 @@ def collect_session_summaries(
         session_id = session_id_from_filename(session_file) or session_file.stem
         session_scope = "archived" if str(session_file).startswith(str(paths.archived_sessions_dir)) else "active"
         try:
-            session_meta = read_session_payload(session_file)
+            parsed_session = parse_session_file(session_file)
         except ToolkitError:
-            session_meta = {}
+            parsed_session = None
 
-        source_name = session_meta.get("source", "") if isinstance(session_meta.get("source", ""), str) else ""
-        originator_name = (
-            session_meta.get("originator", "") if isinstance(session_meta.get("originator", ""), str) else ""
-        )
-        session_kind = classify_session_kind(source_name, originator_name)
+        session_kind = parsed_session.session_kind if parsed_session is not None else "unknown"
         if desktop_only and session_kind != "desktop":
             continue
 
-        cwd = session_meta.get("cwd", "") if isinstance(session_meta.get("cwd", ""), str) else ""
+        cwd = parsed_session.cwd if parsed_session is not None else ""
         if project_path and not project_path_matches(cwd, project_path):
             continue
-        model_provider = (
-            session_meta.get("model_provider", "") if isinstance(session_meta.get("model_provider", ""), str) else ""
+        model_provider = parsed_session.model_provider if parsed_session is not None else ""
+        preview = build_session_preview(
+            history_preview.get(session_id, ""),
+            session_file,
+            cwd,
         )
-        preview = build_session_preview(history_preview.get(session_id, ""), session_file, cwd)
         summary = SessionSummary(
             session_id=session_id,
             scope=session_scope,
@@ -299,31 +185,14 @@ def collect_session_ids_for_kind(
 
     for path in iter_session_files(paths, active_only=active_only):
         try:
-            with path.open("r", encoding="utf-8") as fh:
-                for raw in fh:
-                    stripped = raw.strip()
-                    if not stripped:
-                        continue
-                    obj = json.loads(stripped)
-                    if obj.get("type") != "session_meta":
-                        continue
-                    payload = obj.get("payload")
-                    if not isinstance(payload, dict):
-                        break
-                    session_id = payload.get("id")
-                    source_name = payload.get("source", "")
-                    originator_name = payload.get("originator", "")
-                    if (
-                        isinstance(session_id, str)
-                        and session_id
-                        and classify_session_kind(source_name, originator_name) == session_kind
-                        and session_id not in seen_session_ids
-                    ):
-                        session_ids.append(session_id)
-                        seen_session_ids.add(session_id)
-                    break
-        except Exception:
+            parsed = parse_session_file(path)
+        except ToolkitError:
             continue
+
+        session_id = parsed.session_id
+        if session_id and parsed.session_kind == session_kind and session_id not in seen_session_ids:
+            session_ids.append(session_id)
+            seen_session_ids.add(session_id)
 
     return session_ids
 

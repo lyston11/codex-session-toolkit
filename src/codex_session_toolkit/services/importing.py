@@ -13,13 +13,17 @@ from ..errors import ToolkitError
 from ..models import BatchImportResult, ImportResult
 from ..paths import CodexPaths
 from ..services.provider import detect_provider
-from ..stores.bundles import (
+from ..stores.bundle_layout import (
     LEGACY_MACHINE_KEY,
     bundle_export_group_label,
-    collect_bundle_summaries,
-    latest_distinct_bundle_summaries,
+)
+from ..stores.bundle_repository import (
     resolve_bundle_dir,
     resolve_known_bundle_dir,
+)
+from ..stores.bundle_scanner import (
+    collect_bundle_summaries,
+    latest_distinct_bundle_summaries,
 )
 from ..stores.desktop_state import ensure_desktop_workspace_root, prepare_session_for_import, upsert_threads_table
 from ..stores.index import load_existing_index, upsert_session_index

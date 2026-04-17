@@ -4,11 +4,13 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 PACKAGE_NAME="codex_session_toolkit"
 VENV_DIR="${VENV_DIR:-$SCRIPT_DIR/.venv}"
+VENV_PYTHON="$VENV_DIR/bin/python"
 VENV_COMMAND="$VENV_DIR/bin/codex-session-toolkit"
 SRC_DIR="$SCRIPT_DIR/src"
 PACKAGE_DIR="$SRC_DIR/$PACKAGE_NAME"
 LAUNCH_MODE="${CST_LAUNCH_MODE:-${CSC_LAUNCH_MODE:-auto}}"
 IS_GIT_WORKTREE=0
+PYTHON_SOURCE="system"
 
 if [ -d "$SCRIPT_DIR/.git" ] && [ -d "$PACKAGE_DIR" ]; then
   IS_GIT_WORKTREE=1
@@ -49,7 +51,10 @@ cd "$SCRIPT_DIR"
 
 PYTHON_BIN="${PYTHON_BIN:-}"
 if [ -z "$PYTHON_BIN" ]; then
-  if command -v python3 >/dev/null 2>&1; then
+  if [ -x "$VENV_PYTHON" ]; then
+    PYTHON_BIN="$VENV_PYTHON"
+    PYTHON_SOURCE="local-venv"
+  elif command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
   elif command -v python >/dev/null 2>&1; then
     PYTHON_BIN="python"
@@ -63,6 +68,12 @@ fi
 echo "============================================="
 echo " Codex Session Toolkit - Launcher (Source Mode)"
 echo "============================================="
+echo "Python:    $PYTHON_BIN"
+if [ "$PYTHON_SOURCE" = "local-venv" ]; then
+  echo "Env:       local isolated .venv"
+else
+  echo "Env:       system interpreter (tip: run ./install.sh to isolate dependencies)"
+fi
 echo ">> $PYTHON_BIN -m $PACKAGE_NAME $*"
 
 export PYTHONPATH="$SRC_DIR${PYTHONPATH:+:$PYTHONPATH}"

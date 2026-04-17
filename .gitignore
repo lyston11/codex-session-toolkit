@@ -4,6 +4,7 @@ __pycache__/
 .DS_Store
 codex_sessions/
 .venv/
+.pycache/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

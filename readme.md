@@ -81,11 +81,13 @@
 ### 最推荐：直接执行安装脚本
 
 仓库已经自带安装脚本。大多数情况下，不需要自己手敲 `pip install`，直接执行安装脚本即可。
+默认所有依赖和安装结果都会被封装进项目根目录下的本地 `.venv/`，不会写进你的 base Python 环境。
 
 安装脚本会自动完成这些事：
 
-- 在项目根目录创建本地 `.venv/`
+- 在项目根目录创建隔离的本地 `.venv/`
 - 把当前项目安装到这个本地环境里
+- 如果发现旧的 `.venv` 仍然暴露 system site-packages，会自动重建为真正隔离的环境
 - 保留仓库 launcher，安装完成后可以直接启动工具
 
 macOS / Linux:
@@ -125,7 +127,7 @@ Windows：
 
 ```powershell
 .\codex-session-toolkit.cmd
-.\.venv\Scripts\codex-session-toolkit.exe
+.\.venv\Scripts\codex-session-toolkit.cmd
 ```
 
 查看当前版本：
@@ -154,6 +156,7 @@ Windows:
 如果当前目录是 git 工作树，并且 `src/codex_session_toolkit/` 存在，仓库 launcher 会优先进入源码模式，这样改完代码后重新启动就能立刻生效。
 
 如果当前目录不是 git 工作树，例如 release 解压目录，launcher 会优先使用本地 `.venv` 里的已安装版本。
+如果当前目录是 git 工作树，但已经存在本地 `.venv`，launcher 也会优先使用 `.venv` 里的 Python 解释器来跑源码模式，尽量避免碰 base 环境。
 
 如果你想手动覆盖这个选择逻辑，可以设置：
 
@@ -191,10 +194,17 @@ make release
 - macOS / Linux：`./install.sh`
 - Windows：`.\install.ps1` 或双击 `install.bat`
 
+安装脚本会在解压目录里创建本地 `.venv/`，把可运行入口封装进去。
+对方不需要手动执行 `pip install -e .`，安装完成后直接运行：
+
+- macOS / Linux：`./codex-session-toolkit`
+- Windows：`.\codex-session-toolkit.cmd`
+
 release 只会携带分发所需文件；CI、测试、兼容层、release 构建器本身和本地缓存都不会进入发布包。
 
 ### 直接安装到当前 Python 环境
 
+只有在你明确接受修改当前 Python 环境时，才建议使用这一节。默认更推荐上面的本地 `.venv` 安装方式。
 如果你就是想装进自己当前的 Python 环境，也仍然支持标准安装方式：
 
 macOS / Linux:
@@ -225,13 +235,23 @@ python3 -m codex_session_toolkit
 make help
 make bootstrap
 make bootstrap-editable
+make install-dev
 make release
 make run
 make install
+make test-quick
+make lint
 make test
 make smoke
+make ci
 make check
 ```
+
+其中：
+
+- `make install` 等价于 `make bootstrap-editable`，会把安装留在项目本地 `.venv`
+- `make install-dev` 会先准备本地 `.venv`，再把开发工具装进这个隔离环境；这一步通常需要联网拉取诸如 Ruff 这样的开发依赖
+- `make run/test/lint/ci` 会优先使用本地 `.venv` 里的解释器；如果你还没创建 `.venv`，再退回系统 Python
 
 ## TUI 使用方式
 

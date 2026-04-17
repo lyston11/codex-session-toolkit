@@ -20,14 +20,14 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install Package
-        run: python -m pip install -e .
+      - name: Install Package And Dev Checks
+        run: python -m pip install -e '.[dev]'
 
-      - name: Run Checks
-        run: make check
+      - name: Run CI Checks
+        run: make ci
 
       - name: Build Release Archive
-        run: sh ./release.sh --output-dir /tmp/codex-session-cloner-release
+        run: sh ./release.sh --output-dir /tmp/codex-session-toolkit-release
 
   installers:
     runs-on: ${{ matrix.os }}
@@ -37,11 +37,11 @@ jobs:
           - os: ubuntu-latest
             python-version: "3.11"
             install-command: sh ./install.sh --force
-            run-command: sh ./codex-session-cloner --version
+            run-command: sh ./codex-session-toolkit --version
           - os: windows-latest
             python-version: "3.11"
             install-command: powershell -ExecutionPolicy Bypass -File .\install.ps1 -Force
-            run-command: .\codex-session-cloner.cmd --version
+            run-command: .\codex-session-toolkit.cmd --version
 
     steps:
       - name: Checkout

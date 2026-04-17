@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import platform
 import sys
 from typing import Optional, Sequence
@@ -28,19 +27,17 @@ from .tui.terminal import (
 )
 
 # Configuration
-CODEX_ACTIVE_SESSIONS_DIR = os.path.expanduser("~/.codex/sessions")
-CODEX_CONFIG_PATH = os.path.expanduser("~/.codex/config.toml")
 DEFAULT_MODEL_PROVIDER = "cliproxyapi"
 
 
-def _detect_target_model_provider() -> str:
+def resolve_target_model_provider(paths: Optional[CodexPaths] = None) -> str:
+    paths = paths or CodexPaths()
     try:
-        return detect_provider(CodexPaths())
+        return detect_provider(paths)
     except ToolkitError:
         return DEFAULT_MODEL_PROVIDER
 
 
-TARGET_MODEL_PROVIDER = _detect_target_model_provider()
 CLI_SUBCOMMANDS = {
     "clone-provider",
     "clean-clones",
@@ -57,6 +54,15 @@ CLI_SUBCOMMANDS = {
     "import-desktop-all",
     "repair-desktop",
 }
+
+
+def build_app_context(paths: Optional[CodexPaths] = None) -> ToolkitAppContext:
+    paths = paths or CodexPaths()
+    return ToolkitAppContext(
+        target_provider=resolve_target_model_provider(paths),
+        active_sessions_dir=str(paths.sessions_dir),
+        config_path=str(paths.config_file),
+    )
 
 
 def create_arg_parser() -> argparse.ArgumentParser:
@@ -92,16 +98,16 @@ def create_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def print_header(dry_run: bool) -> None:
+def print_header(context: ToolkitAppContext, dry_run: bool) -> None:
     title = _style(f"{APP_DISPLAY_NAME} (Clone Mode)", Ansi.BOLD, Ansi.CYAN)
     print(_hr("="))
     print(title)
     print(_hr("="))
-    print(f"OS:            {platform.system()} ({os.name})")
+    print(f"OS:            {platform.system()} ({sys.platform})")
     print(f"Python:        {sys.version.split()[0]}")
-    print(f"TargetProvider:{TARGET_MODEL_PROVIDER}")
-    print(f"SessionsDir:   {CODEX_ACTIVE_SESSIONS_DIR}")
-    print(f"ConfigFile:    {CODEX_CONFIG_PATH}")
+    print(f"TargetProvider:{context.target_provider}")
+    print(f"SessionsDir:   {context.active_sessions_dir}")
+    print(f"ConfigFile:    {context.config_path}")
     if dry_run:
         print(_style("DRY-RUN MODE (no write / no delete)", Ansi.BOLD, Ansi.YELLOW))
     print(_hr())
@@ -112,9 +118,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
 
+    paths = CodexPaths()
+    context = build_app_context(paths)
+
     if argv and argv[0] in CLI_SUBCOMMANDS:
         try:
-            return run_toolkit_cli(argv)
+            return run_toolkit_cli(argv, paths=paths)
         except ToolkitError as exc:
             print(str(exc), file=sys.stderr)
             return 1
@@ -122,26 +131,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = create_arg_parser()
     if not argv and _is_interactive():
         try:
-            return run_tui(
-                ToolkitAppContext(
-                    target_provider=TARGET_MODEL_PROVIDER,
-                    active_sessions_dir=CODEX_ACTIVE_SESSIONS_DIR,
-                    config_path=CODEX_CONFIG_PATH,
-                )
-            )
+            return run_tui(context)
         except KeyboardInterrupt:
             return 130
 
     args = parser.parse_args(argv)
-    print_header(dry_run=bool(args.dry_run))
+    print_header(context, dry_run=bool(args.dry_run))
 
     if args.clean:
         return run_cleanup_mode(
-            target_provider=TARGET_MODEL_PROVIDER,
+            target_provider=context.target_provider,
             dry_run=bool(args.dry_run),
             delete_warning="WARNING: --clean will DELETE files.",
         )
-    return run_clone_mode(target_provider=TARGET_MODEL_PROVIDER, dry_run=bool(args.dry_run))
+    return run_clone_mode(target_provider=context.target_provider, dry_run=bool(args.dry_run))
 
 
 if __name__ == "__main__":

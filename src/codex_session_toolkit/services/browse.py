@@ -6,11 +6,11 @@ from typing import Optional
 
 from ..models import BundleSummary, SessionSummary, ValidationReport
 from ..paths import CodexPaths
-from ..stores.bundles import (
+from ..stores.bundle_scanner import (
     collect_known_bundle_summaries,
     iter_known_bundle_directories,
-    validate_bundle_directory,
 )
+from ..stores.bundle_validation import validate_bundle_directory
 from ..stores.session_files import collect_session_summaries
 
 

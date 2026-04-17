@@ -593,7 +593,7 @@ def app_logo_lines(max_width: Optional[int] = None) -> List[str]:
         left = left + [pad_right("", lw)] * (height - len(left))
         right = right + [pad_right("", rw)] * (height - len(right))
         spacer = " " * max(0, int(gap))
-        return [l + spacer + r for l, r in zip(left, right)]
+        return [left_line + spacer + right_line for left_line, right_line in zip(left, right)]
 
     def _ideal_part_gap(*, min_gap: int) -> int:
         return max(min_gap, min(18, max_width // 20))
