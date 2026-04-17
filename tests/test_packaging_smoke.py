@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -10,8 +11,9 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from codex_session_toolkit import APP_COMMAND, __version__  # noqa: E402
-from codex_session_toolkit.cli import create_arg_parser  # noqa: E402
+from codex_session_toolkit import APP_COMMAND, CodexPaths, ToolkitError, __version__, build_app_context, resolve_target_model_provider, run_cli  # noqa: E402
+from codex_session_toolkit import core as core_api  # noqa: E402
+from codex_session_toolkit.cli import DEFAULT_MODEL_PROVIDER, create_arg_parser  # noqa: E402
 from codex_session_toolkit.tui_app import ToolkitAppContext  # noqa: E402
 from codex_session_toolkit.tui.app import build_tui_menu_actions, build_tui_menu_sections  # noqa: E402
 from codex_session_toolkit.tui.terminal import LOGO_FONT_BANNER  # noqa: E402
@@ -25,6 +27,13 @@ def _module_env() -> dict:
 
 
 class PackagingSmokeTests(unittest.TestCase):
+    def test_package_root_exposes_stable_runtime_api(self) -> None:
+        self.assertIs(CodexPaths, core_api.CodexPaths)
+        self.assertIs(ToolkitError, core_api.ToolkitError)
+        self.assertTrue(callable(build_app_context))
+        self.assertTrue(callable(resolve_target_model_provider))
+        self.assertTrue(callable(run_cli))
+
     def test_cli_parser_uses_packaged_command_name(self) -> None:
         parser = create_arg_parser()
         self.assertEqual(parser.prog, APP_COMMAND)
@@ -76,6 +85,35 @@ class PackagingSmokeTests(unittest.TestCase):
     def test_logo_font_covers_toolkit_wordmark(self) -> None:
         missing = {ch for ch in "CODEX SESSION TOOLKIT" if ch != " " and ch not in LOGO_FONT_BANNER}
         self.assertEqual(missing, set())
+
+    def test_build_app_context_reads_provider_at_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            code_dir = home / ".codex"
+            code_dir.mkdir(parents=True, exist_ok=True)
+            (code_dir / "config.toml").write_text('model_provider = "runtime-provider"\n', encoding="utf-8")
+
+            context = build_app_context(CodexPaths(home=home))
+
+        self.assertEqual(context.target_provider, "runtime-provider")
+        self.assertEqual(context.active_sessions_dir, str(home / ".codex" / "sessions"))
+        self.assertEqual(context.config_path, str(home / ".codex" / "config.toml"))
+
+    def test_build_app_context_falls_back_when_config_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context = build_app_context(CodexPaths(home=Path(tmpdir)))
+
+        self.assertEqual(context.target_provider, DEFAULT_MODEL_PROVIDER)
+
+    def test_core_exports_smaller_stable_api(self) -> None:
+        self.assertIn("clone_to_provider", core_api.__all__)
+        self.assertIn("repair_desktop", core_api.__all__)
+        self.assertNotIn("parse_jsonl_records", core_api.__all__)
+        self.assertNotIn("validate_jsonl_file", core_api.__all__)
+
+    def test_core_keeps_lazy_legacy_compatibility(self) -> None:
+        self.assertTrue(callable(core_api.parse_jsonl_records))
+        self.assertTrue(callable(core_api.validate_jsonl_file))
 
     def test_module_help_mentions_packaged_command(self) -> None:
         result = subprocess.run(
@@ -139,6 +177,24 @@ class PackagingSmokeTests(unittest.TestCase):
         )
         self.assertIn("Usage: ./install.sh", result.stdout)
         self.assertIn("--editable", result.stdout)
+        self.assertIn("isolated local virtual environment", result.stdout)
+
+    def test_installers_are_configured_for_isolated_local_venv(self) -> None:
+        unix_installer = (ROOT_DIR / "scripts" / "install" / "install.unix.sh").read_text(encoding="utf-8")
+        windows_installer = (ROOT_DIR / "scripts" / "install" / "install.windows.ps1").read_text(encoding="utf-8")
+        unix_launcher = (ROOT_DIR / "codex-session-toolkit").read_text(encoding="utf-8")
+        windows_launcher = (ROOT_DIR / "codex-session-toolkit.ps1").read_text(encoding="utf-8")
+        makefile = (ROOT_DIR / "Makefile").read_text(encoding="utf-8")
+
+        self.assertNotIn("--system-site-packages", unix_installer)
+        self.assertNotIn("--system-site-packages", windows_installer)
+        self.assertIn("isolated", unix_installer.lower())
+        self.assertIn("isolated", windows_installer.lower())
+        self.assertIn('VENV_PYTHON="$VENV_DIR/bin/python"', unix_launcher)
+        self.assertIn('Join-Path $venvScriptsDir "python.exe"', windows_launcher)
+        self.assertIn("install: bootstrap-editable", makefile)
+        self.assertIn("DEV_PIP_PACKAGES := 'ruff>=0.6,<1.0'", makefile)
+        self.assertIn("$(VENV_PYTHON) -m pip install $(DEV_PIP_PACKAGES)", makefile)
 
     def test_release_script_help_runs(self) -> None:
         result = subprocess.run(
@@ -152,6 +208,44 @@ class PackagingSmokeTests(unittest.TestCase):
         )
         self.assertIn("Usage: ./release.sh", result.stdout)
         self.assertIn("--output-dir", result.stdout)
+
+    def test_release_folder_install_and_launcher_work_offline_for_end_users(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "releases"
+            subprocess.run(
+                ["sh", "./release.sh", "--output-dir", str(output_dir)],
+                cwd=ROOT_DIR,
+                env=_module_env(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=True,
+            )
+            release_dir = output_dir / f"{APP_COMMAND}-{__version__}"
+            self.assertTrue((release_dir / "install.sh").exists())
+            self.assertTrue((release_dir / "codex-session-toolkit").exists())
+
+            install_result = subprocess.run(
+                ["sh", "./install.sh", "--force"],
+                cwd=release_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=True,
+            )
+            self.assertIn("Isolation: enabled", install_result.stdout)
+            self.assertIn("Install complete.", install_result.stdout)
+
+            version_result = subprocess.run(
+                ["sh", "./codex-session-toolkit", "--version"],
+                cwd=release_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=True,
+            )
+            self.assertIn("Launcher (Local Venv)", version_result.stdout)
+            self.assertIn(f"{APP_COMMAND} {__version__}", version_result.stdout)
 
 
 if __name__ == "__main__":

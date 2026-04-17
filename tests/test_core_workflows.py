@@ -23,7 +23,7 @@ from codex_session_toolkit.services.repair import repair_desktop  # noqa: E402
 from codex_session_toolkit.support import default_local_project_target, machine_label_to_key  # noqa: E402
 from codex_session_toolkit.stores.bundles import collect_known_bundle_summaries, latest_distinct_bundle_summaries  # noqa: E402
 from codex_session_toolkit.stores.session_files import iter_session_files, read_session_payload  # noqa: E402
-from codex_session_toolkit.validation import load_manifest, validate_relative_path  # noqa: E402
+from codex_session_toolkit.validation import load_manifest  # noqa: E402
 
 
 @contextmanager

@@ -10,6 +10,9 @@ requires-python = ">=3.8"
 dependencies = []
 dynamic = ["version"]
 
+[project.optional-dependencies]
+dev = ["ruff>=0.6,<1.0"]
+
 [project.scripts]
 codex-session-toolkit = "codex_session_toolkit.cli:main"
 
@@ -21,3 +24,7 @@ where = ["src"]
 
 [tool.setuptools.dynamic]
 version = {attr = "codex_session_toolkit.__version__"}
+
+[tool.ruff]
+target-version = "py38"
+src = ["src", "tests"]

@@ -6,10 +6,18 @@ import json
 import re
 import sys
 from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Iterable, Optional
 
 from ..support import normalize_iso
+
+
+@dataclass(frozen=True)
+class SessionIndexEntry:
+    session_id: str
+    thread_name: str
+    updated_at: str
 
 
 def salvage_index_line(raw: str) -> Optional[dict]:
@@ -101,10 +109,41 @@ def upsert_session_index(index_file: Path, session_id: str, thread_name: str, up
         "updated_at": updated_at,
     }
 
+    write_session_index_entries(
+        index_file,
+        [
+            SessionIndexEntry(
+                session_id=str(obj["id"]),
+                thread_name=str(obj["thread_name"]),
+                updated_at=str(obj["updated_at"]),
+            )
+            for obj in entries.values()
+        ],
+        discarded_invalid_lines=discarded_invalid_lines,
+    )
+
+
+def write_session_index_entries(
+    index_file: Path,
+    entries: Iterable[SessionIndexEntry],
+    *,
+    discarded_invalid_lines: int = 0,
+) -> None:
     index_file.parent.mkdir(parents=True, exist_ok=True)
     with index_file.open("w", encoding="utf-8") as fh:
-        for obj in entries.values():
-            fh.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
+        for entry in entries:
+            fh.write(
+                json.dumps(
+                    {
+                        "id": entry.session_id,
+                        "thread_name": entry.thread_name or entry.session_id,
+                        "updated_at": normalize_iso(entry.updated_at),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
 
     if discarded_invalid_lines:
         print(

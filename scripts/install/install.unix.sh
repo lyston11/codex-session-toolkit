@@ -4,6 +4,7 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 APP_NAME="codex-session-toolkit"
+PACKAGE_NAME="codex_session_toolkit"
 VENV_DIR="${VENV_DIR:-$PROJECT_ROOT/.venv}"
 EDITABLE=0
 FORCE=0
@@ -12,6 +13,10 @@ PYTHON_BIN="${PYTHON_BIN:-}"
 usage() {
   cat <<'EOF'
 Usage: ./install.sh [--editable] [--force] [--python <python-bin>]
+
+Create or refresh an isolated local virtual environment under ./.venv.
+The installer keeps package changes inside the project and does not modify
+your base Python environment.
 
 Options:
   --editable         Install in editable mode for local development
@@ -65,17 +70,50 @@ resolve_python() {
   fi
 }
 
-install_package() {
+venv_uses_system_site_packages() {
+  cfg_file="$VENV_DIR/pyvenv.cfg"
+  [ -f "$cfg_file" ] || return 1
+  grep -Eiq '^[[:space:]]*include-system-site-packages[[:space:]]*=[[:space:]]*true[[:space:]]*$' "$cfg_file"
+}
+
+site_packages_dir() {
+  "$VENV_PYTHON" -c 'import sysconfig; print(sysconfig.get_path("purelib"))'
+}
+
+install_local_package() {
+  SITE_PACKAGES="$(site_packages_dir)"
+  PTH_FILE="$SITE_PACKAGES/${PACKAGE_NAME}-local.pth"
+  INSTALLED_PACKAGE_DIR="$SITE_PACKAGES/$PACKAGE_NAME"
+
+  mkdir -p "$SITE_PACKAGES"
+  rm -f "$PTH_FILE"
+  rm -rf "$INSTALLED_PACKAGE_DIR"
+
   if [ "$EDITABLE" -eq 1 ]; then
-    "$VENV_PYTHON" -m pip install --no-deps --no-build-isolation -e "$PROJECT_ROOT"
+    printf '%s\n' "$PROJECT_ROOT/src" > "$PTH_FILE"
   else
-    "$VENV_PYTHON" -m pip install --no-deps --no-build-isolation "$PROJECT_ROOT"
+    cp -R "$PROJECT_ROOT/src/$PACKAGE_NAME" "$INSTALLED_PACKAGE_DIR"
   fi
+}
+
+install_console_wrapper() {
+  WRAPPER="$VENV_DIR/bin/$APP_NAME"
+  cat > "$WRAPPER" <<EOF
+#!/usr/bin/env sh
+exec "$VENV_PYTHON" -m $PACKAGE_NAME "\$@"
+EOF
+  chmod +x "$WRAPPER"
 }
 
 resolve_python
 
 if [ "$FORCE" -eq 1 ] && [ -d "$VENV_DIR" ]; then
+  rm -rf "$VENV_DIR"
+fi
+
+if [ -d "$VENV_DIR" ] && venv_uses_system_site_packages; then
+  echo "Existing venv is not isolated (system site packages are enabled)." >&2
+  echo "Recreating $VENV_DIR as an isolated local environment..." >&2
   rm -rf "$VENV_DIR"
 fi
 
@@ -85,36 +123,30 @@ echo "============================================="
 echo "Project:   $PROJECT_ROOT"
 echo "Python:    $PYTHON_BIN"
 echo "Venv:      $VENV_DIR"
+echo "Isolation: enabled"
 if [ "$EDITABLE" -eq 1 ]; then
   echo "Mode:      editable"
 else
   echo "Mode:      standard"
 fi
 
-"$PYTHON_BIN" -m venv "$VENV_DIR" --system-site-packages
+"$PYTHON_BIN" -m venv "$VENV_DIR"
 VENV_PYTHON="$VENV_DIR/bin/python"
 
-if ! "$VENV_PYTHON" -c "import setuptools" >/dev/null 2>&1; then
-  echo "Error: setuptools is not available for the local installer environment." >&2
-  echo "Tip: install setuptools for your base Python, then rerun ./install.sh ." >&2
-  exit 1
-fi
+install_local_package
+install_console_wrapper
 
-if ! install_package; then
-  echo "Local no-build-isolation install failed; retrying with build isolation..." >&2
-  if [ "$EDITABLE" -eq 1 ]; then
-    "$VENV_PYTHON" -m pip install --no-deps -e "$PROJECT_ROOT"
-  else
-    "$VENV_PYTHON" -m pip install --no-deps "$PROJECT_ROOT"
-  fi
-fi
-
-chmod +x \
+for chmod_target in \
   "$PROJECT_ROOT/codex-session-toolkit" \
   "$PROJECT_ROOT/codex-session-toolkit.command" \
   "$PROJECT_ROOT/install.sh" \
   "$PROJECT_ROOT/install.command" \
   "$PROJECT_ROOT/release.sh"
+do
+  if [ -e "$chmod_target" ]; then
+    chmod +x "$chmod_target"
+  fi
+done
 
 echo ""
 echo "Install complete."

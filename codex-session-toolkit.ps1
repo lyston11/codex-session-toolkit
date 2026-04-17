@@ -10,6 +10,7 @@ $packageName = "codex_session_toolkit"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $venvDir = if ($env:VENV_DIR) { $env:VENV_DIR } else { Join-Path $scriptDir ".venv" }
 $venvScriptsDir = Join-Path $venvDir "Scripts"
+$venvPython = Join-Path $venvScriptsDir "python.exe"
 $installedExe = Join-Path $venvScriptsDir "codex-session-toolkit.exe"
 $installedCmd = Join-Path $venvScriptsDir "codex-session-toolkit.cmd"
 $srcDir = Join-Path $scriptDir "src"
@@ -18,6 +19,8 @@ $launchMode = if ($env:CST_LAUNCH_MODE) { $env:CST_LAUNCH_MODE } elseif ($env:CS
 $isGitWorktree = (Test-Path (Join-Path $scriptDir ".git")) -and (Test-Path $packageDir)
 
 function Resolve-PythonCommand {
+    if ($env:PYTHON_BIN) { return ,@($env:PYTHON_BIN) }
+    if (Test-Path $venvPython) { return ,@($venvPython) }
     if (Get-Command "python" -ErrorAction SilentlyContinue) { return ,@("python") }
     if (Get-Command "py" -ErrorAction SilentlyContinue) { return ,@("py", "-3") }
     if (Get-Command "python3" -ErrorAction SilentlyContinue) { return ,@("python3") }
@@ -77,6 +80,12 @@ if ($pyCmd.Length -gt 1) {
 Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host " Codex Session Toolkit - Launcher (Source Mode)" -ForegroundColor Cyan
 Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host "Python:    $pythonExe $($pythonPreArgs -join ' ')" -ForegroundColor DarkGray
+if ($pythonExe -eq $venvPython) {
+    Write-Host "Env:       local isolated .venv" -ForegroundColor DarkGray
+} else {
+    Write-Host "Env:       system interpreter (tip: run .\install.ps1 to isolate dependencies)" -ForegroundColor DarkGray
+}
 Write-Host ">> $pythonExe $($pythonPreArgs -join ' ') -m $packageName $($PassthroughArgs -join ' ')" -ForegroundColor DarkGray
 
 if ($env:PYTHONPATH) {

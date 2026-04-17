@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import shlex
 import shutil
-import sys
 import tempfile
 from collections import OrderedDict
 from datetime import datetime, timezone
