@@ -119,6 +119,11 @@ def print_export_result(result: ExportResult) -> int:
     print(f"Session file: {result.relative_path}")
     print(f"Session kind: {result.session_kind or 'unknown'}")
     print(f"Session cwd: {result.session_cwd or 'unknown'}")
+    if result.skills_available_count > 0:
+        print(f"Skills available: {result.skills_available_count}")
+        print(f"Skills bundled:   {result.skills_bundled_count}")
+    if result.skills_manifest_path:
+        print(f"Skills manifest:  {result.skills_manifest_path}")
     return 0
 
 
@@ -179,6 +184,11 @@ def print_import_result(result: ImportResult) -> int:
     print(f"Threads table upserted: {'yes' if result.thread_row_upserted else 'no'}")
     if result.target_desktop_model_provider:
         print(f"Desktop model provider: {result.target_desktop_model_provider}")
+    if result.skills_restored_count or result.skills_already_present_count or result.skills_conflict_skipped_count or result.skills_missing_count:
+        print(f"Skills restored:          {result.skills_restored_count}")
+        print(f"Skills already present:   {result.skills_already_present_count}")
+        print(f"Skills conflict skipped:  {result.skills_conflict_skipped_count}")
+        print(f"Skills missing:           {result.skills_missing_count}")
     return 0
 
 
@@ -204,6 +214,11 @@ def print_batch_import_result(result: BatchImportResult) -> int:
             print(str(failed_dir), file=sys.stderr)
             print(f"  reason: {reason}", file=sys.stderr)
         return 1
+    if result.total_skills_restored or result.total_skills_conflict_skipped:
+        print(f"Total skills restored:          {result.total_skills_restored}")
+        print(f"Total skills conflict skipped:  {result.total_skills_conflict_skipped}")
+    if result.skills_restore_report_path:
+        print(f"Skills restore report: {result.skills_restore_report_path}")
     return 0
 
 

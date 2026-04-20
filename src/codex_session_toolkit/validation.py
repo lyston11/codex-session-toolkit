@@ -32,6 +32,7 @@ def load_manifest(manifest_file: Path) -> Dict[str, str]:
         "SESSION_KIND",
         "EXPORT_MACHINE",
         "EXPORT_MACHINE_KEY",
+        "HAS_SKILLS",
     }
     values: Dict[str, str] = {}
 

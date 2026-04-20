@@ -81,24 +81,29 @@ def create_parser() -> argparse.ArgumentParser:
 
     export_parser = subparsers.add_parser("export", help="Export one session bundle")
     export_parser.add_argument("session_id")
+    export_parser.add_argument("--skills-mode", choices=["best-effort", "strict", "skip", "overwrite"], default="best-effort", help="How to handle skill export (default: best-effort)")
 
     export_project_parser = subparsers.add_parser("export-project", help="Export all sessions under one project path")
     export_project_parser.add_argument("project_path", help="Project root path used to match session cwd")
     export_project_parser.add_argument("--dry-run", action="store_true")
     export_project_parser.add_argument("--active-only", action="store_true", help="Only export active sessions")
+    export_project_parser.add_argument("--skills-mode", choices=["best-effort", "strict", "skip", "overwrite"], default="best-effort", help="How to handle skill export (default: best-effort)")
 
     export_all_parser = subparsers.add_parser("export-desktop-all", help="Export all Desktop sessions in bulk")
     export_all_parser.add_argument("--dry-run", action="store_true")
     export_all_parser.add_argument("--active-only", action="store_true", help="Legacy compatibility flag")
+    export_all_parser.add_argument("--skills-mode", choices=["best-effort", "strict", "skip", "overwrite"], default="best-effort", help="How to handle skill export (default: best-effort)")
 
     export_active_desktop_parser = subparsers.add_parser(
         "export-active-desktop-all",
         help="Export all active Desktop sessions in bulk",
     )
     export_active_desktop_parser.add_argument("--dry-run", action="store_true")
+    export_active_desktop_parser.add_argument("--skills-mode", choices=["best-effort", "strict", "skip", "overwrite"], default="best-effort", help="How to handle skill export (default: best-effort)")
 
     export_cli_parser = subparsers.add_parser("export-cli-all", help="Export all CLI sessions in bulk")
     export_cli_parser.add_argument("--dry-run", action="store_true")
+    export_cli_parser.add_argument("--skills-mode", choices=["best-effort", "strict", "skip", "overwrite"], default="best-effort", help="How to handle skill export (default: best-effort)")
 
     import_parser = subparsers.add_parser("import", help="Import one session bundle")
     import_parser.add_argument("input_value", help="Session id or bundle directory")
@@ -111,6 +116,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     import_parser.add_argument("--machine", default="", help="Only search bundles from this machine key")
     import_parser.add_argument("--export-group", default="", help="Only search bundles from this export folder (desktop/active/cli/project/single)")
+    import_parser.add_argument("--skills-mode", choices=["best-effort", "strict", "skip", "overwrite"], default="best-effort", help="How to handle skill import (default: best-effort)")
 
     import_all_parser = subparsers.add_parser("import-desktop-all", help="Import one machine/category/project bundle folder in bulk")
     import_all_parser.add_argument("--desktop-visible", action="store_true")
@@ -119,6 +125,7 @@ def create_parser() -> argparse.ArgumentParser:
     import_all_parser.add_argument("--project", default="", help="Only import one project folder under project exports")
     import_all_parser.add_argument("--target-project-path", default="", help="Remap imported project cwd values to this local project path")
     import_all_parser.add_argument("--latest-only", action="store_true", help="Only import the latest bundle per machine and session id")
+    import_all_parser.add_argument("--skills-mode", choices=["best-effort", "strict", "skip", "overwrite"], default="best-effort", help="How to handle skill import (default: best-effort)")
 
     repair_parser = subparsers.add_parser("repair-desktop", help="Repair Desktop sidebar visibility")
     repair_parser.add_argument("target_provider", nargs="?", default="", help="Optional provider override")
@@ -173,6 +180,7 @@ def run_cli(argv: Sequence[str], *, paths: Optional[CodexPaths] = None) -> int:
                 paths,
                 args.session_id,
                 bundle_root=build_single_export_root(paths.default_bundle_root),
+                skills_mode=args.skills_mode,
             )
         )
     if args.command == "export-project":
@@ -182,14 +190,15 @@ def run_cli(argv: Sequence[str], *, paths: Optional[CodexPaths] = None) -> int:
                 args.project_path,
                 dry_run=args.dry_run,
                 active_only=args.active_only,
+                skills_mode=args.skills_mode,
             )
         )
     if args.command == "export-desktop-all":
-        return print_batch_export_result(export_desktop_all(paths, dry_run=args.dry_run, active_only=args.active_only))
+        return print_batch_export_result(export_desktop_all(paths, dry_run=args.dry_run, active_only=args.active_only, skills_mode=args.skills_mode))
     if args.command == "export-active-desktop-all":
-        return print_batch_export_result(export_active_desktop_all(paths, dry_run=args.dry_run))
+        return print_batch_export_result(export_active_desktop_all(paths, dry_run=args.dry_run, skills_mode=args.skills_mode))
     if args.command == "export-cli-all":
-        return print_batch_export_result(export_cli_all(paths, dry_run=args.dry_run))
+        return print_batch_export_result(export_cli_all(paths, dry_run=args.dry_run, skills_mode=args.skills_mode))
     if args.command == "import":
         return print_import_result(
             import_session(
@@ -199,6 +208,7 @@ def run_cli(argv: Sequence[str], *, paths: Optional[CodexPaths] = None) -> int:
                 machine_filter=args.machine,
                 export_group_filter=args.export_group,
                 desktop_visible=args.desktop_visible,
+                skills_mode=args.skills_mode,
             )
         )
     if args.command == "import-desktop-all":
@@ -211,6 +221,7 @@ def run_cli(argv: Sequence[str], *, paths: Optional[CodexPaths] = None) -> int:
                 target_project_path=args.target_project_path,
                 latest_only=args.latest_only,
                 desktop_visible=args.desktop_visible,
+                skills_mode=args.skills_mode,
             )
         )
     if args.command == "repair-desktop":

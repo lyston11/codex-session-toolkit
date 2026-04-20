@@ -45,6 +45,11 @@ from ..validation import (
     validate_relative_path,
     validate_session_id,
 )
+from ..stores.skills import (
+    read_skills_manifest,
+    restore_skills,
+    write_batch_skills_restore_report,
+)
 
 
 def import_session(
@@ -57,6 +62,7 @@ def import_session(
     export_group_filter: str = "",
     desktop_visible: bool = False,
     session_cwd_override: str = "",
+    skills_mode: str = "best-effort",
 ) -> ImportResult:
     input_path = Path(input_value).expanduser()
     resolved_from_session_id = False
@@ -236,6 +242,34 @@ def import_session(
             )
         )
 
+        skills_restored_count = 0
+        skills_already_present_count = 0
+        skills_conflict_skipped_count = 0
+        skills_missing_count = 0
+
+        if skills_mode != "skip":
+            try:
+                skills_manifest = read_skills_manifest(bundle_dir)
+                if skills_manifest is not None and skills_manifest.skills:
+                    restore_results = restore_skills(
+                        skills_manifest, bundle_dir, paths.home,
+                        skills_mode=skills_mode,
+                    )
+                    for rr in restore_results:
+                        if rr.status == "restored":
+                            skills_restored_count += 1
+                        elif rr.status == "already_present":
+                            skills_already_present_count += 1
+                        elif rr.status == "conflict_skipped":
+                            skills_conflict_skipped_count += 1
+                        elif rr.status == "missing":
+                            skills_missing_count += 1
+                            warnings.append(f"Missing skill: {rr.name} ({rr.source_root}/{rr.relative_dir})")
+            except ToolkitError:
+                raise
+            except Exception:
+                pass
+
         return ImportResult(
             session_id=session_id,
             bundle_dir=bundle_dir,
@@ -252,6 +286,10 @@ def import_session(
             created_workspace_dir=created_workspace_dir,
             backup_path=backup_path,
             warnings=warnings,
+            skills_restored_count=skills_restored_count,
+            skills_already_present_count=skills_already_present_count,
+            skills_conflict_skipped_count=skills_conflict_skipped_count,
+            skills_missing_count=skills_missing_count,
         )
     finally:
         Path(prepared_path).unlink(missing_ok=True)
@@ -267,6 +305,7 @@ def import_desktop_all(
     target_project_path: str = "",
     latest_only: bool = False,
     desktop_visible: bool = False,
+    skills_mode: str = "best-effort",
 ) -> BatchImportResult:
     bundle_root = normalize_bundle_root(paths, bundle_root, paths.default_desktop_bundle_root)
     if not bundle_root.is_dir():
@@ -300,6 +339,9 @@ def import_desktop_all(
     bundle_dirs = [summary.bundle_dir for summary in bundle_summaries]
     success_dirs: list[Path] = []
     failed_imports: list[tuple[Path, str]] = []
+    total_skills_restored = 0
+    total_skills_conflict_skipped = 0
+    skills_restore_report_path = None
     for summary in bundle_summaries:
         try:
             session_cwd_override = ""
@@ -309,14 +351,17 @@ def import_desktop_all(
                     summary.project_path,
                     normalized_target_project_path,
                 )
-            import_session(
+            result = import_session(
                 paths,
                 str(summary.bundle_dir),
                 bundle_root=bundle_root,
                 desktop_visible=desktop_visible,
                 session_cwd_override=session_cwd_override,
+                skills_mode=skills_mode,
             )
             success_dirs.append(summary.bundle_dir)
+            total_skills_restored += result.skills_restored_count + result.skills_already_present_count
+            total_skills_conflict_skipped += result.skills_conflict_skipped_count
         except Exception as exc:
             failed_imports.append((summary.bundle_dir, str(exc)))
 
@@ -358,4 +403,7 @@ def import_desktop_all(
         project_label=project_label,
         project_source_path=project_source_path,
         target_project_path=normalized_target_project_path,
+        total_skills_restored=total_skills_restored,
+        total_skills_conflict_skipped=total_skills_conflict_skipped,
+        skills_restore_report_path=skills_restore_report_path,
     )
