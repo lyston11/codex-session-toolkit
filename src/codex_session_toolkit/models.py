@@ -36,6 +36,9 @@ class BundleSummary:
     project_key: str = ""
     project_label: str = ""
     project_path: str = ""
+    has_skills_manifest: bool = False
+    bundled_skill_count: int = 0
+    used_skill_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -96,6 +99,9 @@ class ExportResult:
     session_cwd: str
     source_machine: str = ""
     source_machine_key: str = ""
+    skills_bundled_count: int = 0
+    skills_available_count: int = 0
+    skills_manifest_path: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -116,6 +122,7 @@ class BatchExportResult:
     selection_label: str = ""
     selection_path: str = ""
     export_group: str = ""
+    total_skills_bundled: int = 0
 
 
 @dataclass(frozen=True)
@@ -135,6 +142,10 @@ class ImportResult:
     created_workspace_dir: bool = False
     backup_path: Optional[Path] = None
     warnings: List[str] = field(default_factory=list)
+    skills_restored_count: int = 0
+    skills_already_present_count: int = 0
+    skills_conflict_skipped_count: int = 0
+    skills_missing_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -153,6 +164,9 @@ class BatchImportResult:
     project_label: str = ""
     project_source_path: str = ""
     target_project_path: str = ""
+    total_skills_restored: int = 0
+    total_skills_conflict_skipped: int = 0
+    skills_restore_report_path: Optional[Path] = None
 
 
 @dataclass(frozen=True)

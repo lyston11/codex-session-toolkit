@@ -17,6 +17,7 @@
 
 ## 最近增强
 
+- **Skill 随会话搬运**：导出时自动识别会话中使用的自定义 Skill 并打包到 Bundle；导入时自动恢复到目标机器，冲突跳过，缺失汇总报告
 - `Session / Browse` 新增按项目路径查看与导出：粘贴项目路径后，可只浏览该项目下的会话，并批量导出到 `./codex_sessions/<machine>/project/<project>/<timestamp>/`
 - `Bundle / Transfer` 新增按项目文件夹导入：在 `project` 分类下继续选择具体项目文件夹，并把会话 `cwd` 映射到当前机器的目标项目路径
 - 项目导入会显示本机匹配状态：优先复用原路径，其次尝试同名项目目录；若目标路径不存在，可直接选择是否创建后再导入
@@ -33,15 +34,17 @@
 
 ### Bundle / Transfer
 
-- 浏览 Bundle 仓库
+- 浏览 Bundle 仓库（显示 Skill 打包状态）
 - 校验 Bundle 健康度
 - 批量导出全部 Desktop 会话为 Bundle
 - 批量导出全部 Active Desktop 会话为 Bundle
 - 批量导出全部 CLI 会话为 Bundle
+- 导出时自动识别会话中的可用 Skill，打包自定义 Skill 文件和元数据
 - 导入单个 Bundle 为会话
 - 先选设备文件夹、再选分类文件夹，批量导入整类 Bundle
 - `project` 分类支持继续选择项目文件夹，显示本机同名/同路径项目状态，并映射到本机项目路径后批量导入
 - 导入时保留本地更新更晚的 rollout，只补齐缺失 history，避免覆盖更新过的会话
+- 导入时自动恢复打包的 Skill，冲突默认跳过，缺失汇总报告
 
 ## 最常见的工作流
 
@@ -384,6 +387,7 @@ codex-session-toolkit validate-bundles --source desktop --verbose
 
 ```bash
 codex-session-toolkit export <session_id>
+codex-session-toolkit export <session_id> --skills-mode skip
 ```
 
 按项目路径批量导出会话：
@@ -503,6 +507,31 @@ Bundle 内默认包含：
 - `codex/<relative rollout path>.jsonl`
 - `history.jsonl`
 - `manifest.env`
+- `skills_manifest.json`（可选，记录会话中使用的 Skill 信息）
+- `skills/`（可选，包含打包的自定义 Skill 文件）
+
+### Skill 搬运
+
+导出时工具会自动扫描会话中的 `<skills_instructions>` 块，识别该会话使用了哪些 Skill：
+
+- **自定义 Skill**（`~/.agents/skills/` 和 `~/.codex/skills/` 下非 `.system`、非 `codex-primary-runtime` 的目录）会被完整打包到 `skills/` 目录
+- **系统 Skill**（`.system/`）和 **运行时 Skill**（`codex-primary-runtime/`）只记录元数据，不打包文件
+
+导入时自动恢复：
+
+- 本机已存在且内容一致 → `already_present`，直接复用
+- 本机不存在 → `restored`，从 Bundle 复制
+- 本机已存在但内容不同 → 默认跳过（`conflict_skipped`），不覆盖
+- Bundle 中未打包 → `missing`，记录到缺失报告
+
+`--skills-mode` 参数控制导入行为：
+
+| 模式 | 行为 |
+|---|---|
+| `best-effort`（默认） | 自动恢复，冲突跳过，缺失不阻塞 |
+| `strict` | 缺失或冲突时中止导入 |
+| `skip` | 完全不处理 Skill |
+| `overwrite` | 允许覆盖本机已有 Skill |
 
 ## 安全性说明
 

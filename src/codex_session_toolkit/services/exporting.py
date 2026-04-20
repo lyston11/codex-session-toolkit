@@ -35,6 +35,11 @@ from ..support import (
     project_label_to_key,
 )
 from ..validation import normalize_relative_path, validate_jsonl_file, validate_session_id
+from ..stores.skills import (
+    bundle_skills,
+    parse_skills_from_session,
+    write_skills_manifest,
+)
 
 
 def export_session(
@@ -42,6 +47,7 @@ def export_session(
     session_id: str,
     *,
     bundle_root: Optional[Path] = None,
+    skills_mode: str = "best-effort",
 ) -> ExportResult:
     session_id = validate_session_id(session_id)
     machine_key = detect_machine_key()
@@ -91,6 +97,22 @@ def export_session(
         session_kind = classify_session_kind(session_source, session_originator)
         last_updated = extract_last_timestamp(session_file) or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+        skills_bundled_count = 0
+        skills_available_count = 0
+        skills_manifest_path = None
+
+        if skills_mode != "skip":
+            try:
+                raw_manifest = parse_skills_from_session(session_file)
+                skills_available_count = raw_manifest.available_skill_count
+                if raw_manifest.skills:
+                    bundled_manifest = bundle_skills(raw_manifest, stage_bundle_dir)
+                    skills_bundled_count = bundled_manifest.bundled_skill_count
+                    if skills_bundled_count > 0 or skills_available_count > 0:
+                        skills_manifest_path = write_skills_manifest(bundled_manifest, stage_bundle_dir)
+            except Exception:
+                pass
+
         manifest_data = OrderedDict(
             SESSION_ID=session_id,
             RELATIVE_PATH=normalize_relative_path(str(relative_path)),
@@ -126,6 +148,9 @@ def export_session(
             session_cwd=session_cwd,
             source_machine=machine_label,
             source_machine_key=machine_key,
+            skills_bundled_count=skills_bundled_count,
+            skills_available_count=skills_available_count,
+            skills_manifest_path=skills_manifest_path,
         )
     except Exception:
         if old_bundle_backup and old_bundle_backup.exists() and not final_bundle_dir.exists():
@@ -145,6 +170,7 @@ def export_sessions_for_kind(
     manifest_stem: str,
     summary_label: str,
     archive_group: str,
+    skills_mode: str = "best-effort",
 ) -> BatchExportResult:
     session_ids = collect_session_ids_for_kind(paths, session_kind=session_kind, active_only=active_only)
     machine_key = detect_machine_key()
@@ -191,11 +217,13 @@ def export_sessions_for_kind(
     export_root.mkdir(parents=True, exist_ok=True)
     success_ids: list[str] = []
     failed_exports: list[tuple[str, str]] = []
+    total_skills_bundled = 0
 
     for session_id in session_ids:
         try:
-            export_session(paths, session_id, bundle_root=export_root)
+            result = export_session(paths, session_id, bundle_root=export_root, skills_mode=skills_mode)
             success_ids.append(session_id)
+            total_skills_bundled += result.skills_bundled_count
         except Exception as exc:
             failed_exports.append((session_id, str(exc)))
 
@@ -223,6 +251,7 @@ def export_sessions_for_kind(
         failed_exports=failed_exports,
         manifest_file=manifest_file,
         export_group=archive_group,
+        total_skills_bundled=total_skills_bundled,
     )
 
 
@@ -232,6 +261,7 @@ def export_desktop_all(
     bundle_root: Optional[Path] = None,
     dry_run: bool = False,
     active_only: bool = False,
+    skills_mode: str = "best-effort",
 ) -> BatchExportResult:
     return export_sessions_for_kind(
         paths,
@@ -242,6 +272,7 @@ def export_desktop_all(
         manifest_stem=("active_desktop" if active_only else "desktop"),
         summary_label=("Active Desktop" if active_only else "Desktop"),
         archive_group=("active" if active_only else "desktop"),
+        skills_mode=skills_mode,
     )
 
 
@@ -250,8 +281,9 @@ def export_active_desktop_all(
     *,
     bundle_root: Optional[Path] = None,
     dry_run: bool = False,
+    skills_mode: str = "best-effort",
 ) -> BatchExportResult:
-    return export_desktop_all(paths, bundle_root=bundle_root, dry_run=dry_run, active_only=True)
+    return export_desktop_all(paths, bundle_root=bundle_root, dry_run=dry_run, active_only=True, skills_mode=skills_mode)
 
 
 def export_cli_all(
@@ -259,6 +291,7 @@ def export_cli_all(
     *,
     bundle_root: Optional[Path] = None,
     dry_run: bool = False,
+    skills_mode: str = "best-effort",
 ) -> BatchExportResult:
     return export_sessions_for_kind(
         paths,
@@ -269,6 +302,7 @@ def export_cli_all(
         manifest_stem="cli",
         summary_label="CLI",
         archive_group="cli",
+        skills_mode=skills_mode,
     )
 
 
@@ -279,6 +313,7 @@ def export_project_sessions(
     bundle_root: Optional[Path] = None,
     dry_run: bool = False,
     active_only: bool = False,
+    skills_mode: str = "best-effort",
 ) -> BatchExportResult:
     normalized_project_path = normalize_project_path(project_path)
     if not normalized_project_path:
@@ -341,11 +376,13 @@ def export_project_sessions(
     export_root.mkdir(parents=True, exist_ok=True)
     success_ids: list[str] = []
     failed_exports: list[tuple[str, str]] = []
+    total_skills_bundled = 0
 
     for session_id in session_ids:
         try:
-            export_session(paths, session_id, bundle_root=export_root)
+            result = export_session(paths, session_id, bundle_root=export_root, skills_mode=skills_mode)
             success_ids.append(session_id)
+            total_skills_bundled += result.skills_bundled_count
         except Exception as exc:
             failed_exports.append((session_id, str(exc)))
 
@@ -376,4 +413,5 @@ def export_project_sessions(
         selection_label=project_label,
         selection_path=normalized_project_path,
         export_group="project",
+        total_skills_bundled=total_skills_bundled,
     )
