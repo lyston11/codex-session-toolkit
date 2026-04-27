@@ -8,6 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 from ..errors import ToolkitError
 from ..models import BatchImportResult, ImportResult, OperationWarning
@@ -399,7 +400,11 @@ def import_desktop_all(
     total_skills_restored = 0
     total_skills_already_present = 0
     total_skills_conflict_skipped = 0
-    report_candidate_path = None if skills_mode == "skip" else bundle_root / f"_skills_restore_report.{int(time.time())}.json"
+    report_candidate_path = (
+        None
+        if skills_mode == "skip"
+        else bundle_root / f"_skills_restore_report.{int(time.time())}.{uuid4().hex}.json"
+    )
     skills_restore_report_path = None
     warnings: list[OperationWarning] = []
     for summary in bundle_summaries:
