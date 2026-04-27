@@ -49,6 +49,7 @@ from ..validation import (
 )
 from ..stores.skills import (
     SKILLS_MANIFEST_FILENAME,
+    SkillRestoreResult,
     read_skills_manifest,
     restore_skills,
     write_batch_skills_restore_report,
@@ -262,8 +263,8 @@ def import_session(
         restore_results = []
 
         if skills_mode != "skip":
+            skills_manifest_file = bundle_dir / SKILLS_MANIFEST_FILENAME
             try:
-                skills_manifest_file = bundle_dir / SKILLS_MANIFEST_FILENAME
                 skills_manifest = read_skills_manifest(bundle_dir)
                 if skills_manifest is None:
                     if skills_manifest_file.is_file():
@@ -283,32 +284,6 @@ def import_session(
                     )
                     restore_results = list(restore_outcome.results)
                     warnings.extend(_with_session_id(warning, session_id) for warning in restore_outcome.warnings)
-                    if skills_restore_report_path is not None and restore_results:
-                        write_batch_skills_restore_report(
-                            skills_restore_report_path,
-                            session_id,
-                            restore_results,
-                        )
-                    for rr in restore_results:
-                        if rr.status == "restored":
-                            skills_restored_count += 1
-                        elif rr.status == "already_present":
-                            skills_already_present_count += 1
-                        elif rr.status == "conflict_skipped":
-                            skills_conflict_skipped_count += 1
-                        elif rr.status == "missing":
-                            skills_missing_count += 1
-                            warnings.append(
-                                OperationWarning(
-                                    code="missing_skill",
-                                    session_id=session_id,
-                                    name=rr.name,
-                                    source_root=rr.source_root,
-                                    relative_dir=rr.relative_dir,
-                                )
-                            )
-                        elif rr.status == "failed":
-                            skills_failed_count += 1
             except ToolkitError:
                 raise
             except OSError as exc:
@@ -322,6 +297,33 @@ def import_session(
                         detail=str(exc),
                     )
                 )
+            else:
+                (
+                    skills_restored_count,
+                    skills_already_present_count,
+                    skills_conflict_skipped_count,
+                    skills_missing_count,
+                    skills_failed_count,
+                    restore_result_warnings,
+                ) = _summarize_restore_results(session_id, restore_results)
+                warnings.extend(restore_result_warnings)
+                if skills_restore_report_path is not None and restore_results:
+                    try:
+                        write_batch_skills_restore_report(
+                            skills_restore_report_path,
+                            session_id,
+                            restore_results,
+                        )
+                    except OSError as exc:
+                        warnings.append(
+                            OperationWarning(
+                                code="skills_restore_report_failed",
+                                session_id=session_id,
+                                path=str(skills_restore_report_path),
+                                related_path=str(bundle_dir),
+                                detail=str(exc),
+                            )
+                        )
 
         return ImportResult(
             session_id=session_id,
@@ -440,7 +442,7 @@ def import_desktop_all(
             total_skills_missing += result.skills_missing_count
             total_skills_failed += result.skills_failed_count
             warnings.extend(result.warnings)
-        except Exception as exc:
+        except (ToolkitError, OSError) as exc:
             failed_imports.append((summary.bundle_dir, str(exc)))
 
     if report_candidate_path is not None and report_candidate_path.is_file():
@@ -505,3 +507,36 @@ def _with_session_id(warning: OperationWarning, session_id: str) -> OperationWar
         source_root=warning.source_root,
         relative_dir=warning.relative_dir,
     )
+
+
+def _summarize_restore_results(
+    session_id: str,
+    restore_results: list[SkillRestoreResult],
+) -> tuple[int, int, int, int, int, list[OperationWarning]]:
+    restored = 0
+    already_present = 0
+    conflict_skipped = 0
+    missing = 0
+    failed = 0
+    warnings: list[OperationWarning] = []
+    for rr in restore_results:
+        if rr.status == "restored":
+            restored += 1
+        elif rr.status == "already_present":
+            already_present += 1
+        elif rr.status == "conflict_skipped":
+            conflict_skipped += 1
+        elif rr.status == "missing":
+            missing += 1
+            warnings.append(
+                OperationWarning(
+                    code="missing_skill",
+                    session_id=session_id,
+                    name=rr.name,
+                    source_root=rr.source_root,
+                    relative_dir=rr.relative_dir,
+                )
+            )
+        elif rr.status == "failed":
+            failed += 1
+    return restored, already_present, conflict_skipped, missing, failed, warnings

@@ -256,7 +256,7 @@ def export_sessions_for_kind(
             success_ids.append(session_id)
             total_skills_bundled += result.skills_bundled_count
             warnings.extend(result.warnings)
-        except Exception as exc:
+        except (ToolkitError, OSError) as exc:
             failed_exports.append((session_id, str(exc)))
 
     manifest_file = export_root / f"_{manifest_stem}_export_manifest.txt"
@@ -418,7 +418,7 @@ def export_project_sessions(
             success_ids.append(session_id)
             total_skills_bundled += result.skills_bundled_count
             warnings.extend(result.warnings)
-        except Exception as exc:
+        except (ToolkitError, OSError) as exc:
             failed_exports.append((session_id, str(exc)))
 
     manifest_file = export_root / "_project_export_manifest.txt"
