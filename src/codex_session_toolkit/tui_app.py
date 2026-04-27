@@ -1,6 +1,8 @@
 """Compatibility wrapper for the refactored TUI package.
 
 Prefer importing from ``codex_session_toolkit.tui.app`` directly in new code.
+This wrapper is intentionally forwarding-only and should stay limited to
+legacy import compatibility until downstream callers migrate.
 """
 
 from __future__ import annotations

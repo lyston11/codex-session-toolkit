@@ -1,3 +1,4 @@
+import ast
 import os
 import subprocess
 import sys
@@ -123,6 +124,42 @@ class PackagingSmokeTests(unittest.TestCase):
     def test_core_keeps_lazy_legacy_compatibility(self) -> None:
         self.assertTrue(callable(core_api.parse_jsonl_records))
         self.assertTrue(callable(core_api.validate_jsonl_file))
+
+    def test_package_source_avoids_internal_compatibility_imports(self) -> None:
+        package_root = ROOT_DIR / "src" / "codex_session_toolkit"
+        compat_paths = {
+            package_root / "core.py",
+            package_root / "tui_app.py",
+            package_root / "terminal_ui.py",
+            package_root / "stores" / "bundles.py",
+        }
+        blocked_imports = {
+            "codex_session_toolkit.core",
+            "codex_session_toolkit.tui_app",
+            "codex_session_toolkit.terminal_ui",
+            "codex_session_toolkit.stores.bundles",
+            ".core",
+            ".tui_app",
+            ".terminal_ui",
+            ".stores.bundles",
+        }
+
+        for path in package_root.rglob("*.py"):
+            if path in compat_paths:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imported = {alias.name for alias in node.names}
+                elif isinstance(node, ast.ImportFrom):
+                    module_name = "." * node.level + (node.module or "")
+                    imported = {module_name}
+                else:
+                    continue
+                self.assertTrue(
+                    imported.isdisjoint(blocked_imports),
+                    f"{path.relative_to(ROOT_DIR)} should import canonical modules, not compatibility facades: {sorted(imported & blocked_imports)}",
+                )
 
     def test_module_help_mentions_packaged_command(self) -> None:
         result = subprocess.run(

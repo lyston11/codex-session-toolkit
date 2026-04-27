@@ -1,4 +1,9 @@
-"""Legacy compatibility facade for bundle helpers."""
+"""Legacy compatibility facade for bundle helpers.
+
+Canonical imports should target ``bundle_layout``, ``bundle_repository``,
+``bundle_scanner``, or ``bundle_validation`` directly. This facade is kept as
+forwarding-only migration glue for older callers.
+"""
 
 from __future__ import annotations
 
