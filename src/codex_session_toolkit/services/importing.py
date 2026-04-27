@@ -276,10 +276,12 @@ def import_session(
                             )
                         )
                 elif skills_manifest.skills:
-                    restore_results = restore_skills(
+                    restore_outcome = restore_skills(
                         skills_manifest, bundle_dir, paths.home,
                         skills_mode=skills_mode,
                     )
+                    restore_results = list(restore_outcome.results)
+                    warnings.extend(_with_session_id(warning, session_id) for warning in restore_outcome.warnings)
                     if skills_restore_report_path is not None and restore_results:
                         write_batch_skills_restore_report(
                             skills_restore_report_path,
@@ -306,7 +308,7 @@ def import_session(
                             )
             except ToolkitError:
                 raise
-            except Exception as exc:
+            except OSError as exc:
                 if skills_mode == "strict":
                     raise ToolkitError(f"Failed to restore skills from {bundle_dir}: {exc}") from exc
                 warnings.append(
@@ -482,4 +484,17 @@ def import_desktop_all(
         total_skills_missing=total_skills_missing,
         skills_restore_report_path=skills_restore_report_path,
         warnings=warnings,
+    )
+
+
+def _with_session_id(warning: OperationWarning, session_id: str) -> OperationWarning:
+    return OperationWarning(
+        code=warning.code,
+        session_id=session_id,
+        path=warning.path,
+        related_path=warning.related_path,
+        detail=warning.detail,
+        name=warning.name,
+        source_root=warning.source_root,
+        relative_dir=warning.relative_dir,
     )

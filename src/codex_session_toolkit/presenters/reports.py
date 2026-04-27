@@ -62,6 +62,20 @@ def _format_operation_warning(warning: OperationWarning) -> str:
         return f"Warning: invalid skills manifest: {warning.path}"
     if warning.code == "missing_skill":
         return f"Missing skill: {warning.name} ({warning.source_root}/{warning.relative_dir})"
+    if warning.code == "skill_not_bundled":
+        return f"Warning: custom skill not bundled: {warning.name} ({warning.source_root}/{warning.relative_dir})"
+    if warning.code == "bundle_skill_failed":
+        return (
+            "Warning: failed to bundle custom skill "
+            f"{warning.name} ({warning.source_root}/{warning.relative_dir}): {warning.detail}"
+        )
+    if warning.code == "restore_skill_failed":
+        return (
+            "Warning: failed to restore skill "
+            f"{warning.name} ({warning.source_root}/{warning.relative_dir}): {warning.detail}"
+        )
+    if warning.code == "export_skills_failed":
+        return f"Warning: failed to export skills sidecar from {warning.path}: {warning.detail}"
     if warning.code == "restore_skills_failed":
         return f"Warning: failed to restore skills from {warning.path}: {warning.detail}"
     if warning.code == "skipped_invalid_session_file":
@@ -138,7 +152,7 @@ def print_cleanup_result(result: CleanupResult) -> int:
 
 def print_export_result(result: ExportResult) -> int:
     for warning in result.warnings:
-        print(warning, file=sys.stderr)
+        print(_format_operation_warning(warning), file=sys.stderr)
     print(f"Exported {result.session_id}")
     print(f"Source machine: {result.source_machine or result.source_machine_key or '-'}")
     print(f"Bundle: {result.bundle_dir}")
@@ -155,7 +169,8 @@ def print_export_result(result: ExportResult) -> int:
 
 def print_batch_export_result(result: BatchExportResult) -> int:
     for warning in result.warnings:
-        print(warning, file=sys.stderr)
+        prefix = f"{warning.session_id}: " if warning.session_id else ""
+        print(prefix + _format_operation_warning(warning), file=sys.stderr)
     print(f"Bundle root: {result.bundle_root}")
     print(f"Machine folder: {result.machine_root}")
     print(f"Source machine: {result.source_machine or result.source_machine_key}")

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..errors import ToolkitError
-from ..models import BatchExportResult, ExportResult
+from ..models import BatchExportResult, ExportResult, OperationWarning
 from ..paths import CodexPaths
 from ..stores.history import collect_history_lines_for_session, first_history_text
 from ..stores.session_files import (
@@ -36,6 +36,8 @@ from ..support import (
 )
 from ..validation import normalize_relative_path, validate_jsonl_file, validate_session_id
 from ..stores.skills import (
+    SKILLS_DIR_NAME,
+    SKILLS_MANIFEST_FILENAME,
     bundle_skills,
     parse_skills_from_session,
     write_skills_manifest,
@@ -100,37 +102,41 @@ def export_session(
         skills_bundled_count = 0
         skills_available_count = 0
         skills_manifest_path = None
-        warnings: list[str] = []
+        warnings: list[OperationWarning] = []
 
         if skills_mode != "skip":
             try:
                 raw_manifest = parse_skills_from_session(session_file)
                 skills_available_count = raw_manifest.available_skill_count
                 if raw_manifest.skills:
-                    bundled_manifest = bundle_skills(raw_manifest, stage_bundle_dir)
+                    bundle_result = bundle_skills(raw_manifest, stage_bundle_dir)
+                    bundled_manifest = bundle_result.manifest
                     skills_bundled_count = bundled_manifest.bundled_skill_count
-                    unresolved_custom_skills = [
-                        skill
-                        for skill in bundled_manifest.skills
-                        if skill.location_kind == "custom" and not skill.bundled
+                    bundle_warnings = [
+                        _with_session_id(warning, session_id)
+                        for warning in bundle_result.warnings
                     ]
-                    if unresolved_custom_skills:
-                        formatted = ", ".join(
-                            f"{skill.name} ({skill.source_root}/{skill.relative_dir})"
-                            for skill in unresolved_custom_skills
-                        )
-                        message = f"Custom skills not bundled: {formatted}"
-                        if skills_mode == "strict":
-                            raise ToolkitError(message)
-                        warnings.append(f"Warning: {message}")
+                    if bundle_warnings and skills_mode == "strict":
+                        raise ToolkitError(_format_export_warning(bundle_warnings[0]))
+                    warnings.extend(bundle_warnings)
                     if skills_bundled_count > 0 or skills_available_count > 0:
                         skills_manifest_path = write_skills_manifest(bundled_manifest, stage_bundle_dir)
             except ToolkitError:
                 raise
-            except Exception as exc:
+            except OSError as exc:
+                shutil.rmtree(stage_bundle_dir / SKILLS_DIR_NAME, ignore_errors=True)
+                (stage_bundle_dir / SKILLS_MANIFEST_FILENAME).unlink(missing_ok=True)
+                skills_bundled_count = 0
+                skills_manifest_path = None
+                warning = OperationWarning(
+                    code="export_skills_failed",
+                    session_id=session_id,
+                    path=str(stage_bundle_dir),
+                    detail=str(exc),
+                )
                 if skills_mode == "strict":
-                    raise ToolkitError(f"Failed to bundle skills for session {session_id}: {exc}") from exc
-                warnings.append(f"Warning: failed to bundle skills for session {session_id}: {exc}")
+                    raise ToolkitError(_format_export_warning(warning)) from exc
+                warnings.append(warning)
 
         manifest_data = OrderedDict(
             SESSION_ID=session_id,
@@ -169,7 +175,11 @@ def export_session(
             source_machine_key=machine_key,
             skills_bundled_count=skills_bundled_count,
             skills_available_count=skills_available_count,
-            skills_manifest_path=skills_manifest_path,
+            skills_manifest_path=(
+                final_bundle_dir / SKILLS_MANIFEST_FILENAME
+                if skills_manifest_path is not None
+                else None
+            ),
             warnings=warnings,
         )
     except Exception:
@@ -238,14 +248,14 @@ def export_sessions_for_kind(
     success_ids: list[str] = []
     failed_exports: list[tuple[str, str]] = []
     total_skills_bundled = 0
-    warnings: list[str] = []
+    warnings: list[OperationWarning] = []
 
     for session_id in session_ids:
         try:
             result = export_session(paths, session_id, bundle_root=export_root, skills_mode=skills_mode)
             success_ids.append(session_id)
             total_skills_bundled += result.skills_bundled_count
-            warnings.extend(f"{session_id}: {warning}" for warning in result.warnings)
+            warnings.extend(result.warnings)
         except Exception as exc:
             failed_exports.append((session_id, str(exc)))
 
@@ -400,14 +410,14 @@ def export_project_sessions(
     success_ids: list[str] = []
     failed_exports: list[tuple[str, str]] = []
     total_skills_bundled = 0
-    warnings: list[str] = []
+    warnings: list[OperationWarning] = []
 
     for session_id in session_ids:
         try:
             result = export_session(paths, session_id, bundle_root=export_root, skills_mode=skills_mode)
             success_ids.append(session_id)
             total_skills_bundled += result.skills_bundled_count
-            warnings.extend(f"{session_id}: {warning}" for warning in result.warnings)
+            warnings.extend(result.warnings)
         except Exception as exc:
             failed_exports.append((session_id, str(exc)))
 
@@ -441,3 +451,32 @@ def export_project_sessions(
         total_skills_bundled=total_skills_bundled,
         warnings=warnings,
     )
+
+
+def _with_session_id(warning: OperationWarning, session_id: str) -> OperationWarning:
+    return OperationWarning(
+        code=warning.code,
+        session_id=session_id,
+        path=warning.path,
+        related_path=warning.related_path,
+        detail=warning.detail,
+        name=warning.name,
+        source_root=warning.source_root,
+        relative_dir=warning.relative_dir,
+    )
+
+
+def _format_export_warning(warning: OperationWarning) -> str:
+    if warning.code == "skill_not_bundled":
+        return (
+            "Custom skill not bundled: "
+            f"{warning.name} ({warning.source_root}/{warning.relative_dir})"
+        )
+    if warning.code == "bundle_skill_failed":
+        return (
+            "Failed to bundle custom skill: "
+            f"{warning.name} ({warning.source_root}/{warning.relative_dir}): {warning.detail}"
+        )
+    if warning.code == "export_skills_failed":
+        return f"Failed to export skills sidecar for session {warning.session_id}: {warning.detail}"
+    return warning.detail or warning.code

@@ -114,7 +114,7 @@ class ExportResult:
     skills_bundled_count: int = 0
     skills_available_count: int = 0
     skills_manifest_path: Optional[Path] = None
-    warnings: List[str] = field(default_factory=list)
+    warnings: List[OperationWarning] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -136,7 +136,7 @@ class BatchExportResult:
     selection_path: str = ""
     export_group: str = ""
     total_skills_bundled: int = 0
-    warnings: List[str] = field(default_factory=list)
+    warnings: List[OperationWarning] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

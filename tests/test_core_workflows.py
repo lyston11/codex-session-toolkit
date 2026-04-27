@@ -2,6 +2,7 @@ import io
 import json
 import os
 import shlex
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -1571,7 +1572,14 @@ class CoreWorkflowTests(unittest.TestCase):
             with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
                 export_result = export_active_desktop_all(src_paths)
 
-            self.assertTrue(any("missing-skill" in warning for warning in export_result.warnings))
+            self.assertTrue(
+                any(
+                    warning.code == "skill_not_bundled"
+                    and warning.session_id == session_id
+                    and warning.name == "missing-skill"
+                    for warning in export_result.warnings
+                )
+            )
 
             with pushd(workspace):
                 import_result = import_desktop_all(dst_paths)
@@ -1619,6 +1627,8 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertEqual(result.skills_available_count, 2)
             self.assertEqual(result.skills_bundled_count, 1)
             self.assertIsNotNone(result.skills_manifest_path)
+            assert result.skills_manifest_path is not None
+            self.assertTrue(result.skills_manifest_path.is_file())
             self.assertTrue((result.bundle_dir / "skills_manifest.json").is_file())
             self.assertTrue((result.bundle_dir / "skills" / "agents" / "my-skill" / "SKILL.md").is_file())
             self.assertFalse((result.bundle_dir / "skills" / "codex" / ".system" / "sys-skill").exists())
@@ -1651,8 +1661,63 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertEqual(result.skills_available_count, 1)
             self.assertEqual(result.skills_bundled_count, 0)
             self.assertIsNotNone(result.skills_manifest_path)
-            self.assertTrue(any("Custom skills not bundled" in warning for warning in result.warnings))
-            self.assertTrue(any("missing-skill" in warning for warning in result.warnings))
+            assert result.skills_manifest_path is not None
+            self.assertTrue(result.skills_manifest_path.is_file())
+            self.assertTrue(
+                any(
+                    warning.code == "skill_not_bundled"
+                    and warning.name == "missing-skill"
+                    for warning in result.warnings
+                )
+            )
+
+    def test_export_session_warns_when_skill_copy_raises_filesystem_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            workspace.mkdir()
+            write_config(src_home, "test-provider")
+
+            agents_skills = src_home / ".agents" / "skills"
+            write_test_skill(agents_skills, "copy-fail-skill", "copy me")
+
+            session_id = "aaa00015-0000-7000-8000-000000000015"
+            write_session_with_skills(
+                src_home,
+                session_id,
+                provider="test-provider",
+                source="cli",
+                originator="Codex CLI",
+                cwd=workspace,
+                skill_entries=[
+                    {"name": "copy-fail-skill", "file": str(agents_skills / "copy-fail-skill" / "SKILL.md")},
+                ],
+            )
+
+            paths = CodexPaths(home=src_home)
+            real_copytree = shutil.copytree
+
+            def copytree_side_effect(src, dst, *args, **kwargs):
+                if str(src).endswith("copy-fail-skill"):
+                    raise OSError("simulated copy failure")
+                return real_copytree(src, dst, *args, **kwargs)
+
+            with patch("codex_session_toolkit.stores.skills.shutil.copytree", side_effect=copytree_side_effect):
+                with pushd(workspace), env_override("CST_MACHINE_LABEL", "TestMachine"):
+                    result = export_session(paths, session_id)
+
+            self.assertEqual(result.skills_available_count, 1)
+            self.assertEqual(result.skills_bundled_count, 0)
+            self.assertIsNotNone(result.skills_manifest_path)
+            assert result.skills_manifest_path is not None
+            self.assertTrue(result.skills_manifest_path.is_file())
+            self.assertTrue(
+                any(
+                    warning.code == "bundle_skill_failed"
+                    and warning.name == "copy-fail-skill"
+                    for warning in result.warnings
+                )
+            )
 
     def test_export_session_strict_mode_raises_when_custom_skill_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1869,6 +1934,78 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertEqual(import_result.skills_missing_count, 1)
             self.assertTrue(any(warning.code == "missing_skill" and warning.name == "missing-skill" for warning in import_result.warnings))
 
+    def test_import_session_warns_when_manifest_points_to_missing_bundled_skill_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_config(dst_home, "dst-provider")
+
+            session_id = "aaa00016-0000-7000-8000-000000000016"
+            bundle_dir = workspace / "codex_sessions" / "test-machine" / session_id
+            bundle_dir.mkdir(parents=True)
+
+            manifest = SkillsManifest(
+                available_skill_count=1,
+                used_skill_count=1,
+                bundled_skill_count=1,
+                skills=(
+                    SkillDescriptor(
+                        name="missing-bundled-skill",
+                        skill_file="/home/user/.agents/skills/missing-bundled-skill/SKILL.md",
+                        source_root="agents",
+                        relative_dir="missing-bundled-skill",
+                        location_kind="custom",
+                        used=True,
+                        usage_count=1,
+                        bundled=True,
+                        bundle_path="skills/agents/missing-bundled-skill",
+                        content_hash="abc123",
+                    ),
+                ),
+            )
+            write_skills_manifest(manifest, bundle_dir)
+
+            relative_path = f"sessions/2026/04/10/rollout-2026-04-10T10-00-00-{session_id}.jsonl"
+            write_bundle_manifest(bundle_dir, session_id=session_id, relative_path=relative_path)
+
+            codex_dir = bundle_dir / "codex" / "sessions" / "2026" / "04" / "10"
+            codex_dir.mkdir(parents=True)
+            session_file = codex_dir / f"rollout-2026-04-10T10-00-00-{session_id}.jsonl"
+            session_file.write_text(
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-10T10:00:00Z",
+                        "type": "session_meta",
+                        "payload": {
+                            "id": session_id,
+                            "model_provider": "test",
+                            "source": "cli",
+                            "originator": "CLI",
+                            "cwd": str(workspace),
+                            "timestamp": "2026-04-10T10:00:00Z",
+                            "cli_version": "0.1.0",
+                        },
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            dst_paths = CodexPaths(home=dst_home)
+            with pushd(workspace):
+                import_result = import_session(dst_paths, str(bundle_dir))
+
+            self.assertEqual(import_result.skills_missing_count, 1)
+            self.assertTrue(
+                any(
+                    warning.code == "missing_skill"
+                    and warning.name == "missing-bundled-skill"
+                    for warning in import_result.warnings
+                )
+            )
+
     def test_import_session_warns_on_invalid_skills_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
@@ -1957,6 +2094,62 @@ class CoreWorkflowTests(unittest.TestCase):
             from codex_session_toolkit.errors import ToolkitError
             with pushd(workspace), self.assertRaises(ToolkitError):
                 import_session(dst_paths, str(bundle_dir), skills_mode="strict")
+
+    def test_import_session_keeps_partial_skill_restore_results_when_one_copy_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_config(src_home, "src-provider")
+            write_config(dst_home, "dst-provider")
+
+            agents_skills = src_home / ".agents" / "skills"
+            write_test_skill(agents_skills, "good-skill", "good content")
+            write_test_skill(agents_skills, "bad-skill", "bad content")
+
+            session_id = "aaa00017-0000-7000-8000-000000000017"
+            write_session_with_skills(
+                src_home,
+                session_id,
+                provider="src-provider",
+                source="cli",
+                originator="Codex CLI",
+                cwd=workspace,
+                skill_entries=[
+                    {"name": "good-skill", "file": str(agents_skills / "good-skill" / "SKILL.md")},
+                    {"name": "bad-skill", "file": str(agents_skills / "bad-skill" / "SKILL.md")},
+                ],
+            )
+
+            paths = CodexPaths(home=src_home)
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                export_result = export_session(paths, session_id)
+                bundle_dir = export_result.bundle_dir
+
+            real_copytree = shutil.copytree
+
+            def copytree_side_effect(src, dst, *args, **kwargs):
+                if str(src).endswith("skills/agents/bad-skill"):
+                    raise OSError("simulated restore failure")
+                return real_copytree(src, dst, *args, **kwargs)
+
+            dst_paths = CodexPaths(home=dst_home)
+            with patch("codex_session_toolkit.stores.skills.shutil.copytree", side_effect=copytree_side_effect):
+                with pushd(workspace):
+                    import_result = import_session(dst_paths, str(bundle_dir))
+
+            self.assertEqual(import_result.skills_restored_count, 1)
+            self.assertEqual(import_result.skills_missing_count, 0)
+            self.assertTrue((dst_home / ".agents" / "skills" / "good-skill" / "SKILL.md").is_file())
+            self.assertFalse((dst_home / ".agents" / "skills" / "bad-skill" / "SKILL.md").exists())
+            self.assertTrue(
+                any(
+                    warning.code == "restore_skill_failed"
+                    and warning.name == "bad-skill"
+                    for warning in import_result.warnings
+                )
+            )
 
     def test_import_session_skills_strict_mode_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
