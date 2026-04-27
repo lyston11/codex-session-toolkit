@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ..errors import ToolkitError
+from ..models import OperationWarning
 
 SKILLS_MANIFEST_FILENAME = "skills_manifest.json"
 SKILLS_DIR_NAME = "skills"
@@ -55,6 +56,18 @@ class SkillRestoreResult:
     status: str
     target_path: str
     content_hash: str = ""
+
+
+@dataclass(frozen=True)
+class SkillsBundleResult:
+    manifest: SkillsManifest
+    warnings: Tuple[OperationWarning, ...] = ()
+
+
+@dataclass(frozen=True)
+class SkillsRestoreOutcome:
+    results: Tuple[SkillRestoreResult, ...] = ()
+    warnings: Tuple[OperationWarning, ...] = ()
 
 
 def infer_skill_source_root(skill_file_path: str) -> Tuple[str, str]:
@@ -134,9 +147,10 @@ def compute_skill_directory_hash(skill_dir: Path) -> str:
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-def bundle_skills(manifest: SkillsManifest, bundle_dir: Path) -> SkillsManifest:
+def bundle_skills(manifest: SkillsManifest, bundle_dir: Path) -> SkillsBundleResult:
     updated: list[SkillDescriptor] = []
     bundled_count = 0
+    warnings: list[OperationWarning] = []
     for skill in manifest.skills:
         if skill.location_kind != "custom" or skill.bundled:
             updated.append(skill)
@@ -144,11 +158,37 @@ def bundle_skills(manifest: SkillsManifest, bundle_dir: Path) -> SkillsManifest:
         source_dir = _resolve_skill_source_dir(skill)
         if not source_dir or not source_dir.is_dir():
             updated.append(skill)
+            warnings.append(
+                OperationWarning(
+                    code="skill_not_bundled",
+                    name=skill.name,
+                    source_root=skill.source_root,
+                    relative_dir=skill.relative_dir,
+                    path=str(source_dir or Path(skill.skill_file).parent),
+                    detail="source directory not found",
+                )
+            )
             continue
         dest_dir = bundle_dir / SKILLS_DIR_NAME / skill.source_root / skill.relative_dir
-        if dest_dir.exists():
-            shutil.rmtree(dest_dir)
-        shutil.copytree(source_dir, dest_dir)
+        try:
+            if dest_dir.exists():
+                shutil.rmtree(dest_dir)
+            shutil.copytree(source_dir, dest_dir)
+        except OSError as exc:
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            updated.append(skill)
+            warnings.append(
+                OperationWarning(
+                    code="bundle_skill_failed",
+                    name=skill.name,
+                    source_root=skill.source_root,
+                    relative_dir=skill.relative_dir,
+                    path=str(source_dir),
+                    related_path=str(dest_dir),
+                    detail=str(exc),
+                )
+            )
+            continue
         content_hash = compute_skill_directory_hash(source_dir)
         bundle_path = f"{SKILLS_DIR_NAME}/{skill.source_root}/{skill.relative_dir}"
         updated.append(SkillDescriptor(
@@ -165,12 +205,15 @@ def bundle_skills(manifest: SkillsManifest, bundle_dir: Path) -> SkillsManifest:
         ))
         bundled_count += 1
 
-    return SkillsManifest(
-        schema_version=manifest.schema_version,
-        available_skill_count=manifest.available_skill_count,
-        used_skill_count=manifest.used_skill_count,
-        bundled_skill_count=bundled_count,
-        skills=tuple(updated),
+    return SkillsBundleResult(
+        manifest=SkillsManifest(
+            schema_version=manifest.schema_version,
+            available_skill_count=manifest.available_skill_count,
+            used_skill_count=manifest.used_skill_count,
+            bundled_skill_count=bundled_count,
+            skills=tuple(updated),
+        ),
+        warnings=tuple(warnings),
     )
 
 
@@ -240,8 +283,9 @@ def restore_skills(
     target_home: Path,
     *,
     skills_mode: str = "best-effort",
-) -> List[SkillRestoreResult]:
+) -> SkillsRestoreOutcome:
     results: list[SkillRestoreResult] = []
+    warnings: list[OperationWarning] = []
     for skill in manifest.skills:
         if not skill.bundled:
             if skill.location_kind == "custom":
@@ -259,6 +303,18 @@ def restore_skills(
         target_dir = Path(_target_skill_dir(target_home, skill))
         source_dir = bundle_dir / skill.bundle_path
 
+        if not source_dir.is_dir():
+            results.append(SkillRestoreResult(
+                name=skill.name,
+                source_root=skill.source_root,
+                relative_dir=skill.relative_dir,
+                status="missing",
+                target_path=str(target_dir),
+            ))
+            if skills_mode == "strict":
+                raise ToolkitError(f"Bundled skill directory missing: {skill.name}")
+            continue
+
         if target_dir.is_dir():
             existing_hash = compute_skill_directory_hash(target_dir)
             bundle_hash = skill.content_hash or compute_skill_directory_hash(source_dir)
@@ -273,8 +329,23 @@ def restore_skills(
                 ))
                 continue
             if skills_mode == "overwrite":
-                shutil.rmtree(target_dir)
-                shutil.copytree(source_dir, target_dir)
+                try:
+                    _replace_skill_directory(source_dir, target_dir)
+                except OSError as exc:
+                    warnings.append(
+                        OperationWarning(
+                            code="restore_skill_failed",
+                            name=skill.name,
+                            source_root=skill.source_root,
+                            relative_dir=skill.relative_dir,
+                            path=str(target_dir),
+                            related_path=str(source_dir),
+                            detail=str(exc),
+                        )
+                    )
+                    if skills_mode == "strict":
+                        raise ToolkitError(f"Failed to restore skill {skill.name}: {exc}") from exc
+                    continue
                 results.append(SkillRestoreResult(
                     name=skill.name,
                     source_root=skill.source_root,
@@ -296,20 +367,25 @@ def restore_skills(
             ))
             continue
 
-        if not source_dir.is_dir():
-            results.append(SkillRestoreResult(
-                name=skill.name,
-                source_root=skill.source_root,
-                relative_dir=skill.relative_dir,
-                status="missing",
-                target_path=str(target_dir),
-            ))
-            if skills_mode == "strict":
-                raise ToolkitError(f"Bundled skill directory missing: {skill.name}")
-            continue
-
         target_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source_dir, target_dir)
+        try:
+            shutil.copytree(source_dir, target_dir)
+        except OSError as exc:
+            shutil.rmtree(target_dir, ignore_errors=True)
+            warnings.append(
+                OperationWarning(
+                    code="restore_skill_failed",
+                    name=skill.name,
+                    source_root=skill.source_root,
+                    relative_dir=skill.relative_dir,
+                    path=str(target_dir),
+                    related_path=str(source_dir),
+                    detail=str(exc),
+                )
+            )
+            if skills_mode == "strict":
+                raise ToolkitError(f"Failed to restore skill {skill.name}: {exc}") from exc
+            continue
         results.append(SkillRestoreResult(
             name=skill.name,
             source_root=skill.source_root,
@@ -319,7 +395,7 @@ def restore_skills(
             content_hash=compute_skill_directory_hash(target_dir),
         ))
 
-    return results
+    return SkillsRestoreOutcome(results=tuple(results), warnings=tuple(warnings))
 
 
 def write_batch_skills_restore_report(
@@ -392,7 +468,7 @@ def _extract_skills_block(session_file: Path) -> str:
                 continue
             try:
                 obj = _json.loads(stripped)
-            except Exception:
+            except _json.JSONDecodeError:
                 continue
             if not isinstance(obj, dict):
                 continue
@@ -440,7 +516,7 @@ def _detect_skill_usage(session_file: Path, skill_names: List[str]) -> Dict[str,
                 continue
             try:
                 obj = _json.loads(stripped)
-            except Exception:
+            except _json.JSONDecodeError:
                 continue
             if not isinstance(obj, dict):
                 continue
@@ -498,3 +574,23 @@ def _target_skill_dir(target_home: Path, skill: SkillDescriptor) -> str:
     if skill.source_root == "agents":
         return str(target_home / ".agents" / "skills" / skill.relative_dir)
     return str(target_home / ".codex" / "skills" / skill.relative_dir)
+
+
+def _replace_skill_directory(source_dir: Path, target_dir: Path) -> None:
+    stage_dir = target_dir.with_name(target_dir.name + ".stage")
+    backup_dir = target_dir.with_name(target_dir.name + ".bak")
+    if stage_dir.exists():
+        shutil.rmtree(stage_dir)
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir)
+    try:
+        shutil.copytree(source_dir, stage_dir)
+        target_dir.rename(backup_dir)
+        stage_dir.rename(target_dir)
+    except OSError:
+        if not target_dir.exists() and backup_dir.exists():
+            backup_dir.rename(target_dir)
+        shutil.rmtree(stage_dir, ignore_errors=True)
+        raise
+    else:
+        shutil.rmtree(backup_dir, ignore_errors=True)
