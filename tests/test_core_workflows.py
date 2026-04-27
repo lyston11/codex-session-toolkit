@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -1433,6 +1434,59 @@ class CoreWorkflowTests(unittest.TestCase):
                 self.assertEqual(print_batch_import_result(result), 0)
             self.assertIn("Total skills restored:          0", stdout.getvalue())
             self.assertIn("Total skills already present:   1", stdout.getvalue())
+
+    def test_import_desktop_all_uses_distinct_skills_restore_report_per_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_config(src_home, "src-provider")
+            write_config(dst_home, "dst-provider")
+            write_state_file(dst_home)
+            create_threads_db(dst_home)
+
+            agents_skills = src_home / ".agents" / "skills"
+            write_test_skill(agents_skills, "batch-skill", "batched skill")
+
+            session_id = "aaa00000-0000-7000-8000-000000000021"
+            write_session_with_skills(
+                src_home,
+                session_id,
+                provider="src-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                skill_entries=[
+                    {"name": "batch-skill", "file": str(agents_skills / "batch-skill" / "SKILL.md")},
+                ],
+            )
+            write_history(src_home, session_id, "desktop batch skills repeated imports")
+
+            src_paths = CodexPaths(home=src_home)
+            dst_paths = CodexPaths(home=dst_home)
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                export_active_desktop_all(src_paths)
+
+            with pushd(workspace), patch("codex_session_toolkit.services.importing.time.time", return_value=1_776_123_456):
+                first_result = import_desktop_all(dst_paths)
+                second_result = import_desktop_all(dst_paths)
+
+            self.assertIsNotNone(first_result.skills_restore_report_path)
+            self.assertIsNotNone(second_result.skills_restore_report_path)
+            assert first_result.skills_restore_report_path is not None
+            assert second_result.skills_restore_report_path is not None
+            self.assertNotEqual(first_result.skills_restore_report_path, second_result.skills_restore_report_path)
+
+            first_report = json.loads(first_result.skills_restore_report_path.read_text(encoding="utf-8"))
+            second_report = json.loads(second_result.skills_restore_report_path.read_text(encoding="utf-8"))
+            self.assertEqual(first_report["total_sessions"], 1)
+            self.assertEqual(second_report["total_sessions"], 1)
+            self.assertEqual(first_report["sessions"][0]["restored"], 1)
+            self.assertEqual(first_report["sessions"][0]["already_present"], 0)
+            self.assertEqual(second_report["sessions"][0]["restored"], 0)
+            self.assertEqual(second_report["sessions"][0]["already_present"], 1)
 
     def test_batch_export_and_import_aggregate_skill_warnings(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
