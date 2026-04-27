@@ -63,7 +63,11 @@ def _format_operation_warning(warning: OperationWarning) -> str:
     if warning.code == "missing_skill":
         return f"Missing skill: {warning.name} ({warning.source_root}/{warning.relative_dir})"
     if warning.code == "skill_not_bundled":
-        return f"Warning: custom skill not bundled: {warning.name} ({warning.source_root}/{warning.relative_dir})"
+        detail = f": {warning.detail}" if warning.detail else ""
+        return (
+            "Warning: custom skill not bundled: "
+            f"{warning.name} ({warning.source_root}/{warning.relative_dir}){detail}"
+        )
     if warning.code == "bundle_skill_failed":
         return (
             "Warning: failed to bundle custom skill "

@@ -7,7 +7,7 @@ import json
 import re
 import shutil
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Tuple
 
 from ..errors import ToolkitError
@@ -23,6 +23,8 @@ _AGENTS_MARKER = "/.agents/skills/"
 _CODEX_MARKER = "/.codex/skills/"
 _SYSTEM_PREFIX = ".system/"
 _RUNTIME_PREFIX = "codex-primary-runtime/"
+_RESTORABLE_SKILL_ROOTS = {"agents", "codex"}
+_VALID_LOCATION_KINDS = {"custom", "system", "runtime"}
 
 
 @dataclass(frozen=True)
@@ -155,6 +157,19 @@ def bundle_skills(manifest: SkillsManifest, bundle_dir: Path) -> SkillsBundleRes
         if skill.location_kind != "custom" or skill.bundled:
             updated.append(skill)
             continue
+        if not _is_restorable_custom_skill(skill):
+            updated.append(skill)
+            warnings.append(
+                OperationWarning(
+                    code="skill_not_bundled",
+                    name=skill.name,
+                    source_root=skill.source_root,
+                    relative_dir=skill.relative_dir,
+                    path=str(Path(skill.skill_file).parent),
+                    detail="unsupported skill location",
+                )
+            )
+            continue
         source_dir = _resolve_skill_source_dir(skill)
         if not source_dir or not source_dir.is_dir():
             updated.append(skill)
@@ -254,25 +269,21 @@ def read_skills_manifest(bundle_dir: Path) -> Optional[SkillsManifest]:
         return None
     if data.get("schema_version") != SKILLS_SCHEMA_VERSION:
         return None
+    skills_payload = data.get("skills", [])
+    if not isinstance(skills_payload, list):
+        return None
+
     descriptors: list[SkillDescriptor] = []
-    for s in data.get("skills", []):
-        descriptors.append(SkillDescriptor(
-            name=s.get("name", ""),
-            skill_file=s.get("skill_file", ""),
-            source_root=s.get("source_root", "unknown"),
-            relative_dir=s.get("relative_dir", ""),
-            location_kind=s.get("location_kind", "custom"),
-            used=s.get("used", False),
-            usage_count=s.get("usage_count", 0),
-            bundled=s.get("bundled", False),
-            bundle_path=s.get("bundle_path", ""),
-            content_hash=s.get("content_hash", ""),
-        ))
+    for raw_skill in skills_payload:
+        descriptor = _deserialize_skill_descriptor(raw_skill)
+        if descriptor is None:
+            return None
+        descriptors.append(descriptor)
     return SkillsManifest(
         schema_version=data.get("schema_version", SKILLS_SCHEMA_VERSION),
-        available_skill_count=data.get("available_skill_count", len(descriptors)),
-        used_skill_count=data.get("used_skill_count", 0),
-        bundled_skill_count=data.get("bundled_skill_count", 0),
+        available_skill_count=_non_negative_int_or_default(data.get("available_skill_count"), len(descriptors)),
+        used_skill_count=_non_negative_int_or_default(data.get("used_skill_count"), 0),
+        bundled_skill_count=_non_negative_int_or_default(data.get("bundled_skill_count"), 0),
         skills=tuple(descriptors),
     )
 
@@ -557,6 +568,123 @@ def _target_skill_dir(target_home: Path, skill: SkillDescriptor) -> str:
     if skill.source_root == "agents":
         return str(target_home / ".agents" / "skills" / skill.relative_dir)
     return str(target_home / ".codex" / "skills" / skill.relative_dir)
+
+
+def _deserialize_skill_descriptor(raw_skill: object) -> Optional[SkillDescriptor]:
+    if not isinstance(raw_skill, dict):
+        return None
+
+    name = _required_non_empty_string(raw_skill.get("name"))
+    skill_file = _required_non_empty_string(raw_skill.get("skill_file"))
+    source_root = _required_non_empty_string(raw_skill.get("source_root"))
+    relative_dir = _required_non_empty_string(raw_skill.get("relative_dir"))
+    location_kind = _required_non_empty_string(raw_skill.get("location_kind"))
+    used = _required_bool(raw_skill.get("used"))
+    usage_count = _required_non_negative_int(raw_skill.get("usage_count"))
+    bundled = _required_bool(raw_skill.get("bundled"))
+    bundle_path = _required_string(raw_skill.get("bundle_path"))
+    content_hash = _required_string(raw_skill.get("content_hash"))
+
+    if None in {
+        name,
+        skill_file,
+        source_root,
+        relative_dir,
+        location_kind,
+        used,
+        usage_count,
+        bundled,
+        bundle_path,
+        content_hash,
+    }:
+        return None
+    assert name is not None
+    assert skill_file is not None
+    assert source_root is not None
+    assert relative_dir is not None
+    assert location_kind is not None
+    assert used is not None
+    assert usage_count is not None
+    assert bundled is not None
+    assert bundle_path is not None
+    assert content_hash is not None
+
+    if location_kind not in _VALID_LOCATION_KINDS:
+        return None
+    if not _is_safe_relative_posix_path(relative_dir):
+        return None
+    if bundled and not _is_valid_bundled_skill_path(bundle_path, source_root=source_root, relative_dir=relative_dir):
+        return None
+    if not bundled and bundle_path and not _is_safe_relative_posix_path(bundle_path):
+        return None
+
+    return SkillDescriptor(
+        name=name,
+        skill_file=skill_file,
+        source_root=source_root,
+        relative_dir=relative_dir,
+        location_kind=location_kind,
+        used=used,
+        usage_count=usage_count,
+        bundled=bundled,
+        bundle_path=bundle_path,
+        content_hash=content_hash,
+    )
+
+
+def _required_string(value: object) -> Optional[str]:
+    return value if isinstance(value, str) else None
+
+
+def _required_non_empty_string(value: object) -> Optional[str]:
+    if not isinstance(value, str) or not value:
+        return None
+    return value
+
+
+def _required_bool(value: object) -> Optional[bool]:
+    return value if isinstance(value, bool) else None
+
+
+def _required_non_negative_int(value: object) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _non_negative_int_or_default(value: object, default: int) -> int:
+    parsed = _required_non_negative_int(value)
+    return default if parsed is None else parsed
+
+
+def _is_restorable_custom_skill(skill: SkillDescriptor) -> bool:
+    return (
+        skill.source_root in _RESTORABLE_SKILL_ROOTS
+        and _is_safe_relative_posix_path(skill.relative_dir)
+    )
+
+
+def _is_safe_relative_posix_path(raw_path: str) -> bool:
+    if not raw_path:
+        return False
+    path = PurePosixPath(raw_path)
+    if path.is_absolute():
+        return False
+    parts = path.parts
+    return bool(parts) and all(part not in {"", ".", ".."} for part in parts)
+
+
+def _is_valid_bundled_skill_path(bundle_path: str, *, source_root: str, relative_dir: str) -> bool:
+    if not _is_safe_relative_posix_path(bundle_path):
+        return False
+    bundle_parts = PurePosixPath(bundle_path).parts
+    relative_parts = PurePosixPath(relative_dir).parts
+    return (
+        len(bundle_parts) >= 3
+        and bundle_parts[0] == SKILLS_DIR_NAME
+        and bundle_parts[1] == source_root
+        and bundle_parts[2:] == relative_parts
+    )
 
 
 def _replace_skill_directory(source_dir: Path, target_dir: Path) -> None:

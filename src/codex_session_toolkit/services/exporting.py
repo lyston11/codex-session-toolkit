@@ -468,9 +468,10 @@ def _with_session_id(warning: OperationWarning, session_id: str) -> OperationWar
 
 def _format_export_warning(warning: OperationWarning) -> str:
     if warning.code == "skill_not_bundled":
+        detail = f": {warning.detail}" if warning.detail else ""
         return (
             "Custom skill not bundled: "
-            f"{warning.name} ({warning.source_root}/{warning.relative_dir})"
+            f"{warning.name} ({warning.source_root}/{warning.relative_dir}){detail}"
         )
     if warning.code == "bundle_skill_failed":
         return (
