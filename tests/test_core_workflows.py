@@ -1739,6 +1739,45 @@ class CoreWorkflowTests(unittest.TestCase):
                 )
             )
 
+    def test_export_session_warns_when_custom_skill_location_is_unrestorable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            detached_skills = Path(tmpdir) / "detached_skills"
+            workspace.mkdir()
+            write_config(src_home, "test-provider")
+
+            write_test_skill(detached_skills, "detached-skill", "detached content")
+
+            session_id = "aaa00018-0000-7000-8000-000000000018"
+            write_session_with_skills(
+                src_home,
+                session_id,
+                provider="test-provider",
+                source="cli",
+                originator="Codex CLI",
+                cwd=workspace,
+                skill_entries=[
+                    {"name": "detached-skill", "file": str(detached_skills / "detached-skill" / "SKILL.md")},
+                ],
+            )
+
+            paths = CodexPaths(home=src_home)
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "TestMachine"):
+                result = export_session(paths, session_id)
+
+            self.assertEqual(result.skills_available_count, 1)
+            self.assertEqual(result.skills_bundled_count, 0)
+            self.assertFalse((result.bundle_dir / "skills" / "unknown").exists())
+            self.assertTrue(
+                any(
+                    warning.code == "skill_not_bundled"
+                    and warning.name == "detached-skill"
+                    and warning.detail == "unsupported skill location"
+                    for warning in result.warnings
+                )
+            )
+
     def test_export_session_warns_when_skill_copy_raises_filesystem_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
@@ -2118,6 +2157,78 @@ class CoreWorkflowTests(unittest.TestCase):
                 import_result = import_session(dst_paths, str(bundle_dir))
 
             self.assertTrue(any(warning.code == "invalid_skills_manifest" for warning in import_result.warnings))
+
+    def test_import_session_warns_on_structurally_invalid_skills_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_config(dst_home, "dst-provider")
+
+            session_id = "aaa00019-0000-7000-8000-000000000019"
+            bundle_dir = workspace / "codex_sessions" / "test-machine" / session_id
+            bundle_dir.mkdir(parents=True)
+
+            relative_path = f"sessions/2026/04/10/rollout-2026-04-10T10-00-00-{session_id}.jsonl"
+            write_bundle_manifest(bundle_dir, session_id=session_id, relative_path=relative_path)
+
+            codex_dir = bundle_dir / "codex" / "sessions" / "2026" / "04" / "10"
+            codex_dir.mkdir(parents=True)
+            session_file = codex_dir / f"rollout-2026-04-10T10-00-00-{session_id}.jsonl"
+            session_file.write_text(
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-10T10:00:00Z",
+                        "type": "session_meta",
+                        "payload": {
+                            "id": session_id,
+                            "model_provider": "test",
+                            "source": "cli",
+                            "originator": "CLI",
+                            "cwd": str(workspace),
+                            "timestamp": "2026-04-10T10:00:00Z",
+                            "cli_version": "0.1.0",
+                        },
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (bundle_dir / "skills_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "available_skill_count": 1,
+                        "used_skill_count": 1,
+                        "bundled_skill_count": 1,
+                        "skills": [
+                            {
+                                "name": "bad-skill",
+                                "skill_file": "/tmp/source/.agents/skills/bad-skill/SKILL.md",
+                                "source_root": "agents",
+                                "relative_dir": "bad-skill",
+                                "location_kind": "custom",
+                                "used": True,
+                                "usage_count": 1,
+                                "bundled": True,
+                                "content_hash": "",
+                            }
+                        ],
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            dst_paths = CodexPaths(home=dst_home)
+            with pushd(workspace):
+                import_result = import_session(dst_paths, str(bundle_dir))
+
+            self.assertEqual(import_result.skills_restored_count, 0)
+            self.assertTrue(any(warning.code == "invalid_skills_manifest" for warning in import_result.warnings))
+            self.assertFalse((dst_home / ".agents" / "skills" / "bad-skill").exists())
 
     def test_import_session_strict_mode_raises_on_invalid_skills_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
