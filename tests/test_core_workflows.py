@@ -1487,6 +1487,72 @@ class CoreWorkflowTests(unittest.TestCase):
                 self.assertEqual(print_batch_import_result(result), 0)
             self.assertIn("Total skills missing:           1", stdout.getvalue())
 
+    def test_import_desktop_all_counts_failed_skill_restores_in_report_and_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_config(src_home, "src-provider")
+            write_config(dst_home, "dst-provider")
+            write_state_file(dst_home)
+            create_threads_db(dst_home)
+
+            agents_skills = src_home / ".agents" / "skills"
+            write_test_skill(agents_skills, "good-skill", "good content")
+            write_test_skill(agents_skills, "bad-skill", "bad content")
+
+            session_id = "aaa00000-0000-7000-8000-000000000023"
+            write_session_with_skills(
+                src_home,
+                session_id,
+                provider="src-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                skill_entries=[
+                    {"name": "good-skill", "file": str(agents_skills / "good-skill" / "SKILL.md")},
+                    {"name": "bad-skill", "file": str(agents_skills / "bad-skill" / "SKILL.md")},
+                ],
+            )
+            write_history(src_home, session_id, "desktop batch skills failed restore")
+
+            src_paths = CodexPaths(home=src_home)
+            dst_paths = CodexPaths(home=dst_home)
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                export_active_desktop_all(src_paths)
+
+            real_copytree = shutil.copytree
+
+            def copytree_side_effect(src, dst, *args, **kwargs):
+                if str(src).endswith("skills/agents/bad-skill"):
+                    raise OSError("simulated restore failure")
+                return real_copytree(src, dst, *args, **kwargs)
+
+            with patch("codex_session_toolkit.stores.skills.shutil.copytree", side_effect=copytree_side_effect):
+                with pushd(workspace):
+                    result = import_desktop_all(dst_paths)
+
+            self.assertEqual(result.total_skills_restored, 1)
+            self.assertEqual(result.total_skills_failed, 1)
+            self.assertTrue(any(warning.code == "restore_skill_failed" and warning.name == "bad-skill" for warning in result.warnings))
+
+            assert result.skills_restore_report_path is not None
+            report_data = json.loads(result.skills_restore_report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report_data["sessions"][0]["restored"], 1)
+            self.assertEqual(report_data["sessions"][0]["failed"], 1)
+            self.assertEqual(
+                {skill["name"]: skill["status"] for skill in report_data["sessions"][0]["skills"]},
+                {"good-skill": "restored", "bad-skill": "failed"},
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                self.assertEqual(print_batch_import_result(result), 0)
+            self.assertIn("Total skills restored:          1", stdout.getvalue())
+            self.assertIn("Total skills failed:            1", stdout.getvalue())
+
     def test_import_desktop_all_uses_distinct_skills_restore_report_per_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
@@ -1537,8 +1603,10 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertEqual(second_report["total_sessions"], 1)
             self.assertEqual(first_report["sessions"][0]["restored"], 1)
             self.assertEqual(first_report["sessions"][0]["already_present"], 0)
+            self.assertEqual(first_report["sessions"][0]["failed"], 0)
             self.assertEqual(second_report["sessions"][0]["restored"], 0)
             self.assertEqual(second_report["sessions"][0]["already_present"], 1)
+            self.assertEqual(second_report["sessions"][0]["failed"], 0)
 
     def test_batch_export_and_import_aggregate_skill_warnings(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2141,6 +2209,7 @@ class CoreWorkflowTests(unittest.TestCase):
 
             self.assertEqual(import_result.skills_restored_count, 1)
             self.assertEqual(import_result.skills_missing_count, 0)
+            self.assertEqual(import_result.skills_failed_count, 1)
             self.assertTrue((dst_home / ".agents" / "skills" / "good-skill" / "SKILL.md").is_file())
             self.assertFalse((dst_home / ".agents" / "skills" / "bad-skill" / "SKILL.md").exists())
             self.assertTrue(

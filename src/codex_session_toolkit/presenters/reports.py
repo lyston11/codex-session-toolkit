@@ -227,11 +227,18 @@ def print_import_result(result: ImportResult) -> int:
     print(f"Threads table upserted: {'yes' if result.thread_row_upserted else 'no'}")
     if result.target_desktop_model_provider:
         print(f"Desktop model provider: {result.target_desktop_model_provider}")
-    if result.skills_restored_count or result.skills_already_present_count or result.skills_conflict_skipped_count or result.skills_missing_count:
+    if (
+        result.skills_restored_count
+        or result.skills_already_present_count
+        or result.skills_conflict_skipped_count
+        or result.skills_missing_count
+        or result.skills_failed_count
+    ):
         print(f"Skills restored:          {result.skills_restored_count}")
         print(f"Skills already present:   {result.skills_already_present_count}")
         print(f"Skills conflict skipped:  {result.skills_conflict_skipped_count}")
         print(f"Skills missing:           {result.skills_missing_count}")
+        print(f"Skills failed:            {result.skills_failed_count}")
     return 0
 
 
@@ -265,11 +272,13 @@ def print_batch_import_result(result: BatchImportResult) -> int:
         or result.total_skills_already_present
         or result.total_skills_conflict_skipped
         or result.total_skills_missing
+        or result.total_skills_failed
     ):
         print(f"Total skills restored:          {result.total_skills_restored}")
         print(f"Total skills already present:   {result.total_skills_already_present}")
         print(f"Total skills conflict skipped:  {result.total_skills_conflict_skipped}")
         print(f"Total skills missing:           {result.total_skills_missing}")
+        print(f"Total skills failed:            {result.total_skills_failed}")
     if result.skills_restore_report_path:
         print(f"Skills restore report: {result.skills_restore_report_path}")
     return 0

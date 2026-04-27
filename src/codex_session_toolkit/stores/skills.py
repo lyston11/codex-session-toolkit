@@ -332,17 +332,8 @@ def restore_skills(
                 try:
                     _replace_skill_directory(source_dir, target_dir)
                 except OSError as exc:
-                    warnings.append(
-                        OperationWarning(
-                            code="restore_skill_failed",
-                            name=skill.name,
-                            source_root=skill.source_root,
-                            relative_dir=skill.relative_dir,
-                            path=str(target_dir),
-                            related_path=str(source_dir),
-                            detail=str(exc),
-                        )
-                    )
+                    results.append(_failed_restore_result(skill, target_dir))
+                    warnings.append(_restore_skill_failed_warning(skill, target_dir, source_dir, exc))
                     if skills_mode == "strict":
                         raise ToolkitError(f"Failed to restore skill {skill.name}: {exc}") from exc
                     continue
@@ -367,22 +358,13 @@ def restore_skills(
             ))
             continue
 
-        target_dir.parent.mkdir(parents=True, exist_ok=True)
         try:
+            target_dir.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(source_dir, target_dir)
         except OSError as exc:
             shutil.rmtree(target_dir, ignore_errors=True)
-            warnings.append(
-                OperationWarning(
-                    code="restore_skill_failed",
-                    name=skill.name,
-                    source_root=skill.source_root,
-                    relative_dir=skill.relative_dir,
-                    path=str(target_dir),
-                    related_path=str(source_dir),
-                    detail=str(exc),
-                )
-            )
+            results.append(_failed_restore_result(skill, target_dir))
+            warnings.append(_restore_skill_failed_warning(skill, target_dir, source_dir, exc))
             if skills_mode == "strict":
                 raise ToolkitError(f"Failed to restore skill {skill.name}: {exc}") from exc
             continue
@@ -416,6 +398,7 @@ def write_batch_skills_restore_report(
         "already_present": sum(1 for r in results if r.status == "already_present"),
         "conflict_skipped": sum(1 for r in results if r.status == "conflict_skipped"),
         "missing": sum(1 for r in results if r.status == "missing"),
+        "failed": sum(1 for r in results if r.status == "failed"),
         "skills": [
             {
                 "name": r.name,
@@ -594,3 +577,30 @@ def _replace_skill_directory(source_dir: Path, target_dir: Path) -> None:
         raise
     else:
         shutil.rmtree(backup_dir, ignore_errors=True)
+
+
+def _failed_restore_result(skill: SkillDescriptor, target_dir: Path) -> SkillRestoreResult:
+    return SkillRestoreResult(
+        name=skill.name,
+        source_root=skill.source_root,
+        relative_dir=skill.relative_dir,
+        status="failed",
+        target_path=str(target_dir),
+    )
+
+
+def _restore_skill_failed_warning(
+    skill: SkillDescriptor,
+    target_dir: Path,
+    source_dir: Path,
+    exc: OSError,
+) -> OperationWarning:
+    return OperationWarning(
+        code="restore_skill_failed",
+        name=skill.name,
+        source_root=skill.source_root,
+        relative_dir=skill.relative_dir,
+        path=str(target_dir),
+        related_path=str(source_dir),
+        detail=str(exc),
+    )

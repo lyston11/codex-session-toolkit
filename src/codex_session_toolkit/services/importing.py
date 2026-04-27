@@ -258,6 +258,7 @@ def import_session(
         skills_already_present_count = 0
         skills_conflict_skipped_count = 0
         skills_missing_count = 0
+        skills_failed_count = 0
         restore_results = []
 
         if skills_mode != "skip":
@@ -306,6 +307,8 @@ def import_session(
                                     relative_dir=rr.relative_dir,
                                 )
                             )
+                        elif rr.status == "failed":
+                            skills_failed_count += 1
             except ToolkitError:
                 raise
             except OSError as exc:
@@ -340,6 +343,7 @@ def import_session(
             skills_already_present_count=skills_already_present_count,
             skills_conflict_skipped_count=skills_conflict_skipped_count,
             skills_missing_count=skills_missing_count,
+            skills_failed_count=skills_failed_count,
         )
     finally:
         Path(prepared_path).unlink(missing_ok=True)
@@ -403,6 +407,7 @@ def import_desktop_all(
     total_skills_already_present = 0
     total_skills_conflict_skipped = 0
     total_skills_missing = 0
+    total_skills_failed = 0
     report_candidate_path = (
         None
         if skills_mode == "skip"
@@ -433,6 +438,7 @@ def import_desktop_all(
             total_skills_already_present += result.skills_already_present_count
             total_skills_conflict_skipped += result.skills_conflict_skipped_count
             total_skills_missing += result.skills_missing_count
+            total_skills_failed += result.skills_failed_count
             warnings.extend(result.warnings)
         except Exception as exc:
             failed_imports.append((summary.bundle_dir, str(exc)))
@@ -482,6 +488,7 @@ def import_desktop_all(
         total_skills_already_present=total_skills_already_present,
         total_skills_conflict_skipped=total_skills_conflict_skipped,
         total_skills_missing=total_skills_missing,
+        total_skills_failed=total_skills_failed,
         skills_restore_report_path=skills_restore_report_path,
         warnings=warnings,
     )
