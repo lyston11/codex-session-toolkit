@@ -59,6 +59,14 @@ class CodexPaths:
     def legacy_desktop_bundle_root(self) -> Path:
         return self.local_bundle_workspace / "desktop_bundles"
 
+    @property
+    def agents_skills_dir(self) -> Path:
+        return self.home / ".agents" / "skills"
+
+    @property
+    def codex_skills_dir(self) -> Path:
+        return self.code_dir / "skills"
+
     def latest_state_db(self) -> Optional[Path]:
         matches = sorted(self.code_dir.glob("state_*.sqlite"))
         return matches[-1] if matches else None

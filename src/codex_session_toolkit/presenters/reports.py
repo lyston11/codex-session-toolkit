@@ -13,6 +13,7 @@ from ..models import (
     CloneRunResult,
     ExportResult,
     ImportResult,
+    OperationWarning,
     RepairResult,
     SessionSummary,
     ValidationReport,
@@ -45,6 +46,29 @@ def print_bundle_rows(rows: list[BundleSummary]) -> int:
             f"{updated} | {bundle.bundle_dir} | {title[:80]}"
         )
     return 0
+
+
+def _format_operation_warning(warning: OperationWarning) -> str:
+    if warning.code == "local_newer_preserved":
+        return "Warning: local session is newer than imported bundle; preserved local rollout and merged history only."
+    if warning.code == "missing_workspace_directory":
+        return f"Warning: missing workspace directory: {warning.path}"
+    if warning.code == "workspace_parent_used":
+        return (
+            "Warning: exact workspace directory is missing, using existing parent for Desktop registration: "
+            f"{warning.related_path}"
+        )
+    if warning.code == "invalid_skills_manifest":
+        return f"Warning: invalid skills manifest: {warning.path}"
+    if warning.code == "missing_skill":
+        return f"Missing skill: {warning.name} ({warning.source_root}/{warning.relative_dir})"
+    if warning.code == "restore_skills_failed":
+        return f"Warning: failed to restore skills from {warning.path}: {warning.detail}"
+    if warning.code == "skipped_invalid_session_file":
+        return f"Skipped invalid session file: {warning.detail}"
+    if warning.code == "skipped_session_without_id":
+        return f"Skipped session without payload.id: {warning.path}"
+    return warning.detail or warning.code
 
 
 def print_validation_report(report: ValidationReport, *, verbose: bool = False) -> int:
@@ -113,16 +137,25 @@ def print_cleanup_result(result: CleanupResult) -> int:
 
 
 def print_export_result(result: ExportResult) -> int:
+    for warning in result.warnings:
+        print(warning, file=sys.stderr)
     print(f"Exported {result.session_id}")
     print(f"Source machine: {result.source_machine or result.source_machine_key or '-'}")
     print(f"Bundle: {result.bundle_dir}")
     print(f"Session file: {result.relative_path}")
     print(f"Session kind: {result.session_kind or 'unknown'}")
     print(f"Session cwd: {result.session_cwd or 'unknown'}")
+    if result.skills_available_count > 0:
+        print(f"Skills available: {result.skills_available_count}")
+        print(f"Skills bundled:   {result.skills_bundled_count}")
+    if result.skills_manifest_path:
+        print(f"Skills manifest:  {result.skills_manifest_path}")
     return 0
 
 
 def print_batch_export_result(result: BatchExportResult) -> int:
+    for warning in result.warnings:
+        print(warning, file=sys.stderr)
     print(f"Bundle root: {result.bundle_root}")
     print(f"Machine folder: {result.machine_root}")
     print(f"Source machine: {result.source_machine or result.source_machine_key}")
@@ -160,7 +193,7 @@ def print_batch_export_result(result: BatchExportResult) -> int:
 
 def print_import_result(result: ImportResult) -> int:
     for warning in result.warnings:
-        print(warning, file=sys.stderr)
+        print(_format_operation_warning(warning), file=sys.stderr)
     if result.backup_path is not None:
         print(f"Backed up existing session file to {result.backup_path}")
     if result.resolved_from_session_id:
@@ -179,10 +212,18 @@ def print_import_result(result: ImportResult) -> int:
     print(f"Threads table upserted: {'yes' if result.thread_row_upserted else 'no'}")
     if result.target_desktop_model_provider:
         print(f"Desktop model provider: {result.target_desktop_model_provider}")
+    if result.skills_restored_count or result.skills_already_present_count or result.skills_conflict_skipped_count or result.skills_missing_count:
+        print(f"Skills restored:          {result.skills_restored_count}")
+        print(f"Skills already present:   {result.skills_already_present_count}")
+        print(f"Skills conflict skipped:  {result.skills_conflict_skipped_count}")
+        print(f"Skills missing:           {result.skills_missing_count}")
     return 0
 
 
 def print_batch_import_result(result: BatchImportResult) -> int:
+    for warning in result.warnings:
+        prefix = f"{warning.session_id}: " if warning.session_id else ""
+        print(prefix + _format_operation_warning(warning), file=sys.stderr)
     print(f"Bundle root: {result.bundle_root}")
     print(f"Desktop visible: {'yes' if result.desktop_visible else 'no'}")
     print(f"Machine filter: {result.machine_label or result.machine_filter or '全部机器'}")
@@ -204,6 +245,16 @@ def print_batch_import_result(result: BatchImportResult) -> int:
             print(str(failed_dir), file=sys.stderr)
             print(f"  reason: {reason}", file=sys.stderr)
         return 1
+    if (
+        result.total_skills_restored
+        or result.total_skills_already_present
+        or result.total_skills_conflict_skipped
+    ):
+        print(f"Total skills restored:          {result.total_skills_restored}")
+        print(f"Total skills already present:   {result.total_skills_already_present}")
+        print(f"Total skills conflict skipped:  {result.total_skills_conflict_skipped}")
+    if result.skills_restore_report_path:
+        print(f"Skills restore report: {result.skills_restore_report_path}")
     return 0
 
 
@@ -230,5 +281,5 @@ def print_repair_result(result: RepairResult) -> int:
     if result.warnings:
         print("Warnings:", file=sys.stderr)
         for warning in result.warnings:
-            print(warning, file=sys.stderr)
+            print(_format_operation_warning(warning), file=sys.stderr)
     return 0

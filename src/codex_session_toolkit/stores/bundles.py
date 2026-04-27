@@ -1,4 +1,6 @@
-"""Compatibility facade for bundle repository helpers."""
+"""Legacy compatibility facade for bundle helpers."""
+
+from __future__ import annotations
 
 from .bundle_layout import (
     CANONICAL_EXPORT_GROUPS,
