@@ -8,6 +8,12 @@ from typing import TYPE_CHECKING, Optional
 from ..errors import ToolkitError
 from ..services.browse import get_project_session_summaries, get_session_summaries
 from ..support import detect_machine_key, project_label_from_path, project_label_to_key
+from .navigation_state import (
+    clamp_selected_index,
+    cycle_option_key,
+    move_wrapped_index,
+    selection_window,
+)
 from .terminal import Ansi, ellipsize_middle, glyphs, read_key, render_box, style_text
 
 if TYPE_CHECKING:
@@ -41,7 +47,7 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
             app._show_detail_panel("读取项目会话失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
             return
 
-        selected_index = max(0, min(selected_index, len(entries) - 1)) if entries else 0
+        selected_index = clamp_selected_index(selected_index, len(entries))
         subtitle = "↑/↓ 选择 · Enter 打开会话详情 · x 导出该项目全部会话 · / 搜索 · p 修改路径 · q 返回"
         box_width = app._print_branded_header("按项目路径查看并导出会话", subtitle)
 
@@ -60,9 +66,7 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
         if not entries:
             list_lines.append("这个项目路径下没有匹配会话。按 p 重新输入路径，或按 q 返回。")
         else:
-            start = max(0, selected_index - 5)
-            start = min(start, max(0, len(entries) - 10))
-            end = min(len(entries), start + 10)
+            start, end = selection_window(len(entries), selected_index, 10)
             for idx in range(start, end):
                 summary = entries[idx]
                 preview = summary.preview or summary.path.name
@@ -97,11 +101,11 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
 
         if key in ("UP", "k", "K"):
             if entries:
-                selected_index = (selected_index - 1) % len(entries)
+                selected_index = move_wrapped_index(selected_index, len(entries), -1)
             continue
         if key in ("DOWN", "j", "J"):
             if entries:
-                selected_index = (selected_index + 1) % len(entries)
+                selected_index = move_wrapped_index(selected_index, len(entries), 1)
             continue
 
         if key == "ENTER":
@@ -180,7 +184,7 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
             app._show_detail_panel("读取会话失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
             return None
 
-        selected_index = max(0, min(selected_index, len(entries) - 1)) if entries else 0
+        selected_index = clamp_selected_index(selected_index, len(entries))
         subtitle = (
             "↑/↓ 选择 · Enter 打开导出面板 · / 搜索 · e 直接导出 · d 查看详情 · q 返回"
             if mode == "view"
@@ -204,9 +208,7 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
         if not entries:
             list_lines.append("没有匹配会话。按 / 修改搜索词，或按 q 返回。")
         else:
-            start = max(0, selected_index - 5)
-            start = min(start, max(0, len(entries) - 10))
-            end = min(len(entries), start + 10)
+            start, end = selection_window(len(entries), selected_index, 10)
             for idx in range(start, end):
                 summary = entries[idx]
                 preview = summary.preview or summary.path.name
@@ -242,11 +244,11 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
 
         if key in ("UP", "k", "K"):
             if entries:
-                selected_index = (selected_index - 1) % len(entries)
+                selected_index = move_wrapped_index(selected_index, len(entries), -1)
             continue
         if key in ("DOWN", "j", "J"):
             if entries:
-                selected_index = (selected_index + 1) % len(entries)
+                selected_index = move_wrapped_index(selected_index, len(entries), 1)
             continue
 
         if key == "ENTER":
@@ -311,7 +313,7 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
             app._show_detail_panel("读取 Bundle 失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
             return None
 
-        selected_index = max(0, min(selected_index, len(entries) - 1)) if entries else 0
+        selected_index = clamp_selected_index(selected_index, len(entries))
         subtitle = (
             "↑/↓ 选择 · Enter 打开导入面板 · / 搜索 · s 切换导出方式 · m 切换机器 · "
             "l 切换历史视图 · i 导入 · v 自动建目录 · d 查看详情 · q 返回"
@@ -339,9 +341,7 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
         if not entries:
             list_lines.append("没有匹配 Bundle。按 / 修改搜索词，按 s/m/l 切换视图，或按 q 返回。")
         else:
-            start = max(0, selected_index - 5)
-            start = min(start, max(0, len(entries) - 10))
-            end = min(len(entries), start + 10)
+            start, end = selection_window(len(entries), selected_index, 10)
             for idx in range(start, end):
                 bundle = entries[idx]
                 title_text = bundle.thread_name or "（无标题）"
@@ -373,11 +373,11 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
 
         if key in ("UP", "k", "K"):
             if entries:
-                selected_index = (selected_index - 1) % len(entries)
+                selected_index = move_wrapped_index(selected_index, len(entries), -1)
             continue
         if key in ("DOWN", "j", "J"):
             if entries:
-                selected_index = (selected_index + 1) % len(entries)
+                selected_index = move_wrapped_index(selected_index, len(entries), 1)
             continue
 
         if key == "ENTER":
@@ -406,21 +406,11 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
             selected_index = 0
             continue
         if key_str == "s":
-            current_index = 0
-            for idx, (candidate_key, _) in enumerate(snapshot.export_group_options):
-                if candidate_key == export_group_filter:
-                    current_index = idx
-                    break
-            export_group_filter = snapshot.export_group_options[(current_index + 1) % len(snapshot.export_group_options)][0]
+            export_group_filter = cycle_option_key(snapshot.export_group_options, export_group_filter)
             selected_index = 0
             continue
         if key_str == "m":
-            current_index = 0
-            for idx, (candidate_key, _) in enumerate(snapshot.machine_options):
-                if candidate_key == machine_filter:
-                    current_index = idx
-                    break
-            machine_filter = snapshot.machine_options[(current_index + 1) % len(snapshot.machine_options)][0]
+            machine_filter = cycle_option_key(snapshot.machine_options, machine_filter)
             selected_index = 0
             continue
         if key_str == "l":
@@ -465,7 +455,7 @@ def select_batch_bundle_import_scope(app: "ToolkitTuiApp"):
             app._show_detail_panel("读取 Bundle 失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
             return None
 
-        machine_selected_index = max(0, min(machine_selected_index, len(machine_options) - 1)) if machine_options else 0
+        machine_selected_index = clamp_selected_index(machine_selected_index, len(machine_options))
         box_width = app._print_branded_header(
             "选择设备文件夹",
             "↑/↓ 选择设备 · Enter 进入该设备的分类文件夹 · d 查看摘要 · q 返回",
@@ -484,9 +474,7 @@ def select_batch_bundle_import_scope(app: "ToolkitTuiApp"):
         if not machine_options:
             machine_lines.append("当前没有可用的设备文件夹。")
         else:
-            start = max(0, machine_selected_index - 5)
-            start = min(start, max(0, len(machine_options) - 10))
-            end = min(len(machine_options), start + 10)
+            start, end = selection_window(len(machine_options), machine_selected_index, 10)
             for idx in range(start, end):
                 option = machine_options[idx]
                 export_groups = " / ".join(option.export_groups) or "（无分类）"
@@ -508,11 +496,11 @@ def select_batch_bundle_import_scope(app: "ToolkitTuiApp"):
 
         if key in ("UP", "k", "K"):
             if machine_options:
-                machine_selected_index = (machine_selected_index - 1) % len(machine_options)
+                machine_selected_index = move_wrapped_index(machine_selected_index, len(machine_options), -1)
             continue
         if key in ("DOWN", "j", "J"):
             if machine_options:
-                machine_selected_index = (machine_selected_index + 1) % len(machine_options)
+                machine_selected_index = move_wrapped_index(machine_selected_index, len(machine_options), 1)
             continue
 
         key_str = str(key).strip().lower()
@@ -541,7 +529,7 @@ def select_batch_bundle_import_scope(app: "ToolkitTuiApp"):
         category_selected_index = 0
         while True:
             category_options = app._bundle_category_folder_options(selected_machine.machine_key)
-            category_selected_index = max(0, min(category_selected_index, len(category_options) - 1)) if category_options else 0
+            category_selected_index = clamp_selected_index(category_selected_index, len(category_options))
             box_width = app._print_branded_header(
                 "选择分类文件夹",
                 "↑/↓ 选择分类 · Enter 导入该分类文件夹 · d 查看摘要 · q 返回上一步",
@@ -560,9 +548,7 @@ def select_batch_bundle_import_scope(app: "ToolkitTuiApp"):
             if not category_options:
                 category_lines.append("这个设备文件夹下没有可导入的分类。按 q 返回。")
             else:
-                start = max(0, category_selected_index - 5)
-                start = min(start, max(0, len(category_options) - 10))
-                end = min(len(category_options), start + 10)
+                start, end = selection_window(len(category_options), category_selected_index, 10)
                 for idx in range(start, end):
                     option = category_options[idx]
                     line = (
@@ -583,11 +569,11 @@ def select_batch_bundle_import_scope(app: "ToolkitTuiApp"):
 
             if key in ("UP", "k", "K"):
                 if category_options:
-                    category_selected_index = (category_selected_index - 1) % len(category_options)
+                    category_selected_index = move_wrapped_index(category_selected_index, len(category_options), -1)
                 continue
             if key in ("DOWN", "j", "J"):
                 if category_options:
-                    category_selected_index = (category_selected_index + 1) % len(category_options)
+                    category_selected_index = move_wrapped_index(category_selected_index, len(category_options), 1)
                 continue
 
             key_str = str(key).strip().lower()
