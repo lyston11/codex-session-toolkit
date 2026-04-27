@@ -37,6 +37,7 @@ from .browser_flows import open_bundle_browser as _open_bundle_browser_flow
 from .browser_flows import open_project_session_browser as _open_project_session_browser_flow
 from .browser_flows import open_session_browser as _open_session_browser_flow
 from .browser_flows import select_batch_bundle_import_scope as _select_batch_bundle_import_scope_flow
+from .navigation_state import apply_home_key, apply_section_key, clamp_selected_index
 from .prompt_flows import confirm_dangerous_action as _confirm_dangerous_action_flow
 from .prompt_flows import confirm_toggle as _confirm_toggle_flow
 from .prompt_flows import prompt_choice as _prompt_choice_flow
@@ -256,7 +257,6 @@ class ToolkitTuiApp:
         self.paths = CodexPaths()
         self.menu_actions = build_tui_menu_actions()
         self.menu_sections = build_tui_menu_sections()
-        self.hotkey_to_index = {menu_action.hotkey: idx for idx, menu_action in enumerate(self.menu_actions)}
 
     def _cli_preview(self, args: Sequence[str]) -> str:
         cmd = self.context.entry_command
@@ -290,14 +290,6 @@ class ToolkitTuiApp:
             else:
                 tabs.append(style_text(label, Ansi.DIM))
         return ellipsize_middle("  ".join(tabs), width)
-
-    def _action_window(self, total_count: int, selected_offset: int, max_visible: int) -> Tuple[int, int]:
-        if total_count <= 0:
-            return 0, 0
-        max_visible = max(1, min(max_visible, total_count))
-        start = max(0, selected_offset - max_visible // 2)
-        start = min(start, max(0, total_count - max_visible))
-        return start, min(total_count, start + max_visible)
 
     def _actions_for_section(self, section_id: str) -> List[Tuple[int, TuiMenuAction]]:
         return [
@@ -614,34 +606,18 @@ class ToolkitTuiApp:
                     continue
 
                 if current_view == "home":
-                    if key in ("UP", "k", "K"):
-                        selected_section = (selected_section - 1) % len(self.menu_sections)
-                        continue
-                    if key in ("DOWN", "j", "J"):
-                        selected_section = (selected_section + 1) % len(self.menu_sections)
-                        continue
-                    if key in ("LEFT", "PAGE_UP"):
-                        selected_section = (selected_section - 1) % len(self.menu_sections)
-                        continue
-                    if key in ("RIGHT", "PAGE_DOWN"):
-                        selected_section = (selected_section + 1) % len(self.menu_sections)
-                        continue
-
-                    if key == "ENTER":
-                        current_view = "section"
-                        continue
-
-                    key_str = str(key).strip().lower()
-                    if key_str in {"q", "quit", "exit", "0"}:
+                    transition = apply_home_key(
+                        key,
+                        selected_section_index=selected_section,
+                        section_count=len(self.menu_sections),
+                    )
+                    selected_section = transition.selected_section_index
+                    current_view = transition.current_view
+                    if transition.exit_requested:
                         return 0
-                    if key_str in {"h", "help", "?"}:
+                    if transition.show_help:
                         clear_screen()
                         self._tui_help_text()
-                        continue
-                    if key_str in {"1", "2", "3"}:
-                        selected_section = min(len(self.menu_sections) - 1, int(key_str) - 1)
-                        current_view = "section"
-                        continue
                     continue
 
                 current_section = self.menu_sections[selected_section]
@@ -650,48 +626,44 @@ class ToolkitTuiApp:
                     current_view = "home"
                     continue
 
-                current_offset = max(0, min(section_action_offsets[current_section.section_id], len(section_actions) - 1))
+                current_offset = clamp_selected_index(
+                    section_action_offsets[current_section.section_id],
+                    len(section_actions),
+                )
                 section_action_offsets[current_section.section_id] = current_offset
 
-                if key in ("UP", "k", "K"):
-                    section_action_offsets[current_section.section_id] = (current_offset - 1) % len(section_actions)
-                    continue
-                if key in ("DOWN", "j", "J"):
-                    section_action_offsets[current_section.section_id] = (current_offset + 1) % len(section_actions)
-                    continue
-                if key in ("LEFT", "PAGE_UP"):
-                    if key == "LEFT":
-                        current_view = "home"
-                        continue
-                    selected_section = (selected_section - 1) % len(self.menu_sections)
-                    continue
-                if key in ("RIGHT", "PAGE_DOWN"):
-                    selected_section = (selected_section + 1) % len(self.menu_sections)
-                    continue
-
                 selected_action = section_actions[current_offset][1]
-                if key == "ENTER":
-                    self._execute_menu_action(selected_action)
-                    continue
+                transition = apply_section_key(
+                    key,
+                    selected_section_index=selected_section,
+                    section_count=len(self.menu_sections),
+                    action_offset=current_offset,
+                    action_count=len(section_actions),
+                )
+                selected_section = transition.selected_section_index
+                current_view = transition.current_view
+                section_action_offsets[current_section.section_id] = transition.action_offset
 
-                key_str = str(key).strip().lower()
-                if key_str in {"q", "esc", "b", "back"} or key == "ESC":
-                    current_view = "home"
-                    continue
-                if key_str == "0":
+                if transition.exit_requested:
                     return 0
-                if key_str in {"h", "help", "?"}:
+                if transition.show_help:
                     clear_screen()
                     self._tui_help_text()
                     continue
-
-                matched_action = None
-                for _, menu_action in section_actions:
-                    if menu_action.hotkey == key_str:
-                        matched_action = menu_action
-                        break
-                if matched_action is not None:
-                    self._execute_menu_action(matched_action)
+                if transition.execute_selected:
+                    self._execute_menu_action(selected_action)
+                    continue
+                if transition.matched_hotkey:
+                    matched_action = next(
+                        (
+                            menu_action
+                            for _, menu_action in section_actions
+                            if menu_action.hotkey == transition.matched_hotkey
+                        ),
+                        None,
+                    )
+                    if matched_action is not None:
+                        self._execute_menu_action(matched_action)
         finally:
             sys.stdout.write("\033[?25h\033[?1049l")
             sys.stdout.flush()

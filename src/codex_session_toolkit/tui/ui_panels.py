@@ -6,6 +6,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
+from .navigation_state import selection_window
 from .terminal import (
     Ansi,
     align_line,
@@ -326,7 +327,7 @@ def render_section_page(app: "ToolkitTuiApp", section_index: int, action_offset:
     section_lines = [style_text(menu_section.title, Ansi.BOLD)]
     reserved_rows = len(output_lines) + 2
     max_visible_actions = max(3, screen_height - reserved_rows - 4)
-    start, end = app._action_window(len(section_actions), action_offset, max_visible_actions)
+    start, end = selection_window(len(section_actions), action_offset, max_visible_actions)
     if start > 0:
         section_lines.append(style_text("... 上方还有更多动作 ...", Ansi.DIM))
     for offset in range(start, end):
