@@ -1434,6 +1434,57 @@ class CoreWorkflowTests(unittest.TestCase):
                 self.assertEqual(print_batch_import_result(result), 0)
             self.assertIn("Total skills restored:          0", stdout.getvalue())
             self.assertIn("Total skills already present:   1", stdout.getvalue())
+            self.assertIn("Total skills missing:           0", stdout.getvalue())
+
+    def test_import_desktop_all_aggregates_missing_skill_totals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_config(src_home, "src-provider")
+            write_config(dst_home, "dst-provider")
+            write_state_file(dst_home)
+            create_threads_db(dst_home)
+
+            missing_skill_path = src_home / ".agents" / "skills" / "missing-skill" / "SKILL.md"
+            session_id = "aaa00000-0000-7000-8000-000000000022"
+            write_session_with_skills(
+                src_home,
+                session_id,
+                provider="src-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                skill_entries=[
+                    {"name": "missing-skill", "file": str(missing_skill_path)},
+                ],
+            )
+            write_history(src_home, session_id, "desktop batch skills missing")
+
+            src_paths = CodexPaths(home=src_home)
+            dst_paths = CodexPaths(home=dst_home)
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                export_active_desktop_all(src_paths)
+
+            with pushd(workspace):
+                result = import_desktop_all(dst_paths)
+
+            self.assertEqual(result.total_skills_restored, 0)
+            self.assertEqual(result.total_skills_already_present, 0)
+            self.assertEqual(result.total_skills_conflict_skipped, 0)
+            self.assertEqual(result.total_skills_missing, 1)
+            self.assertTrue(any(warning.code == "missing_skill" and warning.session_id == session_id for warning in result.warnings))
+
+            assert result.skills_restore_report_path is not None
+            report_data = json.loads(result.skills_restore_report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report_data["sessions"][0]["missing"], 1)
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                self.assertEqual(print_batch_import_result(result), 0)
+            self.assertIn("Total skills missing:           1", stdout.getvalue())
 
     def test_import_desktop_all_uses_distinct_skills_restore_report_per_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

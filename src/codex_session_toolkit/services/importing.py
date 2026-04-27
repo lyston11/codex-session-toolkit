@@ -400,6 +400,7 @@ def import_desktop_all(
     total_skills_restored = 0
     total_skills_already_present = 0
     total_skills_conflict_skipped = 0
+    total_skills_missing = 0
     report_candidate_path = (
         None
         if skills_mode == "skip"
@@ -429,6 +430,7 @@ def import_desktop_all(
             total_skills_restored += result.skills_restored_count
             total_skills_already_present += result.skills_already_present_count
             total_skills_conflict_skipped += result.skills_conflict_skipped_count
+            total_skills_missing += result.skills_missing_count
             warnings.extend(result.warnings)
         except Exception as exc:
             failed_imports.append((summary.bundle_dir, str(exc)))
@@ -477,6 +479,7 @@ def import_desktop_all(
         total_skills_restored=total_skills_restored,
         total_skills_already_present=total_skills_already_present,
         total_skills_conflict_skipped=total_skills_conflict_skipped,
+        total_skills_missing=total_skills_missing,
         skills_restore_report_path=skills_restore_report_path,
         warnings=warnings,
     )

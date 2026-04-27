@@ -249,10 +249,12 @@ def print_batch_import_result(result: BatchImportResult) -> int:
         result.total_skills_restored
         or result.total_skills_already_present
         or result.total_skills_conflict_skipped
+        or result.total_skills_missing
     ):
         print(f"Total skills restored:          {result.total_skills_restored}")
         print(f"Total skills already present:   {result.total_skills_already_present}")
         print(f"Total skills conflict skipped:  {result.total_skills_conflict_skipped}")
+        print(f"Total skills missing:           {result.total_skills_missing}")
     if result.skills_restore_report_path:
         print(f"Skills restore report: {result.skills_restore_report_path}")
     return 0
