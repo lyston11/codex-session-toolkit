@@ -1,4 +1,9 @@
-"""Legacy compatibility facade with a smaller stable public surface."""
+"""Legacy compatibility facade with a smaller stable public surface.
+
+Stable programmatic imports should come from ``codex_session_toolkit.api``.
+This module remains forwarding-only for historical callers and should not
+gain new business logic or new stable exports.
+"""
 
 from __future__ import annotations
 
