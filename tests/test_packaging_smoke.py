@@ -13,6 +13,8 @@ if str(SRC_DIR) not in sys.path:
 
 from codex_session_toolkit import APP_COMMAND, CodexPaths, ToolkitError, __version__, build_app_context, resolve_target_model_provider, run_cli  # noqa: E402
 from codex_session_toolkit import core as core_api  # noqa: E402
+import codex_session_toolkit.terminal_ui as terminal_ui_compat  # noqa: E402
+import codex_session_toolkit.tui_app as tui_app_compat  # noqa: E402
 from codex_session_toolkit.cli import DEFAULT_MODEL_PROVIDER, create_arg_parser  # noqa: E402
 from codex_session_toolkit.tui_app import ToolkitAppContext  # noqa: E402
 from codex_session_toolkit.tui.app import build_tui_menu_actions, build_tui_menu_sections  # noqa: E402
@@ -45,6 +47,13 @@ class PackagingSmokeTests(unittest.TestCase):
             config_path="/tmp/demo-config.toml",
         )
         self.assertEqual(context.entry_command, APP_COMMAND)
+
+    def test_tui_compat_wrappers_expose_explicit_lazy_exports(self) -> None:
+        self.assertIn("ToolkitAppContext", tui_app_compat.__all__)
+        self.assertIn("run_tui", tui_app_compat.__all__)
+        self.assertIs(ToolkitAppContext, tui_app_compat.ToolkitAppContext)
+        self.assertIn("render_box", terminal_ui_compat.__all__)
+        self.assertIs(LOGO_FONT_BANNER, terminal_ui_compat.LOGO_FONT_BANNER)
 
     def test_tui_main_sections_are_grouped_by_domain(self) -> None:
         section_ids = [section.section_id for section in build_tui_menu_sections()]

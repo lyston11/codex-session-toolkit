@@ -19,6 +19,7 @@ from .bundle_layout import (
     infer_bundle_project_metadata,
     source_group_allows_export_group,
 )
+from .skills import SKILLS_MANIFEST_FILENAME, read_skills_manifest
 
 
 def iter_bundle_directories_under_root(bundle_root: Path) -> List[Path]:
@@ -100,6 +101,7 @@ def collect_bundle_summaries(
             export_group,
             project_batch_cache,
         )
+        has_skills_manifest, bundled_skill_count, used_skill_count = _load_bundle_skills_summary(bundle_dir)
 
         summary = BundleSummary(
             source_group=source_group,
@@ -118,6 +120,9 @@ def collect_bundle_summaries(
             project_key=project_key,
             project_label=project_label,
             project_path=project_path,
+            has_skills_manifest=has_skills_manifest,
+            bundled_skill_count=bundled_skill_count,
+            used_skill_count=used_skill_count,
         )
         if pattern:
             combined = " ".join(
@@ -145,6 +150,18 @@ def collect_bundle_summaries(
             break
 
     return summaries
+
+
+def _load_bundle_skills_summary(bundle_dir: Path) -> tuple[bool, int, int]:
+    skills_manifest_path = bundle_dir / SKILLS_MANIFEST_FILENAME
+    if not skills_manifest_path.is_file():
+        return False, 0, 0
+
+    manifest = read_skills_manifest(bundle_dir)
+    if manifest is None:
+        return True, 0, 0
+
+    return True, manifest.bundled_skill_count, manifest.used_skill_count
 
 
 def collect_known_bundle_summaries(

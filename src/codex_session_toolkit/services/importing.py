@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..errors import ToolkitError
-from ..models import BatchImportResult, ImportResult
+from ..models import BatchImportResult, ImportResult, OperationWarning
 from ..paths import CodexPaths
 from ..services.provider import detect_provider
 from ..stores.bundle_layout import (
@@ -23,6 +23,7 @@ from ..stores.bundle_repository import (
 )
 from ..stores.bundle_scanner import (
     collect_bundle_summaries,
+    collect_known_bundle_summaries,
     latest_distinct_bundle_summaries,
 )
 from ..stores.desktop_state import ensure_desktop_workspace_root, prepare_session_for_import, upsert_threads_table
@@ -45,6 +46,12 @@ from ..validation import (
     validate_relative_path,
     validate_session_id,
 )
+from ..stores.skills import (
+    SKILLS_MANIFEST_FILENAME,
+    read_skills_manifest,
+    restore_skills,
+    write_batch_skills_restore_report,
+)
 
 
 def import_session(
@@ -57,6 +64,8 @@ def import_session(
     export_group_filter: str = "",
     desktop_visible: bool = False,
     session_cwd_override: str = "",
+    skills_mode: str = "best-effort",
+    skills_restore_report_path: Optional[Path] = None,
 ) -> ImportResult:
     input_path = Path(input_value).expanduser()
     resolved_from_session_id = False
@@ -109,7 +118,7 @@ def import_session(
     auto_desktop_compat = session_kind == "cli" and desktop_env
 
     prepared_fd, prepared_path = tempfile.mkstemp(prefix="codex-import-session.")
-    warnings: list[str] = []
+    warnings: list[OperationWarning] = []
     created_workspace_dir = False
     backup_path = None
     rollout_action = "created"
@@ -150,9 +159,7 @@ def import_session(
             elif existing_epoch and existing_epoch >= imported_epoch:
                 rollout_action = "preserved_newer_local"
                 effective_updated_at = existing_updated_at
-                warnings.append(
-                    "Warning: local session is newer than imported bundle; preserved local rollout and merged history only."
-                )
+                warnings.append(OperationWarning(code="local_newer_preserved", session_id=session_id))
             else:
                 backup_path = target_session.with_name(target_session.name + f".bak.{int(time.time())}")
                 shutil.copy2(target_session, backup_path)
@@ -178,7 +185,13 @@ def import_session(
                 Path(session_cwd).mkdir(parents=True, exist_ok=True)
                 created_workspace_dir = True
             else:
-                warnings.append(f"Warning: missing workspace directory: {session_cwd}")
+                warnings.append(
+                    OperationWarning(
+                        code="missing_workspace_directory",
+                        session_id=session_id,
+                        path=session_cwd,
+                    )
+                )
 
         paths.history_file.parent.mkdir(parents=True, exist_ok=True)
         paths.history_file.touch(exist_ok=True)
@@ -213,8 +226,12 @@ def import_session(
                 desktop_registration_target = nearest_existing_parent(session_cwd)
                 if desktop_registration_target and desktop_registration_target != session_cwd:
                     warnings.append(
-                        "Warning: exact workspace directory is missing, using existing parent for Desktop registration: "
-                        f"{desktop_registration_target}"
+                        OperationWarning(
+                            code="workspace_parent_used",
+                            session_id=session_id,
+                            path=session_cwd,
+                            related_path=desktop_registration_target,
+                        )
                     )
         if desktop_registration_target:
             desktop_registered = ensure_desktop_workspace_root(desktop_registration_target, paths.state_file)
@@ -236,6 +253,70 @@ def import_session(
             )
         )
 
+        skills_restored_count = 0
+        skills_already_present_count = 0
+        skills_conflict_skipped_count = 0
+        skills_missing_count = 0
+        restore_results = []
+
+        if skills_mode != "skip":
+            try:
+                skills_manifest_file = bundle_dir / SKILLS_MANIFEST_FILENAME
+                skills_manifest = read_skills_manifest(bundle_dir)
+                if skills_manifest is None:
+                    if skills_manifest_file.is_file():
+                        if skills_mode == "strict":
+                            raise ToolkitError(f"Invalid skills manifest: {skills_manifest_file}")
+                        warnings.append(
+                            OperationWarning(
+                                code="invalid_skills_manifest",
+                                session_id=session_id,
+                                path=str(skills_manifest_file),
+                            )
+                        )
+                elif skills_manifest.skills:
+                    restore_results = restore_skills(
+                        skills_manifest, bundle_dir, paths.home,
+                        skills_mode=skills_mode,
+                    )
+                    if skills_restore_report_path is not None and restore_results:
+                        write_batch_skills_restore_report(
+                            skills_restore_report_path,
+                            session_id,
+                            restore_results,
+                        )
+                    for rr in restore_results:
+                        if rr.status == "restored":
+                            skills_restored_count += 1
+                        elif rr.status == "already_present":
+                            skills_already_present_count += 1
+                        elif rr.status == "conflict_skipped":
+                            skills_conflict_skipped_count += 1
+                        elif rr.status == "missing":
+                            skills_missing_count += 1
+                            warnings.append(
+                                OperationWarning(
+                                    code="missing_skill",
+                                    session_id=session_id,
+                                    name=rr.name,
+                                    source_root=rr.source_root,
+                                    relative_dir=rr.relative_dir,
+                                )
+                            )
+            except ToolkitError:
+                raise
+            except Exception as exc:
+                if skills_mode == "strict":
+                    raise ToolkitError(f"Failed to restore skills from {bundle_dir}: {exc}") from exc
+                warnings.append(
+                    OperationWarning(
+                        code="restore_skills_failed",
+                        session_id=session_id,
+                        path=str(bundle_dir),
+                        detail=str(exc),
+                    )
+                )
+
         return ImportResult(
             session_id=session_id,
             bundle_dir=bundle_dir,
@@ -252,6 +333,10 @@ def import_session(
             created_workspace_dir=created_workspace_dir,
             backup_path=backup_path,
             warnings=warnings,
+            skills_restored_count=skills_restored_count,
+            skills_already_present_count=skills_already_present_count,
+            skills_conflict_skipped_count=skills_conflict_skipped_count,
+            skills_missing_count=skills_missing_count,
         )
     finally:
         Path(prepared_path).unlink(missing_ok=True)
@@ -267,7 +352,9 @@ def import_desktop_all(
     target_project_path: str = "",
     latest_only: bool = False,
     desktop_visible: bool = False,
+    skills_mode: str = "best-effort",
 ) -> BatchImportResult:
+    default_bundle_root = normalize_bundle_root(paths, None, paths.default_desktop_bundle_root)
     bundle_root = normalize_bundle_root(paths, bundle_root, paths.default_desktop_bundle_root)
     if not bundle_root.is_dir():
         raise ToolkitError(f"Missing bundle root: {bundle_root}")
@@ -282,13 +369,22 @@ def import_desktop_all(
     if normalized_target_project_path and not normalized_project_filter:
         raise ToolkitError("Target project path requires a project filter.")
 
-    bundle_summaries = collect_bundle_summaries(
-        bundle_root,
-        source_group="all",
-        machine_filter=machine_filter,
-        export_group_filter=resolved_export_group_filter,
-        limit=None,
-    )
+    if bundle_root == default_bundle_root:
+        bundle_summaries = collect_known_bundle_summaries(
+            paths,
+            source_group="all",
+            machine_filter=machine_filter,
+            export_group_filter=resolved_export_group_filter,
+            limit=None,
+        )
+    else:
+        bundle_summaries = collect_bundle_summaries(
+            bundle_root,
+            source_group="all",
+            machine_filter=machine_filter,
+            export_group_filter=resolved_export_group_filter,
+            limit=None,
+        )
     if normalized_project_filter:
         bundle_summaries = [summary for summary in bundle_summaries if summary.project_key == normalized_project_filter]
     if latest_only:
@@ -300,6 +396,12 @@ def import_desktop_all(
     bundle_dirs = [summary.bundle_dir for summary in bundle_summaries]
     success_dirs: list[Path] = []
     failed_imports: list[tuple[Path, str]] = []
+    total_skills_restored = 0
+    total_skills_already_present = 0
+    total_skills_conflict_skipped = 0
+    report_candidate_path = None if skills_mode == "skip" else bundle_root / f"_skills_restore_report.{int(time.time())}.json"
+    skills_restore_report_path = None
+    warnings: list[OperationWarning] = []
     for summary in bundle_summaries:
         try:
             session_cwd_override = ""
@@ -309,16 +411,25 @@ def import_desktop_all(
                     summary.project_path,
                     normalized_target_project_path,
                 )
-            import_session(
+            result = import_session(
                 paths,
                 str(summary.bundle_dir),
                 bundle_root=bundle_root,
                 desktop_visible=desktop_visible,
                 session_cwd_override=session_cwd_override,
+                skills_mode=skills_mode,
+                skills_restore_report_path=report_candidate_path,
             )
             success_dirs.append(summary.bundle_dir)
+            total_skills_restored += result.skills_restored_count
+            total_skills_already_present += result.skills_already_present_count
+            total_skills_conflict_skipped += result.skills_conflict_skipped_count
+            warnings.extend(result.warnings)
         except Exception as exc:
             failed_imports.append((summary.bundle_dir, str(exc)))
+
+    if report_candidate_path is not None and report_candidate_path.is_file():
+        skills_restore_report_path = report_candidate_path
 
     machine_label = ""
     if machine_filter:
@@ -358,4 +469,9 @@ def import_desktop_all(
         project_label=project_label,
         project_source_path=project_source_path,
         target_project_path=normalized_target_project_path,
+        total_skills_restored=total_skills_restored,
+        total_skills_already_present=total_skills_already_present,
+        total_skills_conflict_skipped=total_skills_conflict_skipped,
+        skills_restore_report_path=skills_restore_report_path,
+        warnings=warnings,
     )

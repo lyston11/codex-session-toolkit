@@ -7,7 +7,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 
 from ..errors import ToolkitError
-from ..models import RepairResult
+from ..models import OperationWarning, RepairResult
 from ..paths import CodexPaths
 from ..services.provider import detect_provider
 from ..stores.desktop_state import (
@@ -37,7 +37,7 @@ def repair_desktop(
     provider = detect_provider(paths, explicit=target_provider)
     backup_root = paths.code_dir / "repair_backups" / f"visibility-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     backed_up: set[str] = set()
-    warnings: list[str] = []
+    warnings: list[OperationWarning] = []
 
     history_first_messages = first_history_messages(paths.history_file)
     existing_index = load_existing_index(paths.index_file)
@@ -54,7 +54,13 @@ def repair_desktop(
         try:
             parsed_session = parse_session_file(session_file)
         except ToolkitError as exc:
-            warnings.append(f"Skipped invalid session file: {exc}")
+            warnings.append(
+                OperationWarning(
+                    code="skipped_invalid_session_file",
+                    path=str(session_file),
+                    detail=str(exc),
+                )
+            )
             skipped_sessions.append(str(session_file))
             continue
 
@@ -63,7 +69,12 @@ def repair_desktop(
 
         session_id = session_meta.get("id")
         if not isinstance(session_id, str) or not session_id:
-            warnings.append(f"Skipped session without payload.id: {session_file}")
+            warnings.append(
+                OperationWarning(
+                    code="skipped_session_without_id",
+                    path=str(session_file),
+                )
+            )
             skipped_sessions.append(str(session_file))
             continue
 
