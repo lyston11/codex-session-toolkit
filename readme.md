@@ -256,6 +256,32 @@ make check
 - `make install-dev` 会先准备本地 `.venv`，再把开发工具装进这个隔离环境；这一步通常需要联网拉取诸如 Ruff 这样的开发依赖
 - `make run/test/lint/ci` 会优先使用本地 `.venv` 里的解释器；如果你还没创建 `.venv`，再退回系统 Python
 
+## Python API 与兼容层
+
+如果你要把它当成 Python 包来调用，当前建议按下面的边界使用：
+
+| 入口 | 定位 | 新代码建议 |
+|---|---|---|
+| `codex_session_toolkit` | 最小稳定顶层入口；暴露 `CodexPaths`、`ToolkitError`、`build_app_context`、`run_cli`、版本信息 | 推荐 |
+| `codex_session_toolkit.api` | 稳定高层 API；暴露 service result、presenter、核心工作流函数 | 推荐 |
+| `codex_session_toolkit.core` | 旧兼容 facade；保留 lazy re-export 以兼容历史调用方 | 仅兼容旧代码，不建议继续扩张依赖 |
+| `codex_session_toolkit.tui.app` / `codex_session_toolkit.tui.terminal` | 当前正式 TUI 模块 | 推荐 |
+| `codex_session_toolkit.tui_app` / `codex_session_toolkit.terminal_ui` | 旧 TUI 兼容 wrapper；只做显式 lazy 转发 | 仅兼容旧代码，不建议新代码继续引用 |
+
+推荐导入方式：
+
+```python
+from codex_session_toolkit import CodexPaths, run_cli
+from codex_session_toolkit.api import export_session, import_desktop_all, repair_desktop
+from codex_session_toolkit.tui.app import ToolkitTuiApp
+```
+
+兼容层策略：
+
+- `core.py`、`tui_app.py`、`terminal_ui.py` 仍会保留一段时间，用来承接旧调用方
+- 新代码应直接依赖 `api.py`、`tui.app`、`tui.terminal`
+- 稳定入口以测试覆盖的导出面为准；兼容层只保留必要转发，不再继续承载新逻辑
+
 ## TUI 使用方式
 
 在交互终端里无参数启动，会进入统一 TUI。
