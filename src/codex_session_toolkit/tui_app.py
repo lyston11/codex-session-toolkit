@@ -1,6 +1,7 @@
 """Compatibility wrapper for the refactored TUI package.
 
-Prefer importing from ``codex_session_toolkit.tui.app`` directly in new code.
+Prefer importing runtime behavior from ``codex_session_toolkit.tui.app`` and
+TUI-only dataclasses/menu metadata from ``codex_session_toolkit.tui.view_models``.
 This wrapper is intentionally forwarding-only and should stay limited to
 legacy import compatibility until downstream callers migrate.
 """
@@ -10,17 +11,17 @@ from __future__ import annotations
 from importlib import import_module
 
 _COMPAT_EXPORTS = {
-    "BatchBundleImportSelection": (".tui.app", "BatchBundleImportSelection"),
-    "BundleBrowserSnapshot": (".tui.app", "BundleBrowserSnapshot"),
-    "BundleCategoryFolderOption": (".tui.app", "BundleCategoryFolderOption"),
-    "BundleMachineFolderOption": (".tui.app", "BundleMachineFolderOption"),
-    "BundleProjectFolderOption": (".tui.app", "BundleProjectFolderOption"),
-    "ToolkitAppContext": (".tui.app", "ToolkitAppContext"),
+    "BatchBundleImportSelection": (".tui.view_models", "BatchBundleImportSelection"),
+    "BundleBrowserSnapshot": (".tui.view_models", "BundleBrowserSnapshot"),
+    "BundleCategoryFolderOption": (".tui.view_models", "BundleCategoryFolderOption"),
+    "BundleMachineFolderOption": (".tui.view_models", "BundleMachineFolderOption"),
+    "BundleProjectFolderOption": (".tui.view_models", "BundleProjectFolderOption"),
+    "ToolkitAppContext": (".tui.view_models", "ToolkitAppContext"),
     "ToolkitTuiApp": (".tui.app", "ToolkitTuiApp"),
-    "TuiMenuAction": (".tui.app", "TuiMenuAction"),
-    "TuiMenuSection": (".tui.app", "TuiMenuSection"),
-    "build_tui_menu_actions": (".tui.app", "build_tui_menu_actions"),
-    "build_tui_menu_sections": (".tui.app", "build_tui_menu_sections"),
+    "TuiMenuAction": (".tui.view_models", "TuiMenuAction"),
+    "TuiMenuSection": (".tui.view_models", "TuiMenuSection"),
+    "build_tui_menu_actions": (".tui.view_models", "build_tui_menu_actions"),
+    "build_tui_menu_sections": (".tui.view_models", "build_tui_menu_sections"),
     "format_bundle_source_label": (".tui.app", "format_bundle_source_label"),
     "run_cleanup_mode": (".tui.app", "run_cleanup_mode"),
     "run_clone_mode": (".tui.app", "run_clone_mode"),

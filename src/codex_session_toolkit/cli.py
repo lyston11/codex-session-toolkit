@@ -12,19 +12,15 @@ from .commands import run_cli as run_toolkit_cli
 from .errors import ToolkitError
 from .paths import CodexPaths
 from .services.provider import detect_provider
-from .tui.app import (
-    ToolkitAppContext,
-    run_cleanup_mode,
-    run_clone_mode,
-    run_tui,
-)
+from .tui.app import run_cleanup_mode, run_clone_mode, run_tui
 from .tui.terminal import (
     Ansi,
-    configure_text_streams as _configure_text_streams,
     horizontal_rule as _hr,
-    is_interactive_terminal as _is_interactive,
     style_text as _style,
 )
+from .tui.terminal_io import configure_text_streams as _configure_text_streams
+from .tui.terminal_io import is_interactive_terminal as _is_interactive
+from .tui.view_models import ToolkitAppContext
 
 # Configuration
 DEFAULT_MODEL_PROVIDER = "cliproxyapi"

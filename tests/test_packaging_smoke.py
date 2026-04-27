@@ -17,9 +17,9 @@ from codex_session_toolkit import core as core_api  # noqa: E402
 import codex_session_toolkit.terminal_ui as terminal_ui_compat  # noqa: E402
 import codex_session_toolkit.tui_app as tui_app_compat  # noqa: E402
 from codex_session_toolkit.cli import DEFAULT_MODEL_PROVIDER, create_arg_parser  # noqa: E402
-from codex_session_toolkit.tui_app import ToolkitAppContext  # noqa: E402
-from codex_session_toolkit.tui.app import build_tui_menu_actions, build_tui_menu_sections  # noqa: E402
 from codex_session_toolkit.tui.terminal import LOGO_FONT_BANNER  # noqa: E402
+from codex_session_toolkit.tui.terminal_io import read_key  # noqa: E402
+from codex_session_toolkit.tui.view_models import ToolkitAppContext, build_tui_menu_actions, build_tui_menu_sections  # noqa: E402
 
 
 def _module_env() -> dict:
@@ -53,8 +53,10 @@ class PackagingSmokeTests(unittest.TestCase):
         self.assertIn("ToolkitAppContext", tui_app_compat.__all__)
         self.assertIn("run_tui", tui_app_compat.__all__)
         self.assertIs(ToolkitAppContext, tui_app_compat.ToolkitAppContext)
+        self.assertIs(build_tui_menu_actions, tui_app_compat.build_tui_menu_actions)
         self.assertIn("render_box", terminal_ui_compat.__all__)
         self.assertIs(LOGO_FONT_BANNER, terminal_ui_compat.LOGO_FONT_BANNER)
+        self.assertIs(read_key, terminal_ui_compat.read_key)
 
     def test_tui_main_sections_are_grouped_by_domain(self) -> None:
         section_ids = [section.section_id for section in build_tui_menu_sections()]
