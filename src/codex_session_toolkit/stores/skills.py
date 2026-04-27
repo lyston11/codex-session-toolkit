@@ -189,6 +189,7 @@ def bundle_skills(manifest: SkillsManifest, bundle_dir: Path) -> SkillsBundleRes
             if dest_dir.exists():
                 shutil.rmtree(dest_dir)
             shutil.copytree(source_dir, dest_dir)
+            content_hash = compute_skill_directory_hash(source_dir)
         except OSError as exc:
             shutil.rmtree(dest_dir, ignore_errors=True)
             updated.append(skill)
@@ -204,7 +205,6 @@ def bundle_skills(manifest: SkillsManifest, bundle_dir: Path) -> SkillsBundleRes
                 )
             )
             continue
-        content_hash = compute_skill_directory_hash(source_dir)
         bundle_path = f"{SKILLS_DIR_NAME}/{skill.source_root}/{skill.relative_dir}"
         updated.append(SkillDescriptor(
             name=skill.name,
@@ -265,7 +265,7 @@ def read_skills_manifest(bundle_dir: Path) -> Optional[SkillsManifest]:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError:
         return None
     if data.get("schema_version") != SKILLS_SCHEMA_VERSION:
         return None
@@ -314,21 +314,32 @@ def restore_skills(
         target_dir = Path(_target_skill_dir(target_home, skill))
         source_dir = bundle_dir / skill.bundle_path
 
-        if not source_dir.is_dir():
-            results.append(SkillRestoreResult(
-                name=skill.name,
-                source_root=skill.source_root,
-                relative_dir=skill.relative_dir,
-                status="missing",
-                target_path=str(target_dir),
-            ))
+        invalid_source_warning = _validate_bundled_skill_source(skill, source_dir)
+        if invalid_source_warning is not None:
+            results.append(_failed_restore_result(skill, target_dir))
+            warnings.append(invalid_source_warning)
             if skills_mode == "strict":
-                raise ToolkitError(f"Bundled skill directory missing: {skill.name}")
+                raise ToolkitError(f"Invalid bundled skill: {skill.name}: {invalid_source_warning.detail}")
+            continue
+
+        try:
+            bundle_hash = skill.content_hash or compute_skill_directory_hash(source_dir)
+        except OSError as exc:
+            results.append(_failed_restore_result(skill, target_dir))
+            warnings.append(_restore_skill_failed_warning(skill, target_dir, source_dir, exc))
+            if skills_mode == "strict":
+                raise ToolkitError(f"Failed to restore skill {skill.name}: {exc}") from exc
             continue
 
         if target_dir.is_dir():
-            existing_hash = compute_skill_directory_hash(target_dir)
-            bundle_hash = skill.content_hash or compute_skill_directory_hash(source_dir)
+            try:
+                existing_hash = compute_skill_directory_hash(target_dir)
+            except OSError as exc:
+                results.append(_failed_restore_result(skill, target_dir))
+                warnings.append(_restore_skill_failed_warning(skill, target_dir, source_dir, exc))
+                if skills_mode == "strict":
+                    raise ToolkitError(f"Failed to restore skill {skill.name}: {exc}") from exc
+                continue
             if existing_hash == bundle_hash:
                 results.append(SkillRestoreResult(
                     name=skill.name,
@@ -354,7 +365,7 @@ def restore_skills(
                     relative_dir=skill.relative_dir,
                     status="restored",
                     target_path=str(target_dir),
-                    content_hash=compute_skill_directory_hash(target_dir),
+                    content_hash=bundle_hash,
                 ))
                 continue
             if skills_mode == "strict":
@@ -385,7 +396,7 @@ def restore_skills(
             relative_dir=skill.relative_dir,
             status="restored",
             target_path=str(target_dir),
-            content_hash=compute_skill_directory_hash(target_dir),
+            content_hash=bundle_hash,
         ))
 
     return SkillsRestoreOutcome(results=tuple(results), warnings=tuple(warnings))
@@ -714,6 +725,28 @@ def _failed_restore_result(skill: SkillDescriptor, target_dir: Path) -> SkillRes
         relative_dir=skill.relative_dir,
         status="failed",
         target_path=str(target_dir),
+    )
+
+
+def _validate_bundled_skill_source(
+    skill: SkillDescriptor,
+    source_dir: Path,
+) -> Optional[OperationWarning]:
+    if not source_dir.exists():
+        detail = "bundled skill directory missing"
+    elif not source_dir.is_dir():
+        detail = "bundled skill path is not a directory"
+    elif not (source_dir / SKILL_MD_NAME).is_file():
+        detail = f"missing {SKILL_MD_NAME}"
+    else:
+        return None
+    return OperationWarning(
+        code="invalid_bundled_skill",
+        name=skill.name,
+        source_root=skill.source_root,
+        relative_dir=skill.relative_dir,
+        path=str(source_dir),
+        detail=detail,
     )
 
 

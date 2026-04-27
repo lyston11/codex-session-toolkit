@@ -60,6 +60,11 @@ def _format_operation_warning(warning: OperationWarning) -> str:
         )
     if warning.code == "invalid_skills_manifest":
         return f"Warning: invalid skills manifest: {warning.path}"
+    if warning.code == "invalid_bundled_skill":
+        return (
+            "Warning: invalid bundled skill content: "
+            f"{warning.name} ({warning.source_root}/{warning.relative_dir}): {warning.detail}"
+        )
     if warning.code == "missing_skill":
         return f"Missing skill: {warning.name} ({warning.source_root}/{warning.relative_dir})"
     if warning.code == "skill_not_bundled":
@@ -82,6 +87,8 @@ def _format_operation_warning(warning: OperationWarning) -> str:
         return f"Warning: failed to export skills sidecar from {warning.path}: {warning.detail}"
     if warning.code == "restore_skills_failed":
         return f"Warning: failed to restore skills from {warning.path}: {warning.detail}"
+    if warning.code == "skills_restore_report_failed":
+        return f"Warning: failed to write skills restore report to {warning.path}: {warning.detail}"
     if warning.code == "skipped_invalid_session_file":
         return f"Skipped invalid session file: {warning.detail}"
     if warning.code == "skipped_session_without_id":
