@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Callable, Optional, Sequence
 from .terminal import Ansi, render_box, style_text
 
 if TYPE_CHECKING:
-    from .app import ToolkitTuiApp, TuiMenuAction
+    from .app import ToolkitTuiApp
+    from .view_models import TuiMenuAction
 
 
 def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuAction") -> tuple[Optional[str], Optional[list[str]]]:

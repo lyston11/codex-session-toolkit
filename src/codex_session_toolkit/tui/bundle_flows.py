@@ -15,7 +15,8 @@ from .bundle_state import (
     build_project_folder_options,
 )
 from .navigation_state import apply_picker_key, clamp_selected_index, selection_window
-from .terminal import Ansi, ellipsize_middle, glyphs, read_key, render_box, style_text
+from .terminal import Ansi, ellipsize_middle, glyphs, render_box, style_text
+from .terminal_io import read_key
 
 if TYPE_CHECKING:
     from .app import ToolkitTuiApp
@@ -52,7 +53,7 @@ def bundle_browser_snapshot(
     source_group: str = "all",
     limit: int = 240,
 ) -> Tuple[object, str, str]:
-    from .app import BundleBrowserSnapshot
+    from .view_models import BundleBrowserSnapshot
 
     all_entries = collect_known_bundle_summaries(
         app.paths,
@@ -90,7 +91,7 @@ def bundle_browser_snapshot(
 
 
 def bundle_machine_folder_options(app: "ToolkitTuiApp") -> List[object]:
-    from .app import BundleMachineFolderOption
+    from .view_models import BundleMachineFolderOption
 
     summaries = collect_known_bundle_summaries(app.paths, pattern="", limit=None, source_group="all")
     return [
@@ -105,7 +106,7 @@ def bundle_machine_folder_options(app: "ToolkitTuiApp") -> List[object]:
 
 
 def bundle_category_folder_options(app: "ToolkitTuiApp", machine_key: str) -> List[object]:
-    from .app import BundleCategoryFolderOption
+    from .view_models import BundleCategoryFolderOption
 
     summaries = collect_known_bundle_summaries(
         app.paths,
@@ -126,7 +127,7 @@ def bundle_category_folder_options(app: "ToolkitTuiApp", machine_key: str) -> Li
 
 
 def bundle_project_folder_options(app: "ToolkitTuiApp", entries: List[BundleSummary]) -> List[object]:
-    from .app import BundleProjectFolderOption
+    from .view_models import BundleProjectFolderOption
 
     return [
         BundleProjectFolderOption(
@@ -153,7 +154,7 @@ def select_project_bundle_import_scope(
     selected_machine: object,
     selected_category: object,
 ) -> Optional[object]:
-    from .app import BatchBundleImportSelection
+    from .view_models import BatchBundleImportSelection
 
     pointer = glyphs().get("pointer", ">")
     project_selected_index = 0
@@ -277,7 +278,7 @@ def select_project_bundle_import_scope(
 
 
 def select_batch_bundle_import_scope(app: "ToolkitTuiApp"):
-    from .app import BatchBundleImportSelection
+    from .view_models import BatchBundleImportSelection
 
     pointer = glyphs().get("pointer", ">")
     machine_selected_index = 0

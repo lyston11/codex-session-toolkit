@@ -9,12 +9,13 @@ from ..errors import ToolkitError
 from ..services.browse import get_project_session_summaries, get_session_summaries
 from ..support import detect_machine_key, project_label_from_path, project_label_to_key
 from .navigation_state import (
+    apply_list_key,
     clamp_selected_index,
     cycle_option_key,
-    move_wrapped_index,
     selection_window,
 )
-from .terminal import Ansi, ellipsize_middle, glyphs, read_key, render_box, style_text
+from .terminal import Ansi, ellipsize_middle, glyphs, render_box, style_text
+from .terminal_io import read_key
 
 if TYPE_CHECKING:
     from ..models import BundleSummary, SessionSummary
@@ -99,24 +100,20 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
             raw = input("命令 [Enter/x/\\/p/q]：").strip()
             key = raw if raw else "ENTER"
 
-        if key in ("UP", "k", "K"):
-            if entries:
-                selected_index = move_wrapped_index(selected_index, len(entries), -1)
-            continue
-        if key in ("DOWN", "j", "J"):
-            if entries:
-                selected_index = move_wrapped_index(selected_index, len(entries), 1)
-            continue
-
-        if key == "ENTER":
+        transition = apply_list_key(key, selected_index=selected_index, item_count=len(entries))
+        selected_index = transition.selected_index
+        if transition.confirm_selected:
             if not entries:
                 continue
             app._session_action_center(entries[selected_index])
             continue
-
-        key_str = str(key).strip().lower()
-        if key_str in {"q", "quit", "esc", "0"} or key == "ESC":
+        if transition.exit_requested:
             return
+        if transition.show_detail and entries:
+            app._show_detail_panel("会话详情", app._session_detail_lines(entries[selected_index]))
+            continue
+
+        key_str = transition.matched_hotkey
         if key_str in {"/", "f"}:
             new_filter = app._prompt_value(
                 title="按项目路径查看并导出会话",
@@ -168,8 +165,6 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
                 danger=False,
             )
             continue
-        if key_str in {"d", " "} and entries:
-            app._show_detail_panel("会话详情", app._session_detail_lines(entries[selected_index]))
 
 
 def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["SessionSummary"]:
@@ -242,16 +237,9 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
             raw = input(raw_prompt).strip()
             key = raw if raw else "ENTER"
 
-        if key in ("UP", "k", "K"):
-            if entries:
-                selected_index = move_wrapped_index(selected_index, len(entries), -1)
-            continue
-        if key in ("DOWN", "j", "J"):
-            if entries:
-                selected_index = move_wrapped_index(selected_index, len(entries), 1)
-            continue
-
-        if key == "ENTER":
+        transition = apply_list_key(key, selected_index=selected_index, item_count=len(entries))
+        selected_index = transition.selected_index
+        if transition.confirm_selected:
             if not entries:
                 continue
             selected = entries[selected_index]
@@ -259,10 +247,14 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
                 app._session_action_center(selected)
                 continue
             return selected
-
-        key_str = str(key).strip().lower()
-        if key_str in {"q", "quit", "esc", "0"} or key == "ESC":
+        if transition.exit_requested:
             return None
+        if transition.show_detail and entries:
+            selected = entries[selected_index]
+            app._show_detail_panel("会话详情", app._session_detail_lines(selected))
+            continue
+
+        key_str = transition.matched_hotkey
         if key_str in {"/", "f"}:
             new_filter = app._prompt_value(
                 title="浏览本机会话" if mode == "view" else "选择要导出的会话",
@@ -286,9 +278,6 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
                 danger=False,
             )
             continue
-        if key_str in {"d", " "} and entries:
-            selected = entries[selected_index]
-            app._show_detail_panel("会话详情", app._session_detail_lines(selected))
 
 
 def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = "all") -> Optional["BundleSummary"]:
@@ -371,16 +360,9 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
             raw = input(raw_prompt).strip()
             key = raw if raw else "ENTER"
 
-        if key in ("UP", "k", "K"):
-            if entries:
-                selected_index = move_wrapped_index(selected_index, len(entries), -1)
-            continue
-        if key in ("DOWN", "j", "J"):
-            if entries:
-                selected_index = move_wrapped_index(selected_index, len(entries), 1)
-            continue
-
-        if key == "ENTER":
+        transition = apply_list_key(key, selected_index=selected_index, item_count=len(entries))
+        selected_index = transition.selected_index
+        if transition.confirm_selected:
             if not entries:
                 continue
             selected = entries[selected_index]
@@ -388,10 +370,14 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
                 app._bundle_action_center(selected)
                 continue
             return selected
-
-        key_str = str(key).strip().lower()
-        if key_str in {"q", "quit", "esc", "0"} or key == "ESC":
+        if transition.exit_requested:
             return None
+        if transition.show_detail and entries:
+            bundle = entries[selected_index]
+            app._show_detail_panel("Bundle 详情", app._bundle_detail_lines(bundle), border_codes=(Ansi.DIM, Ansi.GREEN))
+            continue
+
+        key_str = transition.matched_hotkey
         if key_str in {"/", "f"}:
             new_filter = app._prompt_value(
                 title="浏览 Bundle" if mode == "view" else "选择要导入的 Bundle",
@@ -437,6 +423,3 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
                 danger=False,
             )
             continue
-        if key_str in {"d", " "} and entries:
-            bundle = entries[selected_index]
-            app._show_detail_panel("Bundle 详情", app._bundle_detail_lines(bundle), border_codes=(Ansi.DIM, Ansi.GREEN))
