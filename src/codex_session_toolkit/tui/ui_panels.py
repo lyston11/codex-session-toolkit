@@ -6,17 +6,17 @@ import os
 import sys
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
-from .navigation_state import selection_window
+from .navigation_state import apply_list_key, selection_window
 from .terminal import (
     Ansi,
     align_line,
     app_logo_lines,
     ellipsize_middle,
     glyphs,
-    read_key,
     render_box,
     style_text,
 )
+from .terminal_io import read_key
 
 if TYPE_CHECKING:
     from ..models import BundleSummary, SessionSummary
@@ -68,16 +68,11 @@ def session_action_center(app: "ToolkitTuiApp", summary: "SessionSummary") -> No
             raw = input("命令 [Enter/e/q]：").strip()
             key = raw if raw else "ENTER"
 
-        if key in ("UP", "k", "K"):
-            selected_index = (selected_index - 1) % len(actions)
-            continue
-        if key in ("DOWN", "j", "J"):
-            selected_index = (selected_index + 1) % len(actions)
-            continue
-
-        action_key = actions[selected_index]["key"] if key == "ENTER" else str(key).strip().lower()
-        if action_key in {"q", "esc", "0"} or key == "ESC":
+        transition = apply_list_key(key, selected_index=selected_index, item_count=len(actions), detail_keys=())
+        selected_index = transition.selected_index
+        if transition.exit_requested:
             return
+        action_key = actions[selected_index]["key"] if transition.confirm_selected else transition.matched_hotkey
         if action_key == "e":
             app._run_action(
                 f"导出会话 {summary.session_id} 为 Bundle",
@@ -120,16 +115,11 @@ def bundle_action_center(app: "ToolkitTuiApp", bundle: "BundleSummary") -> None:
             raw = input("命令 [Enter/i/v/q]：").strip()
             key = raw if raw else "ENTER"
 
-        if key in ("UP", "k", "K"):
-            selected_index = (selected_index - 1) % len(actions)
-            continue
-        if key in ("DOWN", "j", "J"):
-            selected_index = (selected_index + 1) % len(actions)
-            continue
-
-        action_key = actions[selected_index]["key"] if key == "ENTER" else str(key).strip().lower()
-        if action_key in {"q", "esc", "0"} or key == "ESC":
+        transition = apply_list_key(key, selected_index=selected_index, item_count=len(actions), detail_keys=())
+        selected_index = transition.selected_index
+        if transition.exit_requested:
             return
+        action_key = actions[selected_index]["key"] if transition.confirm_selected else transition.matched_hotkey
         if action_key == "i":
             app._run_action(
                 f"导入 Bundle {bundle.session_id} 为会话",

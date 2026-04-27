@@ -5,17 +5,18 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple
 
+from .navigation_state import apply_list_key
 from .terminal import (
     Ansi,
     align_line,
     app_logo_lines,
     glyphs,
-    read_key,
     render_box,
     style_text,
     term_height,
     term_width,
 )
+from .terminal_io import read_key
 
 if TYPE_CHECKING:
     from .app import ToolkitTuiApp
@@ -200,22 +201,21 @@ def prompt_choice(
             continue
         if key is None:
             continue
-        if key in ("UP", "k", "K"):
-            selected_index = (selected_index - 1) % len(choices)
-            continue
-        if key in ("DOWN", "j", "J"):
-            selected_index = (selected_index + 1) % len(choices)
-            continue
-        if key == "ENTER":
-            return normalized_choices[selected_index][0]
-        if allow_cancel and key in ("LEFT", "ESC"):
-            return None
 
-        key_str = str(key).strip().lower()
-        if allow_cancel and key_str in {"q", "quit", "0"}:
+        transition = apply_list_key(
+            key,
+            selected_index=selected_index,
+            item_count=len(choices),
+            allow_left_exit=allow_cancel,
+            detail_keys=(),
+        )
+        selected_index = transition.selected_index
+        if transition.confirm_selected:
+            return normalized_choices[selected_index][0]
+        if transition.exit_requested:
             return None
-        if key_str in key_to_index:
-            return normalized_choices[key_to_index[key_str]][0]
+        if transition.matched_hotkey in key_to_index:
+            return normalized_choices[key_to_index[transition.matched_hotkey]][0]
 
 
 def prompt_execution_mode(

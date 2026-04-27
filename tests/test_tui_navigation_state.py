@@ -10,6 +10,7 @@ if str(SRC_DIR) not in os.sys.path:
 
 from codex_session_toolkit.tui.navigation_state import (  # noqa: E402
     apply_home_key,
+    apply_list_key,
     apply_picker_key,
     apply_section_key,
     clamp_selected_index,
@@ -111,6 +112,14 @@ class TuiNavigationStateTests(unittest.TestCase):
         self.assertTrue(apply_picker_key("ENTER", selected_index=1, item_count=3).confirm_selected)
         self.assertTrue(apply_picker_key("d", selected_index=1, item_count=3).show_detail)
         self.assertTrue(apply_picker_key("ESC", selected_index=1, item_count=3).exit_requested)
+
+    def test_apply_list_key_handles_navigation_shortcuts_and_optional_left_exit(self) -> None:
+        self.assertEqual(apply_list_key("UP", selected_index=0, item_count=3).selected_index, 2)
+        self.assertEqual(apply_list_key("DOWN", selected_index=2, item_count=3).selected_index, 0)
+        self.assertTrue(apply_list_key("ENTER", selected_index=1, item_count=3).confirm_selected)
+        self.assertTrue(apply_list_key("d", selected_index=1, item_count=3).show_detail)
+        self.assertTrue(apply_list_key("LEFT", selected_index=1, item_count=3, allow_left_exit=True).exit_requested)
+        self.assertEqual(apply_list_key("/", selected_index=1, item_count=3).matched_hotkey, "/")
 
 
 if __name__ == "__main__":

@@ -33,6 +33,15 @@ class PickerNavigationResult:
     exit_requested: bool = False
 
 
+@dataclass(frozen=True)
+class ListNavigationResult:
+    selected_index: int
+    confirm_selected: bool = False
+    show_detail: bool = False
+    exit_requested: bool = False
+    matched_hotkey: str = ""
+
+
 def clamp_selected_index(selected_index: int, item_count: int) -> int:
     if item_count <= 0:
         return 0
@@ -67,25 +76,44 @@ def cycle_option_key(options: Sequence[Tuple[str, str]], current_key: str) -> st
     return options[(current_index + 1) % len(options)][0]
 
 
-def apply_picker_key(key: object, *, selected_index: int, item_count: int) -> PickerNavigationResult:
+def apply_list_key(
+    key: object,
+    *,
+    selected_index: int,
+    item_count: int,
+    allow_left_exit: bool = False,
+    detail_keys: Sequence[str] = ("d", " "),
+) -> ListNavigationResult:
     normalized_index = clamp_selected_index(selected_index, item_count)
     key_str = str(key).strip().lower()
 
     if key in ("UP", "k", "K"):
-        return PickerNavigationResult(
+        return ListNavigationResult(
             selected_index=move_wrapped_index(normalized_index, item_count, -1),
         )
     if key in ("DOWN", "j", "J"):
-        return PickerNavigationResult(
+        return ListNavigationResult(
             selected_index=move_wrapped_index(normalized_index, item_count, 1),
         )
     if key == "ENTER":
-        return PickerNavigationResult(selected_index=normalized_index, confirm_selected=True)
+        return ListNavigationResult(selected_index=normalized_index, confirm_selected=True)
+    if allow_left_exit and key == "LEFT":
+        return ListNavigationResult(selected_index=normalized_index, exit_requested=True)
     if key_str in {"q", "quit", "esc", "0"} or key == "ESC":
-        return PickerNavigationResult(selected_index=normalized_index, exit_requested=True)
-    if key_str in {"d", " "}:
-        return PickerNavigationResult(selected_index=normalized_index, show_detail=True)
-    return PickerNavigationResult(selected_index=normalized_index)
+        return ListNavigationResult(selected_index=normalized_index, exit_requested=True)
+    if key_str in detail_keys:
+        return ListNavigationResult(selected_index=normalized_index, show_detail=True)
+    return ListNavigationResult(selected_index=normalized_index, matched_hotkey=key_str)
+
+
+def apply_picker_key(key: object, *, selected_index: int, item_count: int) -> PickerNavigationResult:
+    transition = apply_list_key(key, selected_index=selected_index, item_count=item_count)
+    return PickerNavigationResult(
+        selected_index=transition.selected_index,
+        confirm_selected=transition.confirm_selected,
+        show_detail=transition.show_detail,
+        exit_requested=transition.exit_requested,
+    )
 
 
 def apply_home_key(key: object, *, selected_section_index: int, section_count: int) -> HomeNavigationResult:
