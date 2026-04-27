@@ -160,6 +160,7 @@ class ImportResult:
     skills_already_present_count: int = 0
     skills_conflict_skipped_count: int = 0
     skills_missing_count: int = 0
+    skills_failed_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -182,6 +183,7 @@ class BatchImportResult:
     total_skills_already_present: int = 0
     total_skills_conflict_skipped: int = 0
     total_skills_missing: int = 0
+    total_skills_failed: int = 0
     skills_restore_report_path: Optional[Path] = None
     warnings: List[OperationWarning] = field(default_factory=list)
 
