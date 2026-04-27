@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
+from ..errors import ToolkitError
 from ..models import BundleSummary
 from ..stores.bundle_scanner import collect_known_bundle_summaries, latest_distinct_bundle_summaries
 from ..support import normalize_project_path
@@ -13,6 +14,7 @@ from .bundle_state import (
     build_machine_folder_options,
     build_project_folder_options,
 )
+from .navigation_state import apply_picker_key, clamp_selected_index, selection_window
 from .terminal import Ansi, ellipsize_middle, glyphs, read_key, render_box, style_text
 
 if TYPE_CHECKING:
@@ -158,7 +160,7 @@ def select_project_bundle_import_scope(
 
     while True:
         project_options = app._bundle_project_folder_options(selected_category.entries)
-        project_selected_index = max(0, min(project_selected_index, len(project_options) - 1)) if project_options else 0
+        project_selected_index = clamp_selected_index(project_selected_index, len(project_options))
         box_width = app._print_branded_header(
             "选择项目文件夹",
             "↑/↓ 选择项目 · Enter 设置本机项目路径并导入 · d 查看摘要 · q 返回上一步",
@@ -178,9 +180,7 @@ def select_project_bundle_import_scope(
         if not project_options:
             project_lines.append("这个设备的 project 分类下没有可导入的项目文件夹。按 q 返回。")
         else:
-            start = max(0, project_selected_index - 5)
-            start = min(start, max(0, len(project_options) - 10))
-            end = min(len(project_options), start + 10)
+            start, end = selection_window(len(project_options), project_selected_index, 10)
             for idx in range(start, end):
                 option = project_options[idx]
                 line = (
@@ -218,17 +218,14 @@ def select_project_bundle_import_scope(
             raw = input("命令 [Enter/d/q]：").strip()
             key = raw if raw else "ENTER"
 
-        if key in ("UP", "k", "K"):
-            if project_options:
-                project_selected_index = (project_selected_index - 1) % len(project_options)
-            continue
-        if key in ("DOWN", "j", "J"):
-            if project_options:
-                project_selected_index = (project_selected_index + 1) % len(project_options)
-            continue
+        transition = apply_picker_key(
+            key,
+            selected_index=project_selected_index,
+            item_count=len(project_options),
+        )
+        project_selected_index = transition.selected_index
 
-        key_str = str(key).strip().lower()
-        if key == "ENTER":
+        if transition.confirm_selected:
             if not project_options:
                 continue
             selected_project = project_options[project_selected_index]
@@ -260,9 +257,9 @@ def select_project_bundle_import_scope(
                 project_source_path=selected_project.project_path,
                 target_project_path=normalized_target_path,
             )
-        if key_str in {"q", "quit", "esc", "0"} or key == "ESC":
+        if transition.exit_requested:
             return None
-        if key_str in {"d", " "} and project_options:
+        if transition.show_detail and project_options:
             selected_project = project_options[project_selected_index]
             app._show_detail_panel(
                 "项目文件夹摘要",
@@ -277,3 +274,169 @@ def select_project_bundle_import_scope(
                 ],
                 border_codes=(Ansi.DIM, Ansi.GREEN),
             )
+
+
+def select_batch_bundle_import_scope(app: "ToolkitTuiApp"):
+    from .app import BatchBundleImportSelection
+
+    pointer = glyphs().get("pointer", ">")
+    machine_selected_index = 0
+
+    while True:
+        try:
+            machine_options = app._bundle_machine_folder_options()
+        except ToolkitError as exc:
+            app._show_detail_panel("读取 Bundle 失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+            return None
+
+        machine_selected_index = clamp_selected_index(machine_selected_index, len(machine_options))
+        box_width = app._print_branded_header(
+            "选择设备文件夹",
+            "↑/↓ 选择设备 · Enter 进入该设备的分类文件夹 · d 查看摘要 · q 返回",
+        )
+
+        info_lines = [
+            f"{style_text('导出根目录', Ansi.DIM)} : {app.context.bundle_root_label}",
+            f"{style_text('设备数量', Ansi.DIM)}   : {len(machine_options)}",
+            f"{style_text('下一步', Ansi.DIM)}   : 进入设备后选择 desktop / active / cli / project / single",
+        ]
+        for line in render_box(info_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
+            print(line)
+        print("")
+
+        machine_lines: list[str] = []
+        if not machine_options:
+            machine_lines.append("当前没有可用的设备文件夹。")
+        else:
+            start, end = selection_window(len(machine_options), machine_selected_index, 10)
+            for idx in range(start, end):
+                option = machine_options[idx]
+                export_groups = " / ".join(option.export_groups) or "（无分类）"
+                line = (
+                    f"{pointer if idx == machine_selected_index else ' '} "
+                    f"{option.machine_label} | {option.bundle_count} 个 Bundle | {export_groups}"
+                )
+                if idx == machine_selected_index:
+                    machine_lines.append(style_text(line, Ansi.BOLD, Ansi.CYAN))
+                else:
+                    machine_lines.append(line)
+        for line in render_box(machine_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.GREEN)):
+            print(line)
+
+        key = read_key()
+        if key is None:
+            raw = input("命令 [Enter/d/q]：").strip()
+            key = raw if raw else "ENTER"
+
+        transition = apply_picker_key(
+            key,
+            selected_index=machine_selected_index,
+            item_count=len(machine_options),
+        )
+        machine_selected_index = transition.selected_index
+
+        if transition.confirm_selected:
+            if not machine_options:
+                continue
+            selected_machine = machine_options[machine_selected_index]
+        elif transition.exit_requested:
+            return None
+        elif transition.show_detail and machine_options:
+            selected_machine = machine_options[machine_selected_index]
+            app._show_detail_panel(
+                "设备文件夹摘要",
+                [
+                    f"{style_text('设备', Ansi.DIM)}     : {selected_machine.machine_label}",
+                    f"{style_text('路径', Ansi.DIM)}     : {app.context.bundle_root_label}/{selected_machine.machine_key or selected_machine.machine_label}",
+                    f"{style_text('分类', Ansi.DIM)}     : {' / '.join(selected_machine.export_groups) or '（无）'}",
+                    f"{style_text('Bundle 数', Ansi.DIM)} : {selected_machine.bundle_count}",
+                ],
+                border_codes=(Ansi.DIM, Ansi.GREEN),
+            )
+            continue
+        else:
+            continue
+
+        category_selected_index = 0
+        while True:
+            category_options = app._bundle_category_folder_options(selected_machine.machine_key)
+            category_selected_index = clamp_selected_index(category_selected_index, len(category_options))
+            box_width = app._print_branded_header(
+                "选择分类文件夹",
+                "↑/↓ 选择分类 · Enter 导入该分类文件夹 · d 查看摘要 · q 返回上一步",
+            )
+
+            info_lines = [
+                f"{style_text('当前设备', Ansi.DIM)} : {selected_machine.machine_label}",
+                f"{style_text('分类数量', Ansi.DIM)} : {len(category_options)}",
+                f"{style_text('导入方式', Ansi.DIM)} : 选中分类后直接导入；若为 project，会继续选择项目文件夹",
+            ]
+            for line in render_box(info_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
+                print(line)
+            print("")
+
+            category_lines: list[str] = []
+            if not category_options:
+                category_lines.append("这个设备文件夹下没有可导入的分类。按 q 返回。")
+            else:
+                start, end = selection_window(len(category_options), category_selected_index, 10)
+                for idx in range(start, end):
+                    option = category_options[idx]
+                    line = (
+                        f"{pointer if idx == category_selected_index else ' '} "
+                        f"{option.export_group_label} | {option.bundle_count} 个 Bundle"
+                    )
+                    if idx == category_selected_index:
+                        category_lines.append(style_text(line, Ansi.BOLD, Ansi.CYAN))
+                    else:
+                        category_lines.append(line)
+            for line in render_box(category_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.GREEN)):
+                print(line)
+
+            key = read_key()
+            if key is None:
+                raw = input("命令 [Enter/d/q]：").strip()
+                key = raw if raw else "ENTER"
+
+            transition = apply_picker_key(
+                key,
+                selected_index=category_selected_index,
+                item_count=len(category_options),
+            )
+            category_selected_index = transition.selected_index
+
+            if transition.confirm_selected:
+                if not category_options:
+                    continue
+                selected_category = category_options[category_selected_index]
+                if selected_category.export_group == "project":
+                    project_selection = app._select_project_bundle_import_scope(
+                        selected_machine=selected_machine,
+                        selected_category=selected_category,
+                    )
+                    if not project_selection:
+                        continue
+                    return project_selection
+                return BatchBundleImportSelection(
+                    entries=selected_category.entries,
+                    machine_filter=selected_machine.machine_key,
+                    machine_label=selected_machine.machine_label,
+                    export_group_filter=selected_category.export_group,
+                    export_group_label=selected_category.export_group_label,
+                    latest_only=False,
+                )
+            if transition.exit_requested:
+                break
+            if transition.show_detail and category_options:
+                selected_category = category_options[category_selected_index]
+                app._show_detail_panel(
+                    "分类文件夹摘要",
+                    [
+                        f"{style_text('设备', Ansi.DIM)}     : {selected_machine.machine_label}",
+                        f"{style_text('分类', Ansi.DIM)}     : {selected_category.export_group_label}",
+                        f"{style_text('Bundle 数', Ansi.DIM)} : {selected_category.bundle_count}",
+                        f"{style_text('分类路径', Ansi.DIM)} : "
+                        f"{(selected_category.entries[0].bundle_dir.parents[2] if selected_category.entries and selected_category.export_group == 'project' else selected_category.entries[0].bundle_dir.parents[1]) if selected_category.entries else '（空）'}",
+                    ],
+                    border_codes=(Ansi.DIM, Ansi.GREEN),
+                )

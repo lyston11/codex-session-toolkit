@@ -25,6 +25,14 @@ class SectionNavigationResult:
     exit_requested: bool = False
 
 
+@dataclass(frozen=True)
+class PickerNavigationResult:
+    selected_index: int
+    confirm_selected: bool = False
+    show_detail: bool = False
+    exit_requested: bool = False
+
+
 def clamp_selected_index(selected_index: int, item_count: int) -> int:
     if item_count <= 0:
         return 0
@@ -57,6 +65,27 @@ def cycle_option_key(options: Sequence[Tuple[str, str]], current_key: str) -> st
             current_index = idx
             break
     return options[(current_index + 1) % len(options)][0]
+
+
+def apply_picker_key(key: object, *, selected_index: int, item_count: int) -> PickerNavigationResult:
+    normalized_index = clamp_selected_index(selected_index, item_count)
+    key_str = str(key).strip().lower()
+
+    if key in ("UP", "k", "K"):
+        return PickerNavigationResult(
+            selected_index=move_wrapped_index(normalized_index, item_count, -1),
+        )
+    if key in ("DOWN", "j", "J"):
+        return PickerNavigationResult(
+            selected_index=move_wrapped_index(normalized_index, item_count, 1),
+        )
+    if key == "ENTER":
+        return PickerNavigationResult(selected_index=normalized_index, confirm_selected=True)
+    if key_str in {"q", "quit", "esc", "0"} or key == "ESC":
+        return PickerNavigationResult(selected_index=normalized_index, exit_requested=True)
+    if key_str in {"d", " "}:
+        return PickerNavigationResult(selected_index=normalized_index, show_detail=True)
+    return PickerNavigationResult(selected_index=normalized_index)
 
 
 def apply_home_key(key: object, *, selected_section_index: int, section_count: int) -> HomeNavigationResult:
