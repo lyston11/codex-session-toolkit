@@ -1,6 +1,7 @@
 """Compatibility wrapper for the refactored TUI terminal module.
 
-Prefer importing from ``codex_session_toolkit.tui.terminal`` directly in new code.
+Prefer importing rendering/layout helpers from ``codex_session_toolkit.tui.terminal``
+and raw keyboard I/O helpers from ``codex_session_toolkit.tui.terminal_io``.
 This wrapper is intentionally forwarding-only and should stay limited to
 legacy import compatibility until downstream callers migrate.
 """
@@ -24,14 +25,14 @@ _COMPAT_EXPORTS = {
     "align_line": (".tui.terminal", "align_line"),
     "app_logo_lines": (".tui.terminal", "app_logo_lines"),
     "clear_screen": (".tui.terminal", "clear_screen"),
-    "configure_text_streams": (".tui.terminal", "configure_text_streams"),
+    "configure_text_streams": (".tui.terminal_io", "configure_text_streams"),
     "display_width": (".tui.terminal", "display_width"),
     "ellipsize_middle": (".tui.terminal", "ellipsize_middle"),
     "glyphs": (".tui.terminal", "glyphs"),
     "horizontal_rule": (".tui.terminal", "horizontal_rule"),
-    "is_interactive_terminal": (".tui.terminal", "is_interactive_terminal"),
+    "is_interactive_terminal": (".tui.terminal_io", "is_interactive_terminal"),
     "pad_right": (".tui.terminal", "pad_right"),
-    "read_key": (".tui.terminal", "read_key"),
+    "read_key": (".tui.terminal_io", "read_key"),
     "render_box": (".tui.terminal", "render_box"),
     "strip_ansi": (".tui.terminal", "strip_ansi"),
     "style_text": (".tui.terminal", "style_text"),
