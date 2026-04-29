@@ -3,6 +3,7 @@ src
 scripts/install
 pyproject.toml
 readme.md
+CHANGELOG.md
 codex-session-toolkit
 codex-session-toolkit.command
 codex-session-toolkit.cmd
