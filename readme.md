@@ -81,9 +81,9 @@
 - 自动补充 Desktop workspace roots
 - 可选将 CLI 会话纳入 Desktop
 
-## 安装与启动
+## 快速安装与启动
 
-### 最推荐：直接执行安装脚本
+### 推荐：本地隔离安装
 
 仓库已经自带安装脚本。大多数情况下，不需要自己手敲 `pip install`，直接执行安装脚本即可。
 默认所有依赖和安装结果都会被封装进项目根目录下的本地 `.venv/`，不会写进你的 base Python 环境。
@@ -141,143 +141,7 @@ Windows：
 ./codex-session-toolkit --version
 ```
 
-### 开发模式：不安装也可直接运行
-
-如果你是在仓库里继续改代码，也可以不先安装，直接通过仓库 launcher 启动。
-
-macOS / Linux:
-
-```bash
-./codex-session-toolkit
-./codex-session-toolkit.command
-```
-
-Windows:
-
-```powershell
-.\codex-session-toolkit.ps1
-```
-
-如果当前目录是 git 工作树，并且 `src/codex_session_toolkit/` 存在，仓库 launcher 会优先进入源码模式，这样改完代码后重新启动就能立刻生效。
-
-如果当前目录不是 git 工作树，例如 release 解压目录，launcher 会优先使用本地 `.venv` 里的已安装版本。
-如果当前目录是 git 工作树，但已经存在本地 `.venv`，launcher 也会优先使用 `.venv` 里的 Python 解释器来跑源码模式，尽量避免碰 base 环境。
-
-如果你想手动覆盖这个选择逻辑，可以设置：
-
-- `CST_LAUNCH_MODE=source`
-- `CST_LAUNCH_MODE=installed`
-- `CST_LAUNCH_MODE=auto`（默认）
-
-### 生成可分发压缩包
-
-如果你想把当前仓库直接打成一个可发给别人的安装包，可以运行：
-
-```bash
-./release.sh
-```
-
-或者：
-
-```bash
-make release
-```
-
-它会在 `./dist/releases/` 下生成：
-
-- 一个干净的发布目录
-- 一个 `.tar.gz`
-- 如果系统有 `zip`，再额外生成一个 `.zip`
-
-对方解压后，直接运行：
-
-- macOS / Linux：`./install.sh`
-- Windows：`.\install.ps1` 或双击 `install.bat`
-
-安装脚本会在解压目录里创建本地 `.venv/`，把可运行入口封装进去。
-对方不需要手动执行 `pip install -e .`，安装完成后直接运行：
-
-- macOS / Linux：`./codex-session-toolkit`
-- Windows：`.\codex-session-toolkit.cmd`
-
-release 只会携带分发所需文件；CI、测试、兼容层、release 构建器本身和本地缓存都不会进入发布包。
-
-### 直接安装到当前 Python 环境
-
-只有在你明确接受修改当前 Python 环境时，才建议使用这一节。默认更推荐上面的本地 `.venv` 安装方式。
-如果你就是想装进自己当前的 Python 环境，也仍然支持标准安装方式：
-
-macOS / Linux:
-
-```bash
-python3 -m pip install -e .
-codex-session-toolkit
-```
-
-Windows:
-
-```powershell
-py -3 -m pip install -e .
-codex-session-toolkit
-```
-
-也支持模块方式：
-
-```bash
-python3 -m codex_session_toolkit
-```
-
-### 用工程命令管理本地开发
-
-如果你想把这个仓库当成一个长期维护的项目来用，而不是临时脚本，可以直接用顶层 [Makefile](./Makefile)：
-
-```bash
-make help
-make bootstrap
-make bootstrap-editable
-make install-dev
-make release
-make run
-make install
-make test-quick
-make lint
-make test
-make smoke
-make ci
-make check
-```
-
-其中：
-
-- `make install` 等价于 `make bootstrap-editable`，会把安装留在项目本地 `.venv`
-- `make install-dev` 会先准备本地 `.venv`，再把开发工具装进这个隔离环境；这一步通常需要联网拉取诸如 Ruff 这样的开发依赖
-- `make run/test/lint/ci` 会优先使用本地 `.venv` 里的解释器；如果你还没创建 `.venv`，再退回系统 Python
-
-## Python API 与兼容层
-
-如果你要把它当成 Python 包来调用，当前建议按下面的边界使用：
-
-| 入口 | 定位 | 新代码建议 |
-|---|---|---|
-| `codex_session_toolkit` | 最小稳定顶层入口；暴露 `CodexPaths`、`ToolkitError`、`build_app_context`、`run_cli`、版本信息 | 推荐 |
-| `codex_session_toolkit.api` | 稳定高层 API；暴露 service result、presenter、核心工作流函数 | 推荐 |
-| `codex_session_toolkit.core` | 旧兼容 facade；保留 lazy re-export 以兼容历史调用方 | 仅兼容旧代码，不建议继续扩张依赖 |
-| `codex_session_toolkit.tui.app` / `codex_session_toolkit.tui.terminal` | 当前正式 TUI 模块 | 推荐 |
-| `codex_session_toolkit.tui_app` / `codex_session_toolkit.terminal_ui` | 旧 TUI 兼容 wrapper；只做显式 lazy 转发 | 仅兼容旧代码，不建议新代码继续引用 |
-
-推荐导入方式：
-
-```python
-from codex_session_toolkit import CodexPaths, run_cli
-from codex_session_toolkit.api import export_session, import_desktop_all, repair_desktop
-from codex_session_toolkit.tui.app import ToolkitTuiApp
-```
-
-兼容层策略：
-
-- `core.py`、`tui_app.py`、`terminal_ui.py` 仍会保留一段时间，用来承接旧调用方
-- 新代码应直接依赖 `api.py`、`tui.app`、`tui.terminal`
-- 稳定入口以测试覆盖的导出面为准；兼容层只保留必要转发，不再继续承载新逻辑
+更多开发、发布和 API 参考放在文末，前面先聚焦日常使用。
 
 ## TUI 使用方式
 
@@ -607,6 +471,146 @@ Bundle 内默认包含：
 - `CST_TUI_MAX_WIDTH=120`
 - `CST_MACHINE_LABEL=My-MacBook`
 - `CST_LAUNCH_MODE=auto|source|installed`
+
+## 开发、发布与 API 参考
+
+### 开发模式：不安装也可直接运行
+
+如果你是在仓库里继续改代码，也可以不先安装，直接通过仓库 launcher 启动。
+
+macOS / Linux:
+
+```bash
+./codex-session-toolkit
+./codex-session-toolkit.command
+```
+
+Windows:
+
+```powershell
+.\codex-session-toolkit.ps1
+```
+
+如果当前目录是 git 工作树，并且 `src/codex_session_toolkit/` 存在，仓库 launcher 会优先进入源码模式，这样改完代码后重新启动就能立刻生效。
+
+如果当前目录不是 git 工作树，例如 release 解压目录，launcher 会优先使用本地 `.venv` 里的已安装版本。
+如果当前目录是 git 工作树，但已经存在本地 `.venv`，launcher 也会优先使用 `.venv` 里的 Python 解释器来跑源码模式，尽量避免碰 base 环境。
+
+如果你想手动覆盖这个选择逻辑，可以设置：
+
+- `CST_LAUNCH_MODE=source`
+- `CST_LAUNCH_MODE=installed`
+- `CST_LAUNCH_MODE=auto`（默认）
+
+### 生成可分发压缩包
+
+如果你想把当前仓库直接打成一个可发给别人的安装包，可以运行：
+
+```bash
+./release.sh
+```
+
+或者：
+
+```bash
+make release
+```
+
+它会在 `./dist/releases/` 下生成：
+
+- 一个干净的发布目录
+- 一个 `.tar.gz`
+- 如果系统有 `zip`，再额外生成一个 `.zip`
+
+对方解压后，直接运行：
+
+- macOS / Linux：`./install.sh`
+- Windows：`.\install.ps1` 或双击 `install.bat`
+
+安装脚本会在解压目录里创建本地 `.venv/`，把可运行入口封装进去。
+对方不需要手动执行 `pip install -e .`，安装完成后直接运行：
+
+- macOS / Linux：`./codex-session-toolkit`
+- Windows：`.\codex-session-toolkit.cmd`
+
+release 只会携带分发所需文件；CI、测试、兼容层、release 构建器本身和本地缓存都不会进入发布包。
+
+### 直接安装到当前 Python 环境
+
+只有在你明确接受修改当前 Python 环境时，才建议使用这一节。默认更推荐上面的本地 `.venv` 安装方式。
+如果你就是想装进自己当前的 Python 环境，也仍然支持标准安装方式：
+
+macOS / Linux:
+
+```bash
+python3 -m pip install -e .
+codex-session-toolkit
+```
+
+Windows:
+
+```powershell
+py -3 -m pip install -e .
+codex-session-toolkit
+```
+
+也支持模块方式：
+
+```bash
+python3 -m codex_session_toolkit
+```
+
+### 用工程命令管理本地开发
+
+如果你想把这个仓库当成一个长期维护的项目来用，而不是临时脚本，可以直接用顶层 [Makefile](./Makefile)：
+
+```bash
+make help
+make bootstrap
+make bootstrap-editable
+make install-dev
+make release
+make run
+make install
+make test-quick
+make lint
+make test
+make smoke
+make ci
+make check
+```
+
+其中：
+
+- `make install` 等价于 `make bootstrap-editable`，会把安装留在项目本地 `.venv`
+- `make install-dev` 会先准备本地 `.venv`，再把开发工具装进这个隔离环境；这一步通常需要联网拉取诸如 Ruff 这样的开发依赖
+- `make run/test/lint/ci` 会优先使用本地 `.venv` 里的解释器；如果你还没创建 `.venv`，再退回系统 Python
+
+### Python API 与兼容层
+
+如果你要把它当成 Python 包来调用，当前建议按下面的边界使用：
+
+| 入口 | 定位 | 新代码建议 |
+|---|---|---|
+| `codex_session_toolkit` | 最小稳定顶层入口；暴露 `CodexPaths`、`ToolkitError`、`build_app_context`、`run_cli`、版本信息 | 推荐 |
+| `codex_session_toolkit.api` | 稳定高层 API；暴露 service result、presenter、核心工作流函数 | 推荐 |
+| `codex_session_toolkit.core` | 旧兼容 facade；保留 lazy re-export 以兼容历史调用方 | 仅兼容旧代码，不建议继续扩张依赖 |
+| `codex_session_toolkit.tui.app` / `codex_session_toolkit.tui.terminal` | 当前正式 TUI 模块 | 推荐 |
+| `codex_session_toolkit.tui_app` / `codex_session_toolkit.terminal_ui` | 旧 TUI 兼容 wrapper；只做显式 lazy 转发 | 仅兼容旧代码，不建议新代码继续引用 |
+
+推荐导入方式：
+
+```python
+from codex_session_toolkit import CodexPaths, run_cli
+from codex_session_toolkit.api import export_session, import_desktop_all, repair_desktop
+from codex_session_toolkit.tui.app import ToolkitTuiApp
+```
+
+兼容层策略：
+
+- `core.py`、`tui_app.py`、`terminal_ui.py` 仍会保留一段时间，用来承接旧调用方
+- 新代码应直接依赖 `api.py`、`tui.app`、`tui.terminal`
+- 稳定入口以测试覆盖的导出面为准；兼容层只保留必要转发，不再继续承载新逻辑
 
 ## 社区支持
 
