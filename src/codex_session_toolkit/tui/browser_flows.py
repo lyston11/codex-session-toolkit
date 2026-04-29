@@ -30,6 +30,8 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
     filter_text = ""
     selected_index = 0
     pointer = glyphs().get("pointer", ">")
+    entries: list["SessionSummary"] = []
+    needs_reload = True
 
     while True:
         project_label = project_label_from_path(project_path) or "root"
@@ -37,16 +39,18 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
         export_root_preview = (
             f"{app.context.bundle_root_label}/{detect_machine_key()}/project/{project_key}/<timestamp>"
         )
-        try:
-            entries = get_project_session_summaries(
-                app.paths,
-                project_path=project_path,
-                pattern=filter_text,
-                limit=200,
-            )
-        except ToolkitError as exc:
-            app._show_detail_panel("读取项目会话失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
-            return
+        if needs_reload:
+            try:
+                entries = get_project_session_summaries(
+                    app.paths,
+                    project_path=project_path,
+                    pattern=filter_text,
+                    limit=200,
+                )
+            except ToolkitError as exc:
+                app._show_detail_panel("读取项目会话失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+                return
+            needs_reload = False
 
         selected_index = clamp_selected_index(selected_index, len(entries))
         subtitle = "↑/↓ 选择 · Enter 打开会话详情 · x 导出该项目全部会话 · / 搜索 · p 修改路径 · q 返回"
@@ -127,6 +131,7 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
             )
             filter_text = new_filter or ""
             selected_index = 0
+            needs_reload = True
             continue
         if key_str == "p":
             new_project_path = app._prompt_project_path(default=project_path)
@@ -135,6 +140,7 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
             project_path = new_project_path
             filter_text = ""
             selected_index = 0
+            needs_reload = True
             continue
         if key_str == "x":
             if not entries:
@@ -171,13 +177,17 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
     filter_text = ""
     selected_index = 0
     pointer = glyphs().get("pointer", ">")
+    entries: list["SessionSummary"] = []
+    needs_reload = True
 
     while True:
-        try:
-            entries = get_session_summaries(app.paths, pattern=filter_text, limit=200)
-        except ToolkitError as exc:
-            app._show_detail_panel("读取会话失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
-            return None
+        if needs_reload:
+            try:
+                entries = get_session_summaries(app.paths, pattern=filter_text, limit=200)
+            except ToolkitError as exc:
+                app._show_detail_panel("读取会话失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+                return None
+            needs_reload = False
 
         selected_index = clamp_selected_index(selected_index, len(entries))
         subtitle = (
@@ -267,6 +277,7 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
             )
             filter_text = new_filter or ""
             selected_index = 0
+            needs_reload = True
             continue
         if key_str == "e" and entries and mode == "view":
             selected = entries[selected_index]

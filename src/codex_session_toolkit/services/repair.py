@@ -139,6 +139,7 @@ def repair_desktop(
             session_id=session_id,
             session_file=session_file,
             cwd=cwd,
+            first_user_prompt=parsed_session.first_user_prompt,
             existing_index=existing_index,
             history_first_messages=history_first_messages,
         )
@@ -236,6 +237,7 @@ def _repair_thread_name(
     session_id: str,
     session_file,
     cwd: str,
+    first_user_prompt: str,
     existing_index: dict,
     history_first_messages: dict[str, str],
 ) -> str:
@@ -247,6 +249,7 @@ def _repair_thread_name(
         history_first_messages.get(session_id, ""),
         session_file,
         cwd,
+        first_user_prompt=first_user_prompt,
     )
     if preview and not _is_weak_thread_name(preview, session_id):
         return preview

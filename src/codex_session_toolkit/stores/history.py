@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import AbstractSet, Dict, List, Optional, Sequence
 
 
-def first_history_messages(history_file: Path) -> Dict[str, str]:
+def first_history_messages(history_file: Path, session_ids: Optional[AbstractSet[str]] = None) -> Dict[str, str]:
     first_messages: Dict[str, str] = {}
     if not history_file.exists():
         return first_messages
+    if session_ids is not None and not session_ids:
+        return first_messages
+
+    remaining = set(session_ids) if session_ids is not None else None
 
     with history_file.open("r", encoding="utf-8") as fh:
         for raw in fh:
@@ -25,9 +29,15 @@ def first_history_messages(history_file: Path) -> Dict[str, str]:
                 continue
             session_id = obj.get("session_id")
             text = obj.get("text")
+            if remaining is not None and session_id not in remaining:
+                continue
             if isinstance(session_id, str) and session_id and session_id not in first_messages:
                 if isinstance(text, str) and text:
                     first_messages[session_id] = text.replace("\n", " ")
+                    if remaining is not None:
+                        remaining.discard(session_id)
+                        if not remaining:
+                            break
     return first_messages
 
 
