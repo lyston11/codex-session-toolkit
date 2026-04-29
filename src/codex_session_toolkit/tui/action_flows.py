@@ -12,6 +12,17 @@ if TYPE_CHECKING:
     from .view_models import TuiMenuAction
 
 
+def build_desktop_repair_cli_args(target_provider: str, *, include_cli: bool, dry_run: bool) -> list[str]:
+    cli_args = ["repair-desktop"]
+    if target_provider:
+        cli_args.append(target_provider)
+    if include_cli:
+        cli_args.append("--include-cli")
+    if dry_run:
+        cli_args.append("--dry-run")
+    return cli_args
+
+
 def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuAction") -> tuple[Optional[str], Optional[list[str]]]:
     action_name = menu_action.label
     cli_args = list(menu_action.cli_args)
@@ -139,13 +150,15 @@ def execute_menu_action(app: "ToolkitTuiApp", chosen_action: "TuiMenuAction") ->
         if dry_run is None:
             return
 
-        cli_args = ["repair-desktop"]
+        cli_args = build_desktop_repair_cli_args(
+            app.context.target_provider,
+            include_cli=include_cli,
+            dry_run=dry_run,
+        )
         action_name = "修复会话在 Desktop 中显示"
         if include_cli:
-            cli_args.append("--include-cli")
             action_name += "并纳入 CLI 会话"
         if dry_run:
-            cli_args.append("--dry-run")
             action_name += "（Dry-run）"
         app._run_action(
             action_name,
