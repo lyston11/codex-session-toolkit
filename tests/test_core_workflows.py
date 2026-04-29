@@ -23,6 +23,7 @@ from codex_session_toolkit.services.browse import get_bundle_summaries, get_proj
 from codex_session_toolkit.services.clone import clone_to_provider  # noqa: E402
 from codex_session_toolkit.services.exporting import export_active_desktop_all, export_project_sessions, export_session  # noqa: E402
 from codex_session_toolkit.services.importing import import_desktop_all, import_session  # noqa: E402
+from codex_session_toolkit.services.provider import detect_provider  # noqa: E402
 from codex_session_toolkit.services.repair import repair_desktop  # noqa: E402
 from codex_session_toolkit.support import default_local_project_target, machine_label_to_key  # noqa: E402
 from codex_session_toolkit.stores import bundles as legacy_bundles  # noqa: E402
@@ -735,6 +736,38 @@ class CoreWorkflowTests(unittest.TestCase):
                 sibling_target, sibling_status = default_local_project_target("project-a", str(workspace / "missing-project-a"))
                 self.assertEqual((str(Path(sibling_target).resolve()), sibling_status), (str(sibling_project.resolve()), "same_name"))
 
+    def test_detect_provider_falls_back_to_latest_desktop_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            db_path = create_threads_db(home)
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "insert into threads (id, updated_at, model_provider) values (?, ?, ?)",
+                ("older", 100, "custom"),
+            )
+            conn.execute(
+                "insert into threads (id, updated_at, model_provider) values (?, ?, ?)",
+                ("newer", 200, "account-provider"),
+            )
+            conn.commit()
+            conn.close()
+
+            self.assertEqual(detect_provider(CodexPaths(home=home)), "account-provider")
+
+    def test_detect_provider_falls_back_to_latest_session_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            write_session(
+                home,
+                "30303030-3030-3030-3030-303030303030",
+                provider="session-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=Path("/Users/example/project-a"),
+            )
+
+            self.assertEqual(detect_provider(CodexPaths(home=home)), "session-provider")
+
     def test_import_desktop_all_filters_project_and_remaps_cwd_to_target_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
@@ -892,6 +925,43 @@ class CoreWorkflowTests(unittest.TestCase):
             row = conn.execute("select source, model_provider, cwd from threads where id = ?", (session_id,)).fetchone()
             conn.close()
             self.assertEqual(row, ("vscode", "target-provider", str(missing_cwd)))
+
+    def test_import_session_uses_desktop_thread_provider_when_config_has_no_model_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_state_file(dst_home)
+            db_path = create_threads_db(dst_home)
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "insert into threads (id, updated_at, model_provider) values (?, ?, ?)",
+                ("account-thread", 200, "account-provider"),
+            )
+            conn.commit()
+            conn.close()
+
+            session_id = "15151515-1515-1515-1515-151515151515"
+            write_session(
+                src_home,
+                session_id,
+                provider="custom",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace / "project-a",
+            )
+
+            src_paths = CodexPaths(home=src_home)
+            dst_paths = CodexPaths(home=dst_home)
+            with pushd(workspace):
+                export_result = export_session(src_paths, session_id)
+                import_result = import_session(dst_paths, str(export_result.bundle_dir), desktop_visible=True)
+
+            target_session = dst_home / ".codex" / import_result.relative_path
+            payload = read_session_payload(target_session)
+            self.assertEqual(import_result.target_desktop_model_provider, "account-provider")
+            self.assertEqual(payload["model_provider"], "account-provider")
 
     def test_repair_desktop_rebuilds_index_and_converts_cli_threads(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

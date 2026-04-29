@@ -17,6 +17,7 @@
 
 ## 最近增强
 
+- **账号登录模式 Provider 识别**：当 `~/.codex/config.toml` 没有 `model_provider` 时，会从 Desktop `threads` 表和现有 rollout 中推断当前账号会话的 provider；导入和 Desktop 修复不再卡在传统 config 字段上
 - **Skill 随会话搬运**：导出时自动识别会话中使用的自定义 Skill 并打包到 Bundle；导入时自动恢复到目标机器，冲突跳过，缺失汇总报告
 - `Session / Browse` 新增按项目路径查看与导出：粘贴项目路径后，可只浏览该项目下的会话，并批量导出到 `./codex_sessions/<machine>/project/<project>/<timestamp>/`
 - `Bundle / Transfer` 新增按项目文件夹导入：在 `project` 分类下继续选择具体项目文件夹，并把会话 `cwd` 映射到当前机器的目标项目路径
@@ -67,6 +68,7 @@
 
 - 如果导入的是 Desktop / CLI 会话，工具会顺手维护 `session_index.jsonl`、`threads` 表和 workspace roots
 - 如果工作目录或目标项目目录缺失，可直接选择自动创建
+- 如果源会话来自 `custom` provider，而当前机器使用账号登录会话，导入时会优先按目标 Desktop 当前 provider 改写 rollout，避免导入后仍挂在旧 provider 上
 
 ### Repair / Maintenance
 
@@ -465,6 +467,13 @@ codex-session-toolkit import-desktop-all --machine Work-Laptop --project project
 
 说明：命令名保留为 `import-desktop-all` 以兼容旧版本，但现在实际可结合 `--export-group` 导入 `desktop / active / cli / project / single` 五类 Bundle。
 
+Provider 处理说明：
+
+- 导出 Bundle 时会保留源会话的原始 `model_provider`，例如 `custom`
+- 导入到 Desktop 环境时，工具会按目标机器当前 provider 准备 rollout
+- Provider 识别顺序为：命令显式参数、`~/.codex/config.toml`、最新 Desktop `threads` 表、最新 rollout 会话文件
+- 账号登录模式下如果 config 没有 `model_provider`，通常会从 `state_*.sqlite` 的 `threads.model_provider` 推断
+
 项目导入补充说明：
 
 - `--project` 用于锁定 `project` 分类下的某一个项目文件夹
@@ -475,10 +484,13 @@ codex-session-toolkit import-desktop-all --machine Work-Laptop --project project
 
 ```bash
 codex-session-toolkit repair-desktop
+codex-session-toolkit repair-desktop <target_provider>
 codex-session-toolkit repair-desktop --dry-run
 codex-session-toolkit repair-desktop --include-cli
 codex-session-toolkit repair-desktop --include-cli --dry-run
 ```
+
+如果当前机器是账号登录模式，TUI 会把识别到的目标 provider 显式传给修复命令；CLI 也可以手动传入 `<target_provider>` 覆盖自动识别。
 
 ## Bundle 目录策略
 
