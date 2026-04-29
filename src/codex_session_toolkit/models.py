@@ -193,6 +193,7 @@ class RepairResult:
     provider: str
     dry_run: bool
     include_cli: bool
+    include_archived: bool
     entries_scanned: int
     desktop_retagged: int
     cli_converted: int

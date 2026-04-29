@@ -131,6 +131,7 @@ def create_parser() -> argparse.ArgumentParser:
     repair_parser.add_argument("target_provider", nargs="?", default="", help="Optional provider override")
     repair_parser.add_argument("--dry-run", action="store_true")
     repair_parser.add_argument("--include-cli", action="store_true")
+    repair_parser.add_argument("--include-archived", action="store_true", help="Also repair archived session files")
 
     return parser
 
@@ -231,6 +232,7 @@ def run_cli(argv: Sequence[str], *, paths: Optional[CodexPaths] = None) -> int:
                 target_provider=args.target_provider,
                 dry_run=args.dry_run,
                 include_cli=args.include_cli,
+                include_archived=args.include_archived,
             )
         )
 

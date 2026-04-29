@@ -1018,10 +1018,117 @@ class CoreWorkflowTests(unittest.TestCase):
 
             index_lines = (home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(index_lines), 2)
+            index_by_id = {json.loads(raw)["id"]: json.loads(raw) for raw in index_lines}
+            self.assertEqual(index_by_id[desktop_id]["thread_name"], "desktop message")
+            self.assertEqual(index_by_id[cli_id]["thread_name"], "cli message")
 
             state_data = json.loads((home / ".codex" / ".codex-global-state.json").read_text(encoding="utf-8"))
             self.assertIn(str(desktop_cwd), state_data["electron-saved-workspace-roots"])
             self.assertIn(str(cli_cwd), state_data["electron-saved-workspace-roots"])
+
+    def test_repair_desktop_recovers_weak_thread_name_from_session_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "repaired-provider")
+            write_state_file(home)
+            create_threads_db(home)
+
+            session_id = "25252525-2525-2525-2525-252525252525"
+            session_cwd = workspace / "named-project"
+            session_cwd.mkdir()
+            write_session(
+                home,
+                session_id,
+                provider="old-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=session_cwd,
+                user_message="Restore this real thread name",
+            )
+            (home / ".codex" / "session_index.jsonl").write_text(
+                json.dumps(
+                    {
+                        "id": session_id,
+                        "thread_name": session_id,
+                        "updated_at": "2026-04-10T10:00:00Z",
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            repair_desktop(CodexPaths(home=home))
+
+            repaired_index = json.loads((home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(repaired_index["thread_name"], "Restore this real thread name")
+
+            conn = sqlite3.connect(home / ".codex" / "state_0001.sqlite")
+            row = conn.execute("select title, first_user_message from threads where id = ?", (session_id,)).fetchone()
+            conn.close()
+            self.assertEqual(row, ("Restore this real thread name", "Restore this real thread name"))
+
+    def test_repair_desktop_skips_archived_sessions_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "repaired-provider")
+            write_state_file(home)
+            create_threads_db(home)
+
+            active_id = "35353535-3535-3535-3535-353535353535"
+            archived_id = "45454545-4545-4545-4545-454545454545"
+            active_cwd = workspace / "active-project"
+            archived_cwd = workspace / "archived-project"
+            active_cwd.mkdir()
+            archived_cwd.mkdir()
+            write_session(
+                home,
+                active_id,
+                provider="old-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=active_cwd,
+                user_message="active thread",
+            )
+            write_session(
+                home,
+                archived_id,
+                provider="old-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=archived_cwd,
+                archived=True,
+                user_message="archived thread",
+            )
+
+            paths = CodexPaths(home=home)
+            default_result = repair_desktop(paths)
+            self.assertEqual(default_result.entries_scanned, 1)
+            self.assertFalse(default_result.include_archived)
+
+            index_lines = (home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual([json.loads(raw)["id"] for raw in index_lines], [active_id])
+            conn = sqlite3.connect(home / ".codex" / "state_0001.sqlite")
+            rows = conn.execute("select id from threads order by id").fetchall()
+            conn.close()
+            self.assertEqual(rows, [(active_id,)])
+
+            archived_result = repair_desktop(paths, include_archived=True)
+            self.assertEqual(archived_result.entries_scanned, 2)
+            self.assertTrue(archived_result.include_archived)
+            index_ids = {
+                json.loads(raw)["id"]
+                for raw in (home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8").splitlines()
+            }
+            self.assertEqual(index_ids, {active_id, archived_id})
+            conn = sqlite3.connect(home / ".codex" / "state_0001.sqlite")
+            archived_row = conn.execute("select archived from threads where id = ?", (archived_id,)).fetchone()
+            conn.close()
+            self.assertEqual(archived_row, (1,))
 
     def test_import_preserves_newer_local_session_rollout(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

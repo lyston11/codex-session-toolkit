@@ -19,7 +19,7 @@ from ..stores.desktop_state import (
 )
 from ..stores.history import first_history_messages
 from ..stores.index import SessionIndexEntry, load_existing_index, write_session_index_entries
-from ..stores.session_files import iter_session_files
+from ..stores.session_files import build_session_preview, iter_session_files
 from ..stores.session_parser import parse_session_file
 from ..support import backup_file, classify_session_kind, iso_to_epoch, nearest_existing_parent, normalize_iso
 
@@ -30,6 +30,7 @@ def repair_desktop(
     target_provider: str = "",
     dry_run: bool = False,
     include_cli: bool = False,
+    include_archived: bool = False,
 ) -> RepairResult:
     if not paths.code_dir.is_dir():
         raise ToolkitError(f"Missing Codex data directory: {paths.code_dir}")
@@ -50,7 +51,7 @@ def repair_desktop(
     desktop_retagged = 0
     cli_converted = 0
 
-    for session_file in iter_session_files(paths):
+    for session_file in iter_session_files(paths, active_only=not include_archived):
         try:
             parsed_session = parse_session_file(session_file)
         except ToolkitError as exc:
@@ -126,7 +127,6 @@ def repair_desktop(
                             fh.write(raw)
 
         session_meta = updated_meta
-        thread_name = existing_index.get(session_id, {}).get("thread_name") or history_first_messages.get(session_id) or session_id
         created_iso = normalize_iso(str(session_meta.get("timestamp", ""))) or normalize_iso(parsed_session.last_timestamp)
         updated_iso = (
             normalize_iso(parsed_session.last_timestamp)
@@ -135,6 +135,14 @@ def repair_desktop(
             or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         )
         cwd = session_meta.get("cwd", "") if isinstance(session_meta.get("cwd", ""), str) else ""
+        thread_name = _repair_thread_name(
+            session_id=session_id,
+            session_file=session_file,
+            cwd=cwd,
+            existing_index=existing_index,
+            history_first_messages=history_first_messages,
+        )
+        first_user_message = history_first_messages.get(session_id) or parsed_session.first_user_prompt or thread_name
         if cwd:
             candidate = nearest_existing_parent(cwd) or cwd
             if candidate and candidate not in workspace_candidates:
@@ -152,7 +160,7 @@ def repair_desktop(
                 "cwd": cwd,
                 "created_iso": created_iso or updated_iso,
                 "updated_iso": updated_iso,
-                "first_user_message": history_first_messages.get(session_id, thread_name),
+                "first_user_message": first_user_message,
                 "parsed_session": parsed_session,
             }
         )
@@ -210,6 +218,7 @@ def repair_desktop(
         provider=provider,
         dry_run=dry_run,
         include_cli=include_cli,
+        include_archived=include_archived,
         entries_scanned=len(entries),
         desktop_retagged=desktop_retagged,
         cli_converted=cli_converted,
@@ -219,4 +228,36 @@ def repair_desktop(
         backup_root=(None if dry_run else backup_root),
         changed_sessions=changed_sessions,
         warnings=warnings,
+    )
+
+
+def _repair_thread_name(
+    *,
+    session_id: str,
+    session_file,
+    cwd: str,
+    existing_index: dict,
+    history_first_messages: dict[str, str],
+) -> str:
+    existing_name = str(existing_index.get(session_id, {}).get("thread_name") or "").strip()
+    if not _is_weak_thread_name(existing_name, session_id):
+        return existing_name
+
+    preview = build_session_preview(
+        history_first_messages.get(session_id, ""),
+        session_file,
+        cwd,
+    )
+    if preview and not _is_weak_thread_name(preview, session_id):
+        return preview
+    return session_id
+
+
+def _is_weak_thread_name(thread_name: str, session_id: str) -> bool:
+    normalized = (thread_name or "").strip()
+    return (
+        not normalized
+        or normalized == session_id
+        or normalized == f"Imported {session_id}"
+        or normalized.startswith("rollout-")
     )
