@@ -22,6 +22,15 @@
 - `Bundle / Transfer` 新增按项目文件夹导入：在 `project` 分类下继续选择具体项目文件夹，并把会话 `cwd` 映射到当前机器的目标项目路径
 - 项目导入会显示本机匹配状态：优先复用原路径，其次尝试同名项目目录；若目标路径不存在，可直接选择是否创建后再导入
 
+## 本次发布亮点
+
+这一版最重要的变化有 4 类：
+
+- **Skill 跟随会话跨设备搬运**：Bundle 不再只包含 rollout 和 history，还可以携带会话真正依赖的自定义 Skill
+- **按项目路径导出 / 导入**：可以围绕项目目录整理会话，而不是只能按单条 session 或整机批量迁移
+- **批量导入默认更省事**：优先走 best-effort，自动恢复可恢复的 Skill，冲突默认跳过，缺失统一汇总
+- **TUI / CLI / Python API 边界更清晰**：兼容层保留，但新代码可以直接依赖更稳定的正式入口
+
 ## 功能概览
 
 ### Session / Browse
@@ -192,6 +201,11 @@ make release
 - `./dist/releases/codex-session-toolkit-<version>.tar.gz`
 - `./dist/releases/codex-session-toolkit-<version>.zip`
 
+建议同时把下面两个文件内容一起贴到 Release 页面：
+
+- [readme.md](./readme.md)
+- [CHANGELOG.md](./CHANGELOG.md)
+
 对方解压后，直接运行：
 
 - macOS / Linux：`./install.sh`
@@ -204,6 +218,25 @@ make release
 - Windows：`.\codex-session-toolkit.cmd`
 
 release 只会携带分发所需文件；CI、测试、兼容层、release 构建器本身和本地缓存都不会进入发布包。
+
+### 发布前快速检查
+
+如果你准备正式发一个 release，推荐至少执行这几步：
+
+```bash
+make version
+make test
+make smoke
+make release
+```
+
+建议检查这些输出：
+
+- `make version` 能打印出当前包版本
+- `make test` 全部通过
+- `make smoke` 能通过 launcher / module / release help 的基本烟测
+- `./dist/releases/` 下生成了发布目录、`.tar.gz`，以及可选的 `.zip`
+- 解压后的发布目录里包含 `readme.md`、`CHANGELOG.md`、安装脚本和 launcher
 
 ### 直接安装到当前 Python 环境
 
@@ -558,6 +591,26 @@ Bundle 内默认包含：
 | `strict` | 缺失或冲突时中止导入 |
 | `skip` | 完全不处理 Skill |
 | `overwrite` | 允许覆盖本机已有 Skill |
+
+批量导入时，工具还会额外生成一份 Skill 恢复报告：
+
+- 位置通常在当前 `codex_sessions/` 根目录下，文件名形如 `_skills_restore_report.<timestamp>.<id>.json`
+- 报告会按 session 记录 `restored / already_present / conflict_skipped / missing / failed`
+- CLI 汇总输出也会显示总计数，方便导入后快速判断还需要手工补哪些 Skill
+
+导出时 `--skills-mode` 也支持同样的 4 种取值：
+
+| 模式 | 行为 |
+|---|---|
+| `best-effort`（默认） | 能打包就打包，失败只记 warning，不阻塞导出 |
+| `strict` | 遇到 Skill 侧车生成或打包异常时中止导出 |
+| `skip` | 完全跳过 Skill 检测与打包 |
+| `overwrite` | 对导出流程没有额外意义，行为等同于 `best-effort` |
+
+补充说明：
+
+- `validate-bundles` 当前重点校验 `manifest.env`、bundle 内 session JSONL 和 `history.jsonl`
+- `skills_manifest.json` 的有效性会在导入 Skill 时进一步校验；如果 sidecar 无效，默认会记 warning，并在 `strict` 模式下中止
 
 ## 安全性说明
 
