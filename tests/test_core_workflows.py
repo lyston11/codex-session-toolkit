@@ -373,6 +373,29 @@ class CoreWorkflowTests(unittest.TestCase):
                 "https://github.com/xiaotian2333/newapi-checkin.git 把这个醒目拉下来看看",
             )
 
+    def test_session_summaries_do_not_full_parse_rollouts_for_list_view(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            write_config(home, "source-provider")
+
+            session_id = "15151515-1515-1515-1515-151515151515"
+            write_session(
+                home,
+                session_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=Path("/Users/example/project-fast"),
+                user_message="fast list preview",
+            )
+
+            with patch("codex_session_toolkit.stores.session_files.parse_session_file") as full_parse:
+                summaries = get_session_summaries(CodexPaths(home=home), limit=20)
+
+            full_parse.assert_not_called()
+            self.assertEqual(len(summaries), 1)
+            self.assertEqual(summaries[0].preview, "fast list preview")
+
     def test_session_summaries_fall_back_to_workspace_name_for_windows_cwd(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir) / "home"

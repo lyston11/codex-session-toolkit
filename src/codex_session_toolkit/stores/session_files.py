@@ -17,6 +17,7 @@ from .session_parser import (
     normalize_session_text,
     parse_jsonl_records as _parse_jsonl_records,
     parse_session_file,
+    parse_session_summary_file,
 )
 
 
@@ -61,8 +62,15 @@ def workspace_name_from_cwd(cwd: str) -> str:
     return Path(stripped).name or PureWindowsPath(stripped).name or stripped
 
 
-def build_session_preview(history_preview: str, session_file: Path, cwd: str) -> str:
-    for candidate in (history_preview, first_user_prompt_from_session(session_file)):
+def build_session_preview(
+    history_preview: str,
+    session_file: Path,
+    cwd: str,
+    *,
+    first_user_prompt: Optional[str] = None,
+) -> str:
+    prompt = first_user_prompt_from_session(session_file) if first_user_prompt is None else first_user_prompt
+    for candidate in (history_preview, prompt):
         normalized = normalize_session_text(candidate)
         if normalized and not looks_like_session_meta_text(normalized):
             return normalized
@@ -118,14 +126,26 @@ def collect_session_summaries(
     desktop_only: bool = False,
     project_path: str = "",
 ) -> List[SessionSummary]:
-    history_preview = first_history_messages(paths.history_file)
     summaries: List[SessionSummary] = []
+    session_files = sorted(iter_session_files(paths, active_only=active_only), reverse=True)
+    history_session_ids = None
+    if limit is not None and not pattern and not project_path and not desktop_only:
+        history_session_ids = {
+            session_id_from_filename(session_file) or session_file.stem
+            for session_file in session_files[: max(1, limit)]
+        }
+    history_preview = first_history_messages(paths.history_file, session_ids=history_session_ids)
 
-    for session_file in sorted(iter_session_files(paths, active_only=active_only), reverse=True):
+    for session_file in session_files:
         session_id = session_id_from_filename(session_file) or session_file.stem
         session_scope = "archived" if str(session_file).startswith(str(paths.archived_sessions_dir)) else "active"
+        history_text = history_preview.get(session_id, "")
+        include_first_user_prompt = not history_text or looks_like_session_meta_text(history_text)
         try:
-            parsed_session = parse_session_file(session_file)
+            parsed_session = parse_session_summary_file(
+                session_file,
+                include_first_user_prompt=include_first_user_prompt,
+            )
         except ToolkitError:
             parsed_session = None
 
@@ -138,9 +158,10 @@ def collect_session_summaries(
             continue
         model_provider = parsed_session.model_provider if parsed_session is not None else ""
         preview = build_session_preview(
-            history_preview.get(session_id, ""),
+            history_text,
             session_file,
             cwd,
+            first_user_prompt=parsed_session.first_user_prompt if parsed_session is not None else "",
         )
         summary = SessionSummary(
             session_id=session_id,
