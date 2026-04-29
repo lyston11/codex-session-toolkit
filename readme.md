@@ -73,13 +73,14 @@
 ### Repair / Maintenance
 
 - 迁移到当前 Provider
-- 修复会话在 Desktop 中显示
+- 修复 active 会话在 Desktop 中显示
 - 清理旧版无标记副本
 - 支持 Dry-run 预演
 - 自动修复 / 重建 `session_index.jsonl`
 - 自动 upsert `state_*.sqlite` 的 `threads` 表
 - 自动补充 Desktop workspace roots
 - 可选将 CLI 会话纳入 Desktop
+- 默认不恢复 archived 会话；如确实需要，可在 CLI 使用 `--include-archived`
 
 ## 快速安装与启动
 
@@ -351,10 +352,12 @@ codex-session-toolkit repair-desktop
 codex-session-toolkit repair-desktop <target_provider>
 codex-session-toolkit repair-desktop --dry-run
 codex-session-toolkit repair-desktop --include-cli
+codex-session-toolkit repair-desktop --include-archived
 codex-session-toolkit repair-desktop --include-cli --dry-run
 ```
 
 如果当前机器是账号登录模式，TUI 会把识别到的目标 provider 显式传给修复命令；CLI 也可以手动传入 `<target_provider>` 覆盖自动识别。
+默认只修复 active 会话，避免把已经归档的历史线程重新带回侧边栏；需要 archived 会话时再显式加 `--include-archived`。
 
 ## Bundle 目录策略
 

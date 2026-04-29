@@ -81,7 +81,7 @@ def create_arg_parser() -> argparse.ArgumentParser:
             "  export-cli-all        Batch export all CLI sessions\n"
             "  import                Import one bundle\n"
             "  import-desktop-all    Batch import one machine/category or project folder\n"
-            "  repair-desktop        Repair Desktop visibility/index/provider\n\n"
+            "  repair-desktop        Repair active Desktop visibility/index/provider\n\n"
             "Legacy flags still work:\n"
             "  --dry-run             Preview clone mode\n"
             "  --clean               Cleanup legacy clone files\n"

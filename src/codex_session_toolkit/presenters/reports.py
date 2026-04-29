@@ -299,6 +299,7 @@ def print_repair_result(result: RepairResult) -> int:
     print(f"Target model provider: {result.provider}")
     print(f"Dry run: {'yes' if result.dry_run else 'no'}")
     print(f"Include CLI: {'yes' if result.include_cli else 'no'}")
+    print(f"Include archived: {'yes' if result.include_archived else 'no'}")
     print(f"Valid session files scanned: {result.entries_scanned}")
     print(f"Desktop session files retagged: {result.desktop_retagged}")
     print(f"CLI session files converted: {result.cli_converted}")
