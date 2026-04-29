@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -14,12 +15,50 @@ from .navigation_state import (
     cycle_option_key,
     selection_window,
 )
-from .terminal import Ansi, ellipsize_middle, glyphs, render_box, style_text
+from .terminal import Ansi, align_line, app_logo_lines, ellipsize_middle, glyphs, render_box, style_text
 from .terminal_io import read_key
 
 if TYPE_CHECKING:
     from ..models import BundleSummary, SessionSummary
     from .app import ToolkitTuiApp
+
+
+def render_browser_frame(
+    app: "ToolkitTuiApp",
+    *,
+    title: str,
+    subtitle: str,
+    info_lines: list[str],
+    list_lines: list[str],
+    list_border_codes: tuple[str, ...],
+    box_width: int,
+    center: bool,
+) -> None:
+    output_lines: list[str] = []
+    for line in app_logo_lines(max_width=100):
+        output_lines.append(align_line(line, box_width, center=center))
+    output_lines.append(align_line(style_text("Codex 会话工具箱", Ansi.BOLD, Ansi.CYAN), box_width, center=center))
+    output_lines.append(align_line(style_text(title, Ansi.DIM), box_width, center=center))
+    if subtitle:
+        output_lines.append(align_line(style_text(subtitle, Ansi.DIM), box_width, center=center))
+    output_lines.append("")
+
+    for line in render_box(info_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
+        output_lines.append(line)
+    output_lines.append("")
+
+    for line in render_box(list_lines, width=box_width, border_codes=list_border_codes):
+        output_lines.append(line)
+
+    hide_cursor = "\033[?25l"
+    show_cursor = "\033[?25h"
+    home_cursor = "\033[H"
+    clear_to_eol = "\033[K"
+    clear_to_eos = "\033[J"
+    visible_lines = app._fit_lines_to_screen(output_lines)
+    full_output = "\n".join(line + clear_to_eol for line in visible_lines) + "\n"
+    sys.stdout.write(hide_cursor + home_cursor + full_output + clear_to_eos + show_cursor)
+    sys.stdout.flush()
 
 
 def open_project_session_browser(app: "ToolkitTuiApp") -> None:
@@ -53,8 +92,8 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
             needs_reload = False
 
         selected_index = clamp_selected_index(selected_index, len(entries))
+        box_width, center = app._screen_layout()
         subtitle = "↑/↓ 选择 · Enter 打开会话详情 · x 导出该项目全部会话 · / 搜索 · p 修改路径 · q 返回"
-        box_width = app._print_branded_header("按项目路径查看并导出会话", subtitle)
 
         info_lines = [
             f"{style_text('项目名', Ansi.DIM)} : {project_label}",
@@ -63,9 +102,6 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
             f"{style_text('导出目录', Ansi.DIM)} : {export_root_preview}",
             f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
         ]
-        for line in render_box(info_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
-            print(line)
-        print("")
 
         list_lines: list[str] = []
         if not entries:
@@ -96,8 +132,16 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
                         )
                 else:
                     list_lines.append(line)
-        for line in render_box(list_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.MAGENTA)):
-            print(line)
+        render_browser_frame(
+            app,
+            title="按项目路径查看并导出会话",
+            subtitle=subtitle,
+            info_lines=info_lines,
+            list_lines=list_lines,
+            list_border_codes=(Ansi.DIM, Ansi.MAGENTA),
+            box_width=box_width,
+            center=center,
+        )
 
         key = read_key()
         if key is None:
@@ -190,24 +234,19 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
             needs_reload = False
 
         selected_index = clamp_selected_index(selected_index, len(entries))
+        box_width, center = app._screen_layout()
         subtitle = (
             "↑/↓ 选择 · Enter 打开导出面板 · / 搜索 · e 直接导出 · d 查看详情 · q 返回"
             if mode == "view"
             else "↑/↓ 选择 · Enter 确认 · / 搜索 · d 查看详情 · q 返回"
         )
-        box_width = app._print_branded_header(
-            "浏览本机会话" if mode == "view" else "选择要导出的会话",
-            subtitle,
-        )
+        title = "浏览本机会话" if mode == "view" else "选择要导出的会话"
 
         info_lines = [
             f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
             f"{style_text('匹配数量', Ansi.DIM)} : {len(entries)}",
             f"{style_text('模式', Ansi.DIM)}   : {'浏览 / 直接操作' if mode == 'view' else '选择后导出'}",
         ]
-        for line in render_box(info_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
-            print(line)
-        print("")
 
         list_lines: list[str] = []
         if not entries:
@@ -238,8 +277,16 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
                         )
                 else:
                     list_lines.append(line)
-        for line in render_box(list_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.MAGENTA)):
-            print(line)
+        render_browser_frame(
+            app,
+            title=title,
+            subtitle=subtitle,
+            info_lines=info_lines,
+            list_lines=list_lines,
+            list_border_codes=(Ansi.DIM, Ansi.MAGENTA),
+            box_width=box_width,
+            center=center,
+        )
 
         key = read_key()
         if key is None:
@@ -314,6 +361,7 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
             return None
 
         selected_index = clamp_selected_index(selected_index, len(entries))
+        box_width, center = app._screen_layout()
         subtitle = (
             "↑/↓ 选择 · Enter 打开导入面板 · / 搜索 · s 切换导出方式 · m 切换机器 · "
             "l 切换历史视图 · i 导入 · v 自动建目录 · d 查看详情 · q 返回"
@@ -321,10 +369,7 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
             else "↑/↓ 选择 · Enter 确认 · / 搜索 · s 切换导出方式 · m 切换机器 · "
             "l 切换历史视图 · d 查看详情 · q 返回"
         )
-        box_width = app._print_branded_header(
-            "浏览 Bundle" if mode == "view" else "选择要导入的 Bundle",
-            subtitle,
-        )
+        title = "浏览 Bundle" if mode == "view" else "选择要导入的 Bundle"
 
         info_lines = [
             f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
@@ -333,9 +378,6 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
             f"{style_text('导出机器', Ansi.DIM)} : {snapshot.current_machine_label}",
             f"{style_text('历史视图', Ansi.DIM)} : {'每台机器每个会话仅显示最新一份 Bundle' if latest_only else '显示全部历史 Bundle'}",
         ]
-        for line in render_box(info_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
-            print(line)
-        print("")
 
         list_lines: list[str] = []
         if not entries:
@@ -358,8 +400,16 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
                     list_lines.append("  " + style_text(ellipsize_middle(detail_line, max(10, box_width - 10)), Ansi.DIM))
                 else:
                     list_lines.append(line)
-        for line in render_box(list_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.GREEN)):
-            print(line)
+        render_browser_frame(
+            app,
+            title=title,
+            subtitle=subtitle,
+            info_lines=info_lines,
+            list_lines=list_lines,
+            list_border_codes=(Ansi.DIM, Ansi.GREEN),
+            box_width=box_width,
+            center=center,
+        )
 
         key = read_key()
         if key is None:
