@@ -358,6 +358,7 @@ codex-session-toolkit repair-desktop --include-cli --dry-run
 
 如果当前机器是账号登录模式，TUI 会把识别到的目标 provider 显式传给修复命令；CLI 也可以手动传入 `<target_provider>` 覆盖自动识别。
 默认只修复 active 会话，避免把已经归档的历史线程重新带回侧边栏；同时会从 Desktop `threads` 表清理旧修复残留的 archived 登记。需要 archived 会话时再显式加 `--include-archived`。
+默认修复范围包括 Desktop 原生会话，以及已经登记在 Desktop `threads` 表中的 CLI 线程；工具会重新绑定目标 provider、重建索引和 `threads` 行，但会保留原始 `source/originator`。只有在加 `--include-cli` 时，工具才会额外把尚未登记到 Desktop 的 CLI 会话也写入 Desktop `threads` 表。
 
 ## Bundle 目录策略
 

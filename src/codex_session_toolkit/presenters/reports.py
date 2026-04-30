@@ -302,7 +302,7 @@ def print_repair_result(result: RepairResult) -> int:
     print(f"Include archived: {'yes' if result.include_archived else 'no'}")
     print(f"Valid session files scanned: {result.entries_scanned}")
     print(f"Desktop session files retagged: {result.desktop_retagged}")
-    print(f"CLI session files converted: {result.cli_converted}")
+    print(f"Additional CLI sessions registered for Desktop: {result.cli_converted}")
     print(f"Skipped invalid session files: {len(result.skipped_sessions)}")
     print(f"Workspace roots active after repair: {result.workspace_roots_count}")
     print(f"Desktop thread rows upserted: {result.threads_updated}")

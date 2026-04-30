@@ -243,11 +243,12 @@ def prompt_desktop_repair_scope(app: "ToolkitTuiApp") -> Optional[bool]:
         title="修复会话在 Desktop 中显示",
         prompt_label="选择修复范围",
         help_lines=[
-            "可只修复 Desktop 会话，也可顺手把 CLI 会话纳入 Desktop。",
+            "默认修复 Desktop 已登记会话，并保留原始 source/originator。",
+            "也可额外把尚未登记的 CLI 会话写入 Desktop threads。",
         ],
         choices=[
-            ("d", "仅修复 Desktop 会话"),
-            ("c", "同时纳入 CLI 会话"),
+            ("d", "仅修复已登记会话"),
+            ("c", "同时纳入未登记 CLI"),
         ],
         default="d",
     )

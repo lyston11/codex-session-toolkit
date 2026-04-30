@@ -1024,7 +1024,7 @@ class CoreWorkflowTests(unittest.TestCase):
             paths = CodexPaths(home=home)
             result = repair_desktop(paths, include_cli=True)
 
-            self.assertEqual(result.desktop_retagged, 1)
+            self.assertEqual(result.desktop_retagged, 2)
             self.assertEqual(result.cli_converted, 1)
             self.assertEqual(result.threads_updated, 2)
 
@@ -1036,8 +1036,8 @@ class CoreWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(desktop_payload["model_provider"], "repaired-provider")
             self.assertEqual(cli_payload["model_provider"], "repaired-provider")
-            self.assertEqual(cli_payload["source"], "vscode")
-            self.assertEqual(cli_payload["originator"], "Codex Desktop")
+            self.assertEqual(cli_payload["source"], "cli")
+            self.assertEqual(cli_payload["originator"], "codex_cli_rs")
 
             index_lines = (home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(index_lines), 2)
@@ -1048,6 +1048,173 @@ class CoreWorkflowTests(unittest.TestCase):
             state_data = json.loads((home / ".codex" / ".codex-global-state.json").read_text(encoding="utf-8"))
             self.assertIn(str(desktop_cwd), state_data["electron-saved-workspace-roots"])
             self.assertIn(str(cli_cwd), state_data["electron-saved-workspace-roots"])
+
+            conn = sqlite3.connect(home / ".codex" / "state_0001.sqlite")
+            rows = conn.execute(
+                "select id, model_provider, source from threads order by id"
+            ).fetchall()
+            conn.close()
+            self.assertEqual(
+                rows,
+                [
+                    (desktop_id, "repaired-provider", "vscode"),
+                    (cli_id, "repaired-provider", "cli"),
+                ],
+            )
+
+    def test_repair_desktop_repairs_desktop_registered_cli_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "repaired-provider")
+            write_state_file(home)
+            db_path = create_threads_db(home)
+
+            session_id = "56565656-5656-5656-5656-565656565656"
+            session_cwd = workspace / "registered-cli-project"
+            session_cwd.mkdir()
+            session_file = write_session(
+                home,
+                session_id,
+                provider="old-provider",
+                source="cli",
+                originator="codex-tui",
+                cwd=session_cwd,
+                user_message="Repair this desktop-visible thread",
+            )
+            (home / ".codex" / "session_index.jsonl").write_text(
+                json.dumps(
+                    {
+                        "id": session_id,
+                        "thread_name": "Repair this desktop-visible thread",
+                        "updated_at": "2026-04-10T10:05:00Z",
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                insert into threads (
+                    id, rollout_path, created_at, updated_at, source, model_provider, cwd, title,
+                    sandbox_policy, approval_mode, tokens_used, has_user_event, archived, cli_version,
+                    first_user_message, memory_mode
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    str(session_file),
+                    0,
+                    0,
+                    "cli",
+                    "old-provider",
+                    str(session_cwd),
+                    "sub2api",
+                    "{}",
+                    "on-request",
+                    0,
+                    1,
+                    0,
+                    "0.1.0",
+                    "sub2api",
+                    "enabled",
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            result = repair_desktop(CodexPaths(home=home))
+            self.assertEqual(result.desktop_retagged, 1)
+            self.assertEqual(result.cli_converted, 0)
+            self.assertEqual(result.threads_updated, 1)
+
+            payload = read_session_payload(session_file)
+            self.assertEqual(payload["model_provider"], "repaired-provider")
+            self.assertEqual(payload["source"], "cli")
+            self.assertEqual(payload["originator"], "codex-tui")
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                "select source, model_provider, title, first_user_message from threads where id = ?",
+                (session_id,),
+            ).fetchone()
+            conn.close()
+            self.assertEqual(
+                row,
+                (
+                    "cli",
+                    "repaired-provider",
+                    "Repair this desktop-visible thread",
+                    "Repair this desktop-visible thread",
+                ),
+            )
+
+    def test_repair_desktop_ignores_thread_rows_outside_codex_session_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "repaired-provider")
+            write_state_file(home)
+            db_path = create_threads_db(home)
+
+            session_id = "67676767-6767-6767-6767-676767676767"
+            session_cwd = workspace / "plain-cli-project"
+            session_cwd.mkdir()
+            session_file = write_session(
+                home,
+                session_id,
+                provider="old-provider",
+                source="cli",
+                originator="codex-tui",
+                cwd=session_cwd,
+                user_message="Leave this as CLI",
+            )
+
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                insert into threads (
+                    id, rollout_path, created_at, updated_at, source, model_provider, cwd, title,
+                    sandbox_policy, approval_mode, tokens_used, has_user_event, archived, cli_version,
+                    first_user_message, memory_mode
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    "/tmp/not-codex/rollout-2026-04-10T10-00-00-67676767-6767-6767-6767-676767676767.jsonl",
+                    0,
+                    0,
+                    "cli",
+                    "old-provider",
+                    str(session_cwd),
+                    "plain cli",
+                    "{}",
+                    "on-request",
+                    0,
+                    1,
+                    0,
+                    "0.1.0",
+                    "plain cli",
+                    "enabled",
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            result = repair_desktop(CodexPaths(home=home))
+            self.assertEqual(result.desktop_retagged, 0)
+            self.assertEqual(result.cli_converted, 0)
+            self.assertEqual(result.threads_updated, 0)
+
+            payload = read_session_payload(session_file)
+            self.assertEqual(payload["model_provider"], "old-provider")
+            self.assertEqual(payload["source"], "cli")
+            self.assertEqual(payload["originator"], "codex-tui")
 
     def test_repair_desktop_recovers_weak_thread_name_from_session_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
