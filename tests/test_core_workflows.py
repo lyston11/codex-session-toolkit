@@ -1153,6 +1153,14 @@ class CoreWorkflowTests(unittest.TestCase):
             conn.close()
             self.assertEqual(archived_row, (1,))
 
+            cleanup_result = repair_desktop(paths)
+            self.assertEqual(cleanup_result.entries_scanned, 1)
+            self.assertEqual(cleanup_result.threads_pruned, 1)
+            conn = sqlite3.connect(home / ".codex" / "state_0001.sqlite")
+            rows = conn.execute("select id, archived from threads order by id").fetchall()
+            conn.close()
+            self.assertEqual(rows, [(active_id, 0)])
+
     def test_import_preserves_newer_local_session_rollout(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"

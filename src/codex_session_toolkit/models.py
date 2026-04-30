@@ -200,6 +200,7 @@ class RepairResult:
     skipped_sessions: List[str]
     workspace_roots_count: int
     threads_updated: int
+    threads_pruned: int
     backup_root: Optional[Path]
     changed_sessions: List[str]
     warnings: List[OperationWarning]
