@@ -12,6 +12,7 @@ from ..paths import CodexPaths
 from ..services.provider import detect_provider
 from ..stores.desktop_state import (
     build_threads_row,
+    load_thread_session_ids,
     load_desktop_state_data,
     merge_workspace_root,
     prune_threads_rows,
@@ -44,6 +45,10 @@ def repair_desktop(
     history_first_messages = first_history_messages(paths.history_file)
     existing_index = load_existing_index(paths.index_file)
     state_db = paths.latest_state_db()
+    existing_thread_ids = load_thread_session_ids(
+        state_db,
+        managed_roots=(paths.sessions_dir, paths.archived_sessions_dir),
+    )
 
     entries: list[dict] = []
     changed_sessions: list[str] = []
@@ -83,33 +88,20 @@ def repair_desktop(
         source_name = session_meta.get("source", "")
         originator_name = session_meta.get("originator", "")
         session_kind = classify_session_kind(source_name, originator_name)
-        desktop_like = session_kind == "desktop"
-        convert_cli = include_cli and session_kind == "cli"
+        desktop_registered = session_id in existing_thread_ids
+        include_cli_session = include_cli and session_kind == "cli"
+        desktop_visible = session_kind == "desktop" or desktop_registered or include_cli_session
 
         updated_meta = dict(session_meta)
         changed = False
 
-        if desktop_like and provider and updated_meta.get("model_provider") != provider:
+        if include_cli_session and not desktop_registered:
+            cli_converted += 1
+
+        if desktop_visible and provider and updated_meta.get("model_provider") != provider:
             updated_meta["model_provider"] = provider
             changed = True
             desktop_retagged += 1
-
-        if convert_cli:
-            if updated_meta.get("source") != "vscode":
-                updated_meta["source"] = "vscode"
-                changed = True
-            if updated_meta.get("originator") != "Codex Desktop":
-                updated_meta["originator"] = "Codex Desktop"
-                changed = True
-            if provider and updated_meta.get("model_provider") != provider:
-                updated_meta["model_provider"] = provider
-                changed = True
-            if changed:
-                cli_converted += 1
-            source_name = updated_meta.get("source", source_name)
-            originator_name = updated_meta.get("originator", originator_name)
-            session_kind = "desktop"
-            desktop_like = True
 
         if changed:
             changed_sessions.append(str(session_file))
@@ -159,6 +151,7 @@ def repair_desktop(
                 "source": source_name,
                 "originator": originator_name,
                 "kind": session_kind,
+                "desktop_visible": desktop_visible,
                 "cwd": cwd,
                 "created_iso": created_iso or updated_iso,
                 "updated_iso": updated_iso,
@@ -207,7 +200,7 @@ def repair_desktop(
             model_provider_override=provider,
         )
         for entry in entries
-        if entry["kind"] == "desktop"
+        if entry["desktop_visible"]
     ]
 
     threads_updated = 0
@@ -218,7 +211,7 @@ def repair_desktop(
         if not skipped_sessions:
             threads_pruned = prune_threads_rows(
                 state_db,
-                desired_session_ids={str(entry["id"]) for entry in entries if entry["kind"] == "desktop"},
+                desired_session_ids={str(entry["id"]) for entry in entries if entry["desktop_visible"]},
                 managed_roots=(paths.sessions_dir, paths.archived_sessions_dir),
                 dry_run=dry_run,
             )

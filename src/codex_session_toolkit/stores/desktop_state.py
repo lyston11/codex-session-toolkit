@@ -235,6 +235,43 @@ def upsert_threads_rows(
         conn.close()
 
 
+def load_thread_session_ids(state_db: Optional[Path], *, managed_roots: Sequence[Path] = ()) -> set[str]:
+    if not state_db or not state_db.is_file():
+        return set()
+
+    try:
+        conn = sqlite3.connect(state_db)
+        cur = conn.cursor()
+        try:
+            row = cur.execute("select name from sqlite_master where type='table' and name='threads'").fetchone()
+            if not row:
+                return set()
+
+            columns = [r[1] for r in cur.execute("pragma table_info(threads)").fetchall()]
+            if "id" not in columns:
+                return set()
+
+            if "rollout_path" in columns and managed_roots:
+                return {
+                    session_id
+                    for session_id, rollout_path in cur.execute("select id, rollout_path from threads").fetchall()
+                    if isinstance(session_id, str)
+                    and session_id
+                    and isinstance(rollout_path, str)
+                    and _path_is_under_any_root(rollout_path, managed_roots)
+                }
+
+            return {
+                session_id
+                for (session_id,) in cur.execute("select id from threads").fetchall()
+                if isinstance(session_id, str) and session_id
+            }
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return set()
+
+
 def prune_threads_rows(
     state_db: Path,
     *,
