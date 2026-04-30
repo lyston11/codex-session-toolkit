@@ -306,6 +306,7 @@ def print_repair_result(result: RepairResult) -> int:
     print(f"Skipped invalid session files: {len(result.skipped_sessions)}")
     print(f"Workspace roots active after repair: {result.workspace_roots_count}")
     print(f"Desktop thread rows upserted: {result.threads_updated}")
+    print(f"Desktop thread rows pruned: {result.threads_pruned}")
     if result.backup_root is not None:
         print(f"Backup directory: {result.backup_root}")
 

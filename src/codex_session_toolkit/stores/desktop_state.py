@@ -235,6 +235,58 @@ def upsert_threads_rows(
         conn.close()
 
 
+def prune_threads_rows(
+    state_db: Path,
+    *,
+    desired_session_ids: set[str],
+    managed_roots: Sequence[Path],
+    dry_run: bool = False,
+) -> int:
+    if not state_db or not state_db.is_file():
+        return 0
+
+    conn = sqlite3.connect(state_db)
+    cur = conn.cursor()
+    try:
+        row = cur.execute("select name from sqlite_master where type='table' and name='threads'").fetchone()
+        if not row:
+            return 0
+
+        columns = [r[1] for r in cur.execute("pragma table_info(threads)").fetchall()]
+        if "id" not in columns or "rollout_path" not in columns:
+            return 0
+
+        stale_ids = []
+        for session_id, rollout_path in cur.execute("select id, rollout_path from threads").fetchall():
+            if not isinstance(session_id, str) or session_id in desired_session_ids:
+                continue
+            if isinstance(rollout_path, str) and _path_is_under_any_root(rollout_path, managed_roots):
+                stale_ids.append(session_id)
+
+        if not dry_run:
+            for session_id in stale_ids:
+                cur.execute("delete from threads where id = ?", (session_id,))
+            conn.commit()
+        return len(stale_ids)
+    finally:
+        conn.close()
+
+
+def _path_is_under_any_root(path_value: str, roots: Sequence[Path]) -> bool:
+    normalized_path = _normalized_thread_path(path_value)
+    if not normalized_path:
+        return False
+    for root in roots:
+        normalized_root = _normalized_thread_path(str(root))
+        if normalized_path == normalized_root or normalized_path.startswith(normalized_root + "/"):
+            return True
+    return False
+
+
+def _normalized_thread_path(path_value: str) -> str:
+    return str(path_value or "").replace("\\", "/").rstrip("/")
+
+
 def upsert_threads_table(
     state_db: Path,
     session_file: Path,

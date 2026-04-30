@@ -14,6 +14,7 @@ from ..stores.desktop_state import (
     build_threads_row,
     load_desktop_state_data,
     merge_workspace_root,
+    prune_threads_rows,
     upsert_threads_rows,
     write_desktop_state_data,
 )
@@ -210,9 +211,17 @@ def repair_desktop(
     ]
 
     threads_updated = 0
+    threads_pruned = 0
     if state_db and state_db.exists():
         if not dry_run:
             backup_file(paths.code_dir, backup_root, backed_up, state_db, enabled=True)
+        if not skipped_sessions:
+            threads_pruned = prune_threads_rows(
+                state_db,
+                desired_session_ids={str(entry["id"]) for entry in entries if entry["kind"] == "desktop"},
+                managed_roots=(paths.sessions_dir, paths.archived_sessions_dir),
+                dry_run=dry_run,
+            )
         threads_updated = upsert_threads_rows(state_db, thread_rows, dry_run=dry_run)
 
     return RepairResult(
@@ -226,6 +235,7 @@ def repair_desktop(
         skipped_sessions=skipped_sessions,
         workspace_roots_count=len(state_data.get("active-workspace-roots", [])),
         threads_updated=threads_updated,
+        threads_pruned=threads_pruned,
         backup_root=(None if dry_run else backup_root),
         changed_sessions=changed_sessions,
         warnings=warnings,
