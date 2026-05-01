@@ -13,14 +13,18 @@ from typing import Optional
 from ..errors import ToolkitError
 from ..models import BatchExportResult, ExportResult, OperationWarning
 from ..paths import CodexPaths
+from ..stores.desktop_state import load_thread_metadata
 from ..stores.history import collect_history_lines_for_session, first_history_text
+from ..stores.index import is_weak_thread_name
 from ..stores.session_files import (
+    build_session_preview,
     collect_session_ids_for_project,
     collect_session_ids_for_kind,
     extract_last_timestamp,
     extract_session_field_from_file,
     find_session_file,
 )
+from ..stores.session_parser import parse_session_summary_file
 from ..support import (
     build_batch_export_root,
     build_machine_bundle_root,
@@ -92,11 +96,26 @@ def export_session(
             fh.writelines(history_lines)
         validate_jsonl_file(bundle_history, "Bundled history file", "history", session_id)
 
-        first_prompt = first_history_text(history_lines)
         session_cwd = extract_session_field_from_file("cwd", session_file)
         session_source = extract_session_field_from_file("source", session_file)
         session_originator = extract_session_field_from_file("originator", session_file)
         session_kind = classify_session_kind(session_source, session_originator)
+        session_summary = parse_session_summary_file(session_file)
+        thread_metadata = load_thread_metadata(paths.latest_state_db(), session_ids={session_id}).get(session_id, {})
+        desktop_thread_name = str(thread_metadata.get("title") or "").strip()
+        first_prompt = (
+            str(thread_metadata.get("first_user_message") or "").strip()
+            or session_summary.first_user_prompt
+            or first_history_text(history_lines)
+        )
+        thread_name = build_session_preview(
+            first_prompt,
+            session_file,
+            session_cwd,
+            first_user_prompt=session_summary.first_user_prompt,
+        )
+        if desktop_thread_name and not is_weak_thread_name(desktop_thread_name, session_id):
+            thread_name = desktop_thread_name
         last_updated = extract_last_timestamp(session_file) or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         skills_bundled_count = 0
@@ -143,7 +162,8 @@ def export_session(
             RELATIVE_PATH=normalize_relative_path(str(relative_path)),
             EXPORTED_AT=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             UPDATED_AT=last_updated,
-            THREAD_NAME=first_prompt[:80],
+            THREAD_NAME=thread_name[:80],
+            FIRST_USER_MESSAGE=first_prompt,
             SESSION_CWD=session_cwd,
             SESSION_SOURCE=session_source,
             SESSION_ORIGINATOR=session_originator,

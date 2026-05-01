@@ -18,6 +18,7 @@
 ## 最近增强
 
 - **账号登录模式 Provider 识别**：当 `~/.codex/config.toml` 没有 `model_provider` 时，会从 Desktop `threads` 表和现有 rollout 中推断当前账号会话的 provider；导入和 Desktop 修复不再卡在传统 config 字段上
+- **Desktop 线程标题保留**：导出时会优先读取源机器 Desktop `state_*.sqlite` 里的 `threads.title`，导入时原样写回左侧线程栏；第一条用户消息会单独保存为 `FIRST_USER_MESSAGE`，只在没有真实标题时作为兜底
 - **Skill 随会话搬运**：导出时自动识别会话中使用的自定义 Skill 并打包到 Bundle；导入时自动恢复到目标机器，冲突跳过，缺失汇总报告
 - `Session / Browse` 新增按项目路径查看与导出：粘贴项目路径后，可只浏览该项目下的会话，并批量导出到 `./codex_sessions/<machine>/project/<project>/<timestamp>/`
 - `Bundle / Transfer` 新增按项目文件夹导入：在 `project` 分类下继续选择具体项目文件夹，并把会话 `cwd` 映射到当前机器的目标项目路径
@@ -67,6 +68,7 @@
 ### 3. 导入后补齐 Desktop 可见性
 
 - 如果导入的是 Desktop / CLI 会话，工具会顺手维护 `session_index.jsonl`、`threads` 表和 workspace roots
+- 如果 Bundle 来自新版本导出，Desktop 左侧线程名会优先使用源机器保存过的短标题，而不是简单取会话第一句话
 - 如果工作目录或目标项目目录缺失，可直接选择自动创建
 - 如果源会话来自 `custom` provider，而当前机器使用账号登录会话，导入时会优先按目标 Desktop 当前 provider 改写 rollout，避免导入后仍挂在旧 provider 上
 
@@ -338,6 +340,14 @@ Provider 处理说明：
 - 导入到 Desktop 环境时，工具会按目标机器当前 provider 准备 rollout
 - Provider 识别顺序为：命令显式参数、`~/.codex/config.toml`、最新 Desktop `threads` 表、最新 rollout 会话文件
 - 账号登录模式下如果 config 没有 `model_provider`，通常会从 `state_*.sqlite` 的 `threads.model_provider` 推断
+
+Desktop 标题处理说明：
+
+- 新版导出会从源机器 Desktop `threads.title` 读取真正的左侧线程短标题，写入 Bundle 的 `THREAD_NAME`
+- 第一条用户消息会写入 `FIRST_USER_MESSAGE`，用于 Desktop 的首条消息预览和极端情况下的兜底标题
+- 导入时优先使用 `THREAD_NAME`；如果旧 Bundle 没有带出标题，才会从现有 Desktop 标题、`session_index.jsonl` 或 rollout 首条用户消息中恢复
+- `repair-desktop` 会保留已有 Desktop 短标题，只修复 provider、索引、workspace roots 和 `threads` 登记，不会把标题强行覆盖成第一句话
+- 如果旧导出包中的 `THREAD_NAME` 为空，目标机器无法凭空还原源机器曾经生成过的短标题；需要在源机器用新版工具重新导出，或把源机器 `~/.codex/state_*.sqlite` 带到目标机器做标题合并
 
 项目导入补充说明：
 

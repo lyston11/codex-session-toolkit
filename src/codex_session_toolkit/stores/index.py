@@ -43,6 +43,16 @@ def salvage_index_line(raw: str) -> Optional[dict]:
     }
 
 
+def is_weak_thread_name(thread_name: str, session_id: str) -> bool:
+    normalized = (thread_name or "").strip()
+    return (
+        not normalized
+        or normalized == session_id
+        or normalized == f"Imported {session_id}"
+        or normalized.startswith("rollout-")
+    )
+
+
 def load_existing_index(index_file: Path) -> Dict[str, dict]:
     entries: Dict[str, dict] = {}
     if not index_file.exists():

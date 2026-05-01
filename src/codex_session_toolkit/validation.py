@@ -26,6 +26,7 @@ def load_manifest(manifest_file: Path) -> Dict[str, str]:
         "EXPORTED_AT",
         "UPDATED_AT",
         "THREAD_NAME",
+        "FIRST_USER_MESSAGE",
         "SESSION_CWD",
         "SESSION_SOURCE",
         "SESSION_ORIGINATOR",

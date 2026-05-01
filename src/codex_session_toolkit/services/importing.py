@@ -27,9 +27,16 @@ from ..stores.bundle_scanner import (
     collect_known_bundle_summaries,
     latest_distinct_bundle_summaries,
 )
-from ..stores.desktop_state import ensure_desktop_workspace_root, prepare_session_for_import, upsert_threads_table
-from ..stores.index import load_existing_index, upsert_session_index
-from ..stores.session_files import extract_last_timestamp, extract_session_field_from_file
+from ..stores.desktop_state import (
+    ensure_desktop_workspace_root,
+    load_thread_metadata,
+    prepare_session_for_import,
+    upsert_threads_table,
+)
+from ..stores.history import first_history_text
+from ..stores.index import is_weak_thread_name, load_existing_index, upsert_session_index
+from ..stores.session_files import build_session_preview, extract_last_timestamp, extract_session_field_from_file
+from ..stores.session_parser import parse_session_file
 from ..support import (
     classify_session_kind,
     iso_to_epoch,
@@ -113,11 +120,14 @@ def import_session(
     session_kind = manifest.get("SESSION_KIND", "") or classify_session_kind(session_source, session_originator)
     updated_at = normalize_updated_at(manifest.get("UPDATED_AT", ""), source_session, extract_last_timestamp(source_session))
     thread_name = manifest.get("THREAD_NAME", "")
+    manifest_first_user_message = manifest.get("FIRST_USER_MESSAGE", "")
 
     state_db = paths.latest_state_db()
     desktop_env = paths.state_file.exists() or state_db is not None
     target_desktop_model_provider = detect_provider(paths) if desktop_env else ""
     auto_desktop_compat = session_kind == "cli" and desktop_env
+    existing_desktop_metadata = load_thread_metadata(state_db, session_ids={session_id}).get(session_id, {})
+    existing_desktop_thread_name = str(existing_desktop_metadata.get("title") or "")
 
     prepared_fd, prepared_path = tempfile.mkstemp(prefix="codex-import-session.")
     warnings: list[OperationWarning] = []
@@ -198,7 +208,10 @@ def import_session(
         paths.history_file.parent.mkdir(parents=True, exist_ok=True)
         paths.history_file.touch(exist_ok=True)
         existing_history_lines = set(paths.history_file.read_text(encoding="utf-8").splitlines())
+        bundle_history_preview = ""
         if bundle_history.exists():
+            bundle_history_lines = bundle_history.read_text(encoding="utf-8").splitlines()
+            bundle_history_preview = first_history_text(bundle_history_lines)
             with bundle_history.open("r", encoding="utf-8") as fh_in, paths.history_file.open("a", encoding="utf-8") as fh_out:
                 for raw in fh_in:
                     stripped = raw.rstrip("\n")
@@ -207,15 +220,28 @@ def import_session(
                     fh_out.write(raw if raw.endswith("\n") else raw + "\n")
                     existing_history_lines.add(stripped)
 
-        effective_thread_name = (
-            existing_index.get(session_id, {}).get("thread_name")
-            if rollout_action == "preserved_newer_local"
-            else thread_name or existing_index.get(session_id, {}).get("thread_name")
+        parsed_effective_session = parse_session_file(effective_session_file)
+        recovered_thread_name = build_session_preview(
+            bundle_history_preview,
+            effective_session_file,
+            session_cwd,
+            first_user_prompt=parsed_effective_session.first_user_prompt,
+        )
+        existing_thread_name = existing_index.get(session_id, {}).get("thread_name", "")
+        effective_thread_name = _select_import_thread_name(
+            session_id,
+            manifest_thread_name=thread_name,
+            manifest_first_user_message=manifest_first_user_message,
+            existing_desktop_thread_name=existing_desktop_thread_name,
+            existing_index_thread_name=existing_thread_name,
+            recovered_thread_name=recovered_thread_name,
+            parsed_first_user_prompt=parsed_effective_session.first_user_prompt,
+            bundle_history_preview=bundle_history_preview,
         )
         upsert_session_index(
             paths.index_file,
             session_id,
-            effective_thread_name or f"Imported {session_id}",
+            effective_thread_name or session_id,
             effective_updated_at,
         )
 
@@ -247,6 +273,7 @@ def import_session(
                 session_id=session_id,
                 thread_name=effective_thread_name or thread_name,
                 updated_at=effective_updated_at,
+                first_user_message=manifest_first_user_message or parsed_effective_session.first_user_prompt,
                 session_cwd=session_cwd,
                 session_source=session_source,
                 session_originator=session_originator,
@@ -349,6 +376,50 @@ def import_session(
         )
     finally:
         Path(prepared_path).unlink(missing_ok=True)
+
+
+def _first_strong_thread_name(session_id: str, *candidates: object) -> str:
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if value and not is_weak_thread_name(value, session_id):
+            return value
+    return ""
+
+
+def _select_import_thread_name(
+    session_id: str,
+    *,
+    manifest_thread_name: str,
+    manifest_first_user_message: str,
+    existing_desktop_thread_name: str,
+    existing_index_thread_name: str,
+    recovered_thread_name: str,
+    parsed_first_user_prompt: str,
+    bundle_history_preview: str,
+) -> str:
+    manifest_title = str(manifest_thread_name or "").strip()
+    first_message = (
+        str(manifest_first_user_message or "").strip()
+        or str(parsed_first_user_prompt or "").strip()
+        or str(bundle_history_preview or "").strip()
+    )
+
+    if (
+        manifest_title
+        and not is_weak_thread_name(manifest_title, session_id)
+        and (not first_message or manifest_title != first_message)
+    ):
+        return manifest_title
+
+    existing_title = _first_strong_thread_name(
+        session_id,
+        existing_desktop_thread_name,
+        existing_index_thread_name,
+    )
+    if existing_title:
+        return existing_title
+
+    return _first_strong_thread_name(session_id, manifest_title, recovered_thread_name)
 
 
 def import_desktop_all(
