@@ -144,8 +144,6 @@ Windows：
 ./codex-session-toolkit --version
 ```
 
-更多开发、发布和 API 参考放在文末，前面先聚焦日常使用。
-
 ## TUI 使用方式
 
 在交互终端里无参数启动，会进入统一 TUI。
@@ -195,180 +193,52 @@ Windows：
 
 ## CLI 用法
 
-### 兼容入口参数
-
-直接 clone：
+多数情况下推荐直接使用 TUI。CLI 主要用于脚本化导入导出、dry-run 和修复。
 
 ```bash
+# 启动 TUI / 查看版本
 codex-session-toolkit
-```
-
-Dry-run：
-
-```bash
-codex-session-toolkit --dry-run
-```
-
-清理旧版无标记 clone：
-
-```bash
-codex-session-toolkit --clean
-```
-
-跳过 TUI，直接执行 clone：
-
-```bash
-codex-session-toolkit --no-tui
-```
-
-查看版本：
-
-```bash
 codex-session-toolkit --version
-```
 
-### Canonical 子命令
-
-Repair / Maintenance:
-
-```bash
-# 迁移到当前 Provider
-codex-session-toolkit clone-provider
-codex-session-toolkit clone-provider --dry-run
-
-# 清理旧版无标记副本
-codex-session-toolkit clean-clones
-codex-session-toolkit clean-clones --dry-run
-```
-
-浏览本机会话：
-
-```bash
+# 浏览
 codex-session-toolkit list
-codex-session-toolkit list desktop
-codex-session-toolkit list 019d58
-```
-
-按项目路径浏览会话：
-
-```bash
-codex-session-toolkit list-project-sessions /Users/example/project-a
-codex-session-toolkit list-project-sessions /Users/example/project-a --limit 100
-codex-session-toolkit list-project-sessions /Users/example/project-a --pattern cli
-```
-
-浏览 Bundle 导出记录：
-
-```bash
+codex-session-toolkit list <session_id_or_keyword>
 codex-session-toolkit list-bundles
-codex-session-toolkit list-bundles --source desktop
-codex-session-toolkit list-bundles 019d58
-```
 
-校验 Bundle 导出目录：
-
-```bash
-codex-session-toolkit validate-bundles
-codex-session-toolkit validate-bundles --source desktop
-codex-session-toolkit validate-bundles --source desktop --verbose
-```
-
-导出单个会话为 Bundle：
-
-```bash
+# 导出
 codex-session-toolkit export <session_id>
-codex-session-toolkit export <session_id> --skills-mode skip
-```
-
-按项目路径批量导出会话：
-
-```bash
 codex-session-toolkit export-project /Users/example/project-a
-codex-session-toolkit export-project /Users/example/project-a --dry-run
-codex-session-toolkit export-project /Users/example/project-a --active-only
-```
-
-批量导出 Desktop 会话为 Bundle：
-
-```bash
-codex-session-toolkit export-desktop-all
-codex-session-toolkit export-desktop-all --dry-run
 codex-session-toolkit export-active-desktop-all
-codex-session-toolkit export-active-desktop-all --dry-run
-```
-
-兼容旧写法：
-
-```bash
-codex-session-toolkit export-desktop-all --active-only
-```
-
-批量导出 CLI 会话为 Bundle：
-
-```bash
 codex-session-toolkit export-cli-all
-codex-session-toolkit export-cli-all --dry-run
-```
 
-导入单个 Bundle 为会话：
-
-```bash
-codex-session-toolkit import <session_id>
-codex-session-toolkit import <session_id> --source desktop --machine Work-Laptop
-codex-session-toolkit import <session_id> --source desktop --export-group active
-codex-session-toolkit import ./codex_sessions/<machine>/single/<timestamp>/<session_id>
-codex-session-toolkit import --desktop-visible <session_id>
-```
-
-批量导入 Bundle 为会话：
-
-```bash
-codex-session-toolkit import-desktop-all
-codex-session-toolkit import-desktop-all --desktop-visible
-codex-session-toolkit import-desktop-all --machine Work-Laptop
-codex-session-toolkit import-desktop-all --machine Work-Laptop --latest-only
-codex-session-toolkit import-desktop-all --export-group active
-codex-session-toolkit import-desktop-all --machine Work-Laptop --export-group project
+# 导入
+codex-session-toolkit import <session_id_or_bundle_dir>
+codex-session-toolkit import <session_id> --desktop-visible
+codex-session-toolkit import-desktop-all --machine Work-Laptop --export-group active
 codex-session-toolkit import-desktop-all --machine Work-Laptop --project project-a --target-project-path /Users/example/project-a --desktop-visible
+
+# 修复 Desktop 可见性
+codex-session-toolkit repair-desktop
+codex-session-toolkit repair-desktop --dry-run
+codex-session-toolkit repair-desktop --include-cli
+codex-session-toolkit repair-desktop --include-archived
 ```
 
-说明：命令名保留为 `import-desktop-all` 以兼容旧版本，但现在实际可结合 `--export-group` 导入 `desktop / active / cli / project / single` 五类 Bundle。
-
-Provider 处理说明：
+补充说明：
 
 - 导出 Bundle 时会保留源会话的原始 `model_provider`，例如 `custom`
 - 导入到 Desktop 环境时，工具会按目标机器当前 provider 准备 rollout
 - Provider 识别顺序为：命令显式参数、`~/.codex/config.toml`、最新 Desktop `threads` 表、最新 rollout 会话文件
 - 账号登录模式下如果 config 没有 `model_provider`，通常会从 `state_*.sqlite` 的 `threads.model_provider` 推断
-
-Desktop 标题处理说明：
-
 - 新版导出会从源机器 Desktop `threads.title` 读取真正的左侧线程短标题，写入 Bundle 的 `THREAD_NAME`
 - 第一条用户消息会写入 `FIRST_USER_MESSAGE`，用于 Desktop 的首条消息预览和极端情况下的兜底标题
 - 导入时优先使用 `THREAD_NAME`；如果旧 Bundle 没有带出标题，才会从现有 Desktop 标题、`session_index.jsonl` 或 rollout 首条用户消息中恢复
-- `repair-desktop` 会保留已有 Desktop 短标题，只修复 provider、索引、workspace roots 和 `threads` 登记，不会把标题强行覆盖成第一句话
-- 如果旧导出包中的 `THREAD_NAME` 为空，目标机器无法凭空还原源机器曾经生成过的短标题；需要在源机器用新版工具重新导出，或把源机器 `~/.codex/state_*.sqlite` 带到目标机器做标题合并
-
-项目导入补充说明：
-
-- `--project` 用于锁定 `project` 分类下的某一个项目文件夹
-- `--target-project-path` 用于把导入会话中的 `cwd` 统一映射到当前机器的项目根目录
+- `repair-desktop` 会保留已有 Desktop 短标题，只修复 provider、索引、workspace roots 和 `threads` 登记
+- 旧导出包如果没有 `THREAD_NAME`，目标机器无法凭空还原源机器曾经生成过的短标题；需要在源机器用新版工具重新导出，或带上源机器 `~/.codex/state_*.sqlite` 做标题合并
+- `--project` 用于锁定 `project` 分类下的项目文件夹；`--target-project-path` 用于把会话 `cwd` 映射到本机项目根目录
 - 如果目标目录不存在，可配合 `--desktop-visible` 在导入时自动创建缺失目录
-
-修复会话在 Desktop 中显示：
-
-```bash
-codex-session-toolkit repair-desktop
-codex-session-toolkit repair-desktop <target_provider>
-codex-session-toolkit repair-desktop --dry-run
-codex-session-toolkit repair-desktop --include-cli
-codex-session-toolkit repair-desktop --include-archived
-codex-session-toolkit repair-desktop --include-cli --dry-run
-```
-
-如果当前机器是账号登录模式，TUI 会把识别到的目标 provider 显式传给修复命令；CLI 也可以手动传入 `<target_provider>` 覆盖自动识别。
-默认只修复 active 会话，避免把已经归档的历史线程重新带回侧边栏；同时会从 Desktop `threads` 表清理旧修复残留的 archived 登记。需要 archived 会话时再显式加 `--include-archived`。
-默认修复范围包括 Desktop 原生会话，以及已经登记在 Desktop `threads` 表中的 CLI 线程；工具会重新绑定目标 provider、重建索引和 `threads` 行，但会保留原始 `source/originator`。只有在加 `--include-cli` 时，工具才会额外把尚未登记到 Desktop 的 CLI 会话也写入 Desktop `threads` 表。
+- `repair-desktop` 默认只修复 active 会话；需要 archived 会话时再显式加 `--include-archived`
+- `--include-cli` 会把尚未登记到 Desktop 的 CLI 会话也写入 Desktop `threads` 表
 
 ## Bundle 目录策略
 
@@ -485,146 +355,6 @@ Bundle 内默认包含：
 - `CST_TUI_MAX_WIDTH=120`
 - `CST_MACHINE_LABEL=My-MacBook`
 - `CST_LAUNCH_MODE=auto|source|installed`
-
-## 开发、发布与 API 参考
-
-### 开发模式：不安装也可直接运行
-
-如果你是在仓库里继续改代码，也可以不先安装，直接通过仓库 launcher 启动。
-
-macOS / Linux:
-
-```bash
-./codex-session-toolkit
-./codex-session-toolkit.command
-```
-
-Windows:
-
-```powershell
-.\codex-session-toolkit.ps1
-```
-
-如果当前目录是 git 工作树，并且 `src/codex_session_toolkit/` 存在，仓库 launcher 会优先进入源码模式，这样改完代码后重新启动就能立刻生效。
-
-如果当前目录不是 git 工作树，例如 release 解压目录，launcher 会优先使用本地 `.venv` 里的已安装版本。
-如果当前目录是 git 工作树，但已经存在本地 `.venv`，launcher 也会优先使用 `.venv` 里的 Python 解释器来跑源码模式，尽量避免碰 base 环境。
-
-如果你想手动覆盖这个选择逻辑，可以设置：
-
-- `CST_LAUNCH_MODE=source`
-- `CST_LAUNCH_MODE=installed`
-- `CST_LAUNCH_MODE=auto`（默认）
-
-### 生成可分发压缩包
-
-如果你想把当前仓库直接打成一个可发给别人的安装包，可以运行：
-
-```bash
-./release.sh
-```
-
-或者：
-
-```bash
-make release
-```
-
-它会在 `./dist/releases/` 下生成：
-
-- 一个干净的发布目录
-- 一个 `.tar.gz`
-- 如果系统有 `zip`，再额外生成一个 `.zip`
-
-对方解压后，直接运行：
-
-- macOS / Linux：`./install.sh`
-- Windows：`.\install.ps1` 或双击 `install.bat`
-
-安装脚本会在解压目录里创建本地 `.venv/`，把可运行入口封装进去。
-对方不需要手动执行 `pip install -e .`，安装完成后直接运行：
-
-- macOS / Linux：`./codex-session-toolkit`
-- Windows：`.\codex-session-toolkit.cmd`
-
-release 只会携带分发所需文件；CI、测试、兼容层、release 构建器本身和本地缓存都不会进入发布包。
-
-### 直接安装到当前 Python 环境
-
-只有在你明确接受修改当前 Python 环境时，才建议使用这一节。默认更推荐上面的本地 `.venv` 安装方式。
-如果你就是想装进自己当前的 Python 环境，也仍然支持标准安装方式：
-
-macOS / Linux:
-
-```bash
-python3 -m pip install -e .
-codex-session-toolkit
-```
-
-Windows:
-
-```powershell
-py -3 -m pip install -e .
-codex-session-toolkit
-```
-
-也支持模块方式：
-
-```bash
-python3 -m codex_session_toolkit
-```
-
-### 用工程命令管理本地开发
-
-如果你想把这个仓库当成一个长期维护的项目来用，而不是临时脚本，可以直接用顶层 [Makefile](./Makefile)：
-
-```bash
-make help
-make bootstrap
-make bootstrap-editable
-make install-dev
-make release
-make run
-make install
-make test-quick
-make lint
-make test
-make smoke
-make ci
-make check
-```
-
-其中：
-
-- `make install` 等价于 `make bootstrap-editable`，会把安装留在项目本地 `.venv`
-- `make install-dev` 会先准备本地 `.venv`，再把开发工具装进这个隔离环境；这一步通常需要联网拉取诸如 Ruff 这样的开发依赖
-- `make run/test/lint/ci` 会优先使用本地 `.venv` 里的解释器；如果你还没创建 `.venv`，再退回系统 Python
-
-### Python API 与兼容层
-
-如果你要把它当成 Python 包来调用，当前建议按下面的边界使用：
-
-| 入口 | 定位 | 新代码建议 |
-|---|---|---|
-| `codex_session_toolkit` | 最小稳定顶层入口；暴露 `CodexPaths`、`ToolkitError`、`build_app_context`、`run_cli`、版本信息 | 推荐 |
-| `codex_session_toolkit.api` | 稳定高层 API；暴露 service result、presenter、核心工作流函数 | 推荐 |
-| `codex_session_toolkit.core` | 旧兼容 facade；保留 lazy re-export 以兼容历史调用方 | 仅兼容旧代码，不建议继续扩张依赖 |
-| `codex_session_toolkit.tui.app` / `codex_session_toolkit.tui.terminal` | 当前正式 TUI 模块 | 推荐 |
-| `codex_session_toolkit.tui_app` / `codex_session_toolkit.terminal_ui` | 旧 TUI 兼容 wrapper；只做显式 lazy 转发 | 仅兼容旧代码，不建议新代码继续引用 |
-
-推荐导入方式：
-
-```python
-from codex_session_toolkit import CodexPaths, run_cli
-from codex_session_toolkit.api import export_session, import_desktop_all, repair_desktop
-from codex_session_toolkit.tui.app import ToolkitTuiApp
-```
-
-兼容层策略：
-
-- `core.py`、`tui_app.py`、`terminal_ui.py` 仍会保留一段时间，用来承接旧调用方
-- 新代码应直接依赖 `api.py`、`tui.app`、`tui.terminal`
-- 稳定入口以测试覆盖的导出面为准；兼容层只保留必要转发，不再继续承载新逻辑
 
 ## 社区支持
 
