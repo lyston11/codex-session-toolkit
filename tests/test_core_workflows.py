@@ -210,6 +210,7 @@ def write_bundle_manifest(
     exported_at: str = "2026-04-11T10:00:00Z",
     updated_at: str = "2026-04-11T10:00:00Z",
     thread_name: str = "",
+    first_user_message: str = "",
     session_cwd: str = "",
     session_kind: str = "desktop",
 ) -> None:
@@ -222,6 +223,7 @@ def write_bundle_manifest(
         "EXPORTED_AT": exported_at,
         "UPDATED_AT": updated_at,
         "THREAD_NAME": thread_name,
+        "FIRST_USER_MESSAGE": first_user_message,
         "SESSION_CWD": session_cwd,
         "SESSION_SOURCE": "vscode",
         "SESSION_ORIGINATOR": "Codex Desktop",
@@ -246,30 +248,41 @@ def write_bundled_session_file(
     source: str = "vscode",
     originator: str = "Codex Desktop",
     timestamp: str = "2026-04-10T10:00:00Z",
+    user_message: str = "",
 ) -> Path:
     codex_dir = bundle_dir / "codex" / "sessions" / "2026" / "04" / "10"
     codex_dir.mkdir(parents=True, exist_ok=True)
     session_file = codex_dir / f"rollout-2026-04-10T10-00-00-{session_id}.jsonl"
-    session_file.write_text(
-        json.dumps(
-            {
+    lines = [
+        {
+            "timestamp": timestamp,
+            "type": "session_meta",
+            "payload": {
+                "id": session_id,
+                "model_provider": provider,
+                "source": source,
+                "originator": originator,
+                "cwd": str(cwd),
                 "timestamp": timestamp,
-                "type": "session_meta",
-                "payload": {
-                    "id": session_id,
-                    "model_provider": provider,
-                    "source": source,
-                    "originator": originator,
-                    "cwd": str(cwd),
-                    "timestamp": timestamp,
-                    "cli_version": "0.1.0",
-                },
+                "cli_version": "0.1.0",
             },
-            separators=(",", ":"),
+        }
+    ]
+    if user_message:
+        lines.append(
+            {
+                "timestamp": "2026-04-10T10:04:45Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": user_message}],
+                },
+            }
         )
-        + "\n",
-        encoding="utf-8",
-    )
+    with session_file.open("w", encoding="utf-8") as fh:
+        for line in lines:
+            fh.write(json.dumps(line, separators=(",", ":")) + "\n")
     return session_file
 
 
@@ -949,6 +962,225 @@ class CoreWorkflowTests(unittest.TestCase):
             conn.close()
             self.assertEqual(row, ("vscode", "target-provider", str(missing_cwd)))
 
+    def test_export_session_uses_rollout_prompt_when_history_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            workspace.mkdir()
+
+            session_id = "16161616-1616-1616-1616-161616161616"
+            write_session(
+                src_home,
+                session_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                user_message="Recovered export title from rollout prompt",
+            )
+
+            with pushd(workspace):
+                export_result = export_session(CodexPaths(home=src_home), session_id)
+
+            manifest = load_manifest(export_result.bundle_dir / "manifest.env")
+            self.assertEqual(manifest["THREAD_NAME"], "Recovered export title from rollout prompt")
+
+    def test_export_session_prefers_desktop_sqlite_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            workspace.mkdir()
+            write_config(src_home, "source-provider")
+            db_path = create_threads_db(src_home)
+
+            session_id = "18181818-1818-1818-1818-181818181818"
+            write_session(
+                src_home,
+                session_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                user_message="Long first user prompt that should not become the Desktop title",
+            )
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "insert into threads (id, title, first_user_message) values (?, ?, ?)",
+                (
+                    session_id,
+                    "short desktop title",
+                    "Long first user prompt that should not become the Desktop title",
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            with pushd(workspace):
+                export_result = export_session(CodexPaths(home=src_home), session_id)
+
+            manifest = load_manifest(export_result.bundle_dir / "manifest.env")
+            self.assertEqual(manifest["THREAD_NAME"], "short desktop title")
+            self.assertEqual(
+                manifest["FIRST_USER_MESSAGE"],
+                "Long first user prompt that should not become the Desktop title",
+            )
+
+    def test_import_session_recovers_index_title_from_rollout_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            dst_home = Path(tmpdir) / "dst_home"
+            bundle_root = Path(tmpdir) / "codex_sessions" / "bundle"
+            bundle_dir = bundle_root / "17171717-1717-1717-1717-171717171717"
+            workspace.mkdir()
+            write_config(dst_home, "target-provider")
+            write_state_file(dst_home)
+            create_threads_db(dst_home)
+
+            session_id = "17171717-1717-1717-1717-171717171717"
+            write_bundle_manifest(
+                bundle_dir,
+                session_id=session_id,
+                thread_name="",
+                session_cwd=str(workspace),
+            )
+            write_bundled_session_file(
+                bundle_dir,
+                session_id,
+                cwd=workspace,
+                user_message="Recovered import title from rollout prompt",
+            )
+            index_file = dst_home / ".codex" / "session_index.jsonl"
+            index_file.write_text(
+                json.dumps(
+                    {
+                        "id": session_id,
+                        "thread_name": f"Imported {session_id}",
+                        "updated_at": "2026-04-10T10:00:00Z",
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with pushd(Path(tmpdir)):
+                import_session(
+                    CodexPaths(home=dst_home),
+                    session_id,
+                    bundle_root=bundle_root,
+                    desktop_visible=True,
+                )
+
+            repaired_index = json.loads(index_file.read_text(encoding="utf-8"))
+            self.assertEqual(repaired_index["thread_name"], "Recovered import title from rollout prompt")
+
+            conn = sqlite3.connect(dst_home / ".codex" / "state_0001.sqlite")
+            row = conn.execute("select title, first_user_message from threads where id = ?", (session_id,)).fetchone()
+            conn.close()
+            self.assertEqual(
+                row,
+                (
+                    "Recovered import title from rollout prompt",
+                    "Recovered import title from rollout prompt",
+                ),
+            )
+
+    def test_import_session_preserves_distinct_desktop_title_and_first_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            dst_home = Path(tmpdir) / "dst_home"
+            bundle_root = Path(tmpdir) / "codex_sessions" / "bundle"
+            bundle_dir = bundle_root / "19191919-1919-1919-1919-191919191919"
+            workspace.mkdir()
+            write_config(dst_home, "target-provider")
+            write_state_file(dst_home)
+            create_threads_db(dst_home)
+
+            session_id = "19191919-1919-1919-1919-191919191919"
+            write_bundle_manifest(
+                bundle_dir,
+                session_id=session_id,
+                thread_name="short desktop title",
+                first_user_message="Long original prompt from Desktop",
+                session_cwd=str(workspace),
+            )
+            write_bundled_session_file(
+                bundle_dir,
+                session_id,
+                cwd=workspace,
+                user_message="Long original prompt from Desktop",
+            )
+
+            with pushd(Path(tmpdir)):
+                import_session(
+                    CodexPaths(home=dst_home),
+                    session_id,
+                    bundle_root=bundle_root,
+                    desktop_visible=True,
+                )
+
+            index_obj = json.loads((dst_home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(index_obj["thread_name"], "short desktop title")
+
+            conn = sqlite3.connect(dst_home / ".codex" / "state_0001.sqlite")
+            row = conn.execute("select title, first_user_message from threads where id = ?", (session_id,)).fetchone()
+            conn.close()
+            self.assertEqual(row, ("short desktop title", "Long original prompt from Desktop"))
+
+    def test_import_session_keeps_existing_desktop_title_when_bundle_title_is_prompt_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            dst_home = Path(tmpdir) / "dst_home"
+            bundle_root = Path(tmpdir) / "codex_sessions" / "bundle"
+            bundle_dir = bundle_root / "20202020-2020-2020-2020-202020202020"
+            workspace.mkdir()
+            write_config(dst_home, "target-provider")
+            write_state_file(dst_home)
+            db_path = create_threads_db(dst_home)
+
+            session_id = "20202020-2020-2020-2020-202020202020"
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "insert into threads (id, title, first_user_message) values (?, ?, ?)",
+                (
+                    session_id,
+                    "existing short title",
+                    "Long original prompt from Desktop",
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            write_bundle_manifest(
+                bundle_dir,
+                session_id=session_id,
+                thread_name="Long original prompt from Desktop",
+                first_user_message="",
+                session_cwd=str(workspace),
+            )
+            write_bundled_session_file(
+                bundle_dir,
+                session_id,
+                cwd=workspace,
+                user_message="Long original prompt from Desktop",
+            )
+
+            with pushd(Path(tmpdir)):
+                import_session(
+                    CodexPaths(home=dst_home),
+                    session_id,
+                    bundle_root=bundle_root,
+                    desktop_visible=True,
+                )
+
+            index_obj = json.loads((dst_home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(index_obj["thread_name"], "existing short title")
+
+            conn = sqlite3.connect(dst_home / ".codex" / "state_0001.sqlite")
+            row = conn.execute("select title, first_user_message from threads where id = ?", (session_id,)).fetchone()
+            conn.close()
+            self.assertEqual(row, ("existing short title", "Long original prompt from Desktop"))
+
     def test_import_session_uses_desktop_thread_provider_when_config_has_no_model_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
@@ -1148,10 +1380,13 @@ class CoreWorkflowTests(unittest.TestCase):
                 (
                     "cli",
                     "repaired-provider",
-                    "Repair this desktop-visible thread",
+                    "sub2api",
                     "Repair this desktop-visible thread",
                 ),
             )
+
+            repaired_index = json.loads((home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(repaired_index["thread_name"], "sub2api")
 
     def test_repair_desktop_ignores_thread_rows_outside_codex_session_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1259,6 +1494,51 @@ class CoreWorkflowTests(unittest.TestCase):
             row = conn.execute("select title, first_user_message from threads where id = ?", (session_id,)).fetchone()
             conn.close()
             self.assertEqual(row, ("Restore this real thread name", "Restore this real thread name"))
+
+    def test_repair_desktop_prefers_rollout_prompt_over_stale_history_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "repaired-provider")
+            write_state_file(home)
+            create_threads_db(home)
+
+            session_id = "26262626-2626-2626-2626-262626262626"
+            session_cwd = workspace / "named-project"
+            session_cwd.mkdir()
+            write_session(
+                home,
+                session_id,
+                provider="old-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=session_cwd,
+                user_message="Original rollout title",
+            )
+            write_history(home, session_id, "Later local resume prompt")
+            (home / ".codex" / "session_index.jsonl").write_text(
+                json.dumps(
+                    {
+                        "id": session_id,
+                        "thread_name": "Later local resume prompt",
+                        "updated_at": "2026-04-10T10:00:00Z",
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            repair_desktop(CodexPaths(home=home))
+
+            repaired_index = json.loads((home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(repaired_index["thread_name"], "Original rollout title")
+
+            conn = sqlite3.connect(home / ".codex" / "state_0001.sqlite")
+            row = conn.execute("select title, first_user_message from threads where id = ?", (session_id,)).fetchone()
+            conn.close()
+            self.assertEqual(row, ("Original rollout title", "Original rollout title"))
 
     def test_repair_desktop_skips_archived_sessions_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

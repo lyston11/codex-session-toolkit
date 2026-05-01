@@ -70,7 +70,7 @@ def build_session_preview(
     first_user_prompt: Optional[str] = None,
 ) -> str:
     prompt = first_user_prompt_from_session(session_file) if first_user_prompt is None else first_user_prompt
-    for candidate in (history_preview, prompt):
+    for candidate in (prompt, history_preview):
         normalized = normalize_session_text(candidate)
         if normalized and not looks_like_session_meta_text(normalized):
             return normalized

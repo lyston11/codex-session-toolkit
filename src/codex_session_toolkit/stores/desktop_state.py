@@ -83,6 +83,49 @@ def ensure_desktop_workspace_root(workspace_dir: str, state_file: Path) -> bool:
     return True
 
 
+def load_thread_metadata(
+    state_db: Optional[Path],
+    *,
+    session_ids: Optional[set[str]] = None,
+) -> dict[str, dict[str, str]]:
+    if not state_db or not state_db.is_file():
+        return {}
+
+    conn = sqlite3.connect(state_db)
+    cur = conn.cursor()
+    try:
+        row = cur.execute("select name from sqlite_master where type='table' and name='threads'").fetchone()
+        if not row:
+            return {}
+
+        columns = [r[1] for r in cur.execute("pragma table_info(threads)").fetchall()]
+        if "id" not in columns:
+            return {}
+
+        select_columns = ["id"]
+        if "title" in columns:
+            select_columns.append("title")
+        if "first_user_message" in columns:
+            select_columns.append("first_user_message")
+
+        rows = cur.execute(f"select {', '.join(select_columns)} from threads").fetchall()
+        metadata: dict[str, dict[str, str]] = {}
+        for values in rows:
+            session_id = values[0]
+            if not isinstance(session_id, str) or not session_id:
+                continue
+            if session_ids is not None and session_id not in session_ids:
+                continue
+            item = dict(zip(select_columns, values))
+            metadata[session_id] = {
+                "title": str(item.get("title") or ""),
+                "first_user_message": str(item.get("first_user_message") or ""),
+            }
+        return metadata
+    finally:
+        conn.close()
+
+
 def prepare_session_for_import(
     source_session: Path,
     prepared_session: Path,
@@ -338,14 +381,15 @@ def upsert_threads_table(
     session_originator: str,
     session_kind: str,
     classify_session_kind,
+    first_user_message: str = "",
 ) -> bool:
-    first_user_message = thread_name
-    if history_file.exists():
+    effective_first_user_message = first_user_message or thread_name
+    if not first_user_message and history_file.exists():
         with history_file.open("r", encoding="utf-8") as fh:
             first_line = fh.readline().strip()
             if first_line:
                 try:
-                    first_user_message = json.loads(first_line).get("text") or first_user_message
+                    effective_first_user_message = json.loads(first_line).get("text") or effective_first_user_message
                 except Exception:
                     pass
     parsed_session = parse_session_file(session_file)
@@ -355,7 +399,7 @@ def upsert_threads_table(
         parsed_session=parsed_session,
         thread_name=thread_name,
         updated_at=updated_at,
-        first_user_message=first_user_message,
+        first_user_message=effective_first_user_message,
         session_cwd=session_cwd,
         session_source=session_source,
         session_originator=session_originator,
