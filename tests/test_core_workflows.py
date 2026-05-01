@@ -2685,6 +2685,93 @@ class CoreWorkflowTests(unittest.TestCase):
 
             self.assertEqual(import_result.skills_already_present_count, 1)
 
+    def test_import_session_skips_skill_copy_when_same_skill_exists_in_other_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_config(src_home, "src-provider")
+            write_config(dst_home, "dst-provider")
+
+            src_codex_skills = src_home / ".codex" / "skills"
+            write_test_skill(src_codex_skills, "cross-root-skill", "identical content")
+
+            session_id = "aaa00024-0000-7000-8000-000000000024"
+            write_session_with_skills(
+                src_home,
+                session_id,
+                provider="src-provider",
+                source="cli",
+                originator="Codex CLI",
+                cwd=workspace,
+                skill_entries=[
+                    {"name": "cross-root-skill", "file": str(src_codex_skills / "cross-root-skill" / "SKILL.md")},
+                ],
+            )
+
+            paths = CodexPaths(home=src_home)
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                export_result = export_session(paths, session_id)
+                bundle_dir = export_result.bundle_dir
+
+            dst_agents_skills = dst_home / ".agents" / "skills"
+            write_test_skill(dst_agents_skills, "cross-root-skill", "identical content")
+
+            dst_paths = CodexPaths(home=dst_home)
+            with pushd(workspace):
+                import_result = import_session(dst_paths, str(bundle_dir))
+
+            self.assertEqual(import_result.skills_restored_count, 0)
+            self.assertEqual(import_result.skills_already_present_count, 1)
+            self.assertTrue((dst_home / ".agents" / "skills" / "cross-root-skill" / "SKILL.md").is_file())
+            self.assertFalse((dst_home / ".codex" / "skills" / "cross-root-skill").exists())
+
+    def test_import_session_skips_conflicting_skill_in_other_root_without_creating_duplicate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_config(src_home, "src-provider")
+            write_config(dst_home, "dst-provider")
+
+            src_codex_skills = src_home / ".codex" / "skills"
+            write_test_skill(src_codex_skills, "cross-root-conflict", "source content")
+
+            session_id = "aaa00025-0000-7000-8000-000000000025"
+            write_session_with_skills(
+                src_home,
+                session_id,
+                provider="src-provider",
+                source="cli",
+                originator="Codex CLI",
+                cwd=workspace,
+                skill_entries=[
+                    {"name": "cross-root-conflict", "file": str(src_codex_skills / "cross-root-conflict" / "SKILL.md")},
+                ],
+            )
+
+            paths = CodexPaths(home=src_home)
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                export_result = export_session(paths, session_id)
+                bundle_dir = export_result.bundle_dir
+
+            dst_agents_skills = dst_home / ".agents" / "skills"
+            write_test_skill(dst_agents_skills, "cross-root-conflict", "local content")
+
+            dst_paths = CodexPaths(home=dst_home)
+            with pushd(workspace):
+                import_result = import_session(dst_paths, str(bundle_dir))
+
+            self.assertEqual(import_result.skills_restored_count, 0)
+            self.assertEqual(import_result.skills_conflict_skipped_count, 1)
+            self.assertEqual(
+                (dst_home / ".agents" / "skills" / "cross-root-conflict" / "SKILL.md").read_text(encoding="utf-8"),
+                "local content",
+            )
+            self.assertFalse((dst_home / ".codex" / "skills" / "cross-root-conflict").exists())
+
     def test_import_session_skills_missing_in_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"

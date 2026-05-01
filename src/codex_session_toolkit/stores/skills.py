@@ -300,6 +300,25 @@ def restore_skills(
     for skill in manifest.skills:
         if not skill.bundled:
             if skill.location_kind == "custom":
+                existing_dir = _first_existing_local_skill_dir(target_home, skill)
+                if existing_dir is not None:
+                    try:
+                        existing_hash = compute_skill_directory_hash(existing_dir)
+                    except OSError as exc:
+                        results.append(_failed_restore_result(skill, existing_dir))
+                        warnings.append(_restore_skill_failed_warning(skill, existing_dir, existing_dir, exc))
+                        if skills_mode == "strict":
+                            raise ToolkitError(f"Failed to inspect local skill {skill.name}: {exc}") from exc
+                        continue
+                    results.append(SkillRestoreResult(
+                        name=skill.name,
+                        source_root=skill.source_root,
+                        relative_dir=skill.relative_dir,
+                        status="already_present",
+                        target_path=str(existing_dir),
+                        content_hash=existing_hash,
+                    ))
+                    continue
                 results.append(SkillRestoreResult(
                     name=skill.name,
                     source_root=skill.source_root,
@@ -331,31 +350,47 @@ def restore_skills(
                 raise ToolkitError(f"Failed to restore skill {skill.name}: {exc}") from exc
             continue
 
-        if target_dir.is_dir():
+        existing_dirs = _existing_local_skill_dirs(target_home, skill)
+        existing_hashes: list[tuple[Path, str]] = []
+        existing_hash_failed = False
+        for existing_dir in existing_dirs:
             try:
-                existing_hash = compute_skill_directory_hash(target_dir)
+                existing_hash = compute_skill_directory_hash(existing_dir)
             except OSError as exc:
-                results.append(_failed_restore_result(skill, target_dir))
-                warnings.append(_restore_skill_failed_warning(skill, target_dir, source_dir, exc))
+                results.append(_failed_restore_result(skill, existing_dir))
+                warnings.append(_restore_skill_failed_warning(skill, existing_dir, source_dir, exc))
                 if skills_mode == "strict":
                     raise ToolkitError(f"Failed to restore skill {skill.name}: {exc}") from exc
+                existing_hash_failed = True
+                break
+            existing_hashes.append((existing_dir, existing_hash))
+        if existing_hash_failed:
+            continue
+
+        if existing_hashes:
+            matched_existing = False
+            for existing_dir, existing_hash in existing_hashes:
+                if existing_hash == bundle_hash:
+                    results.append(SkillRestoreResult(
+                        name=skill.name,
+                        source_root=skill.source_root,
+                        relative_dir=skill.relative_dir,
+                        status="already_present",
+                        target_path=str(existing_dir),
+                        content_hash=existing_hash,
+                    ))
+                    matched_existing = True
+                    break
+            if matched_existing:
                 continue
-            if existing_hash == bundle_hash:
-                results.append(SkillRestoreResult(
-                    name=skill.name,
-                    source_root=skill.source_root,
-                    relative_dir=skill.relative_dir,
-                    status="already_present",
-                    target_path=str(target_dir),
-                    content_hash=existing_hash,
-                ))
-                continue
+
+            existing_dir, existing_hash = existing_hashes[0]
             if skills_mode == "overwrite":
                 try:
-                    _replace_skill_directory(source_dir, target_dir)
+                    _replace_skill_directory(source_dir, existing_dir)
                 except OSError as exc:
-                    results.append(_failed_restore_result(skill, target_dir))
-                    warnings.append(_restore_skill_failed_warning(skill, target_dir, source_dir, exc))
+                    results.append(_failed_restore_result(skill, existing_dir))
+                    warnings.append(_restore_skill_failed_warning(skill, existing_dir, source_dir, exc))
                     if skills_mode == "strict":
                         raise ToolkitError(f"Failed to restore skill {skill.name}: {exc}") from exc
                     continue
@@ -364,18 +399,18 @@ def restore_skills(
                     source_root=skill.source_root,
                     relative_dir=skill.relative_dir,
                     status="restored",
-                    target_path=str(target_dir),
+                    target_path=str(existing_dir),
                     content_hash=bundle_hash,
                 ))
                 continue
             if skills_mode == "strict":
-                raise ToolkitError(f"Skill conflict (not overwriting): {skill.name} at {target_dir}")
+                raise ToolkitError(f"Skill conflict (not overwriting): {skill.name} at {existing_dir}")
             results.append(SkillRestoreResult(
                 name=skill.name,
                 source_root=skill.source_root,
                 relative_dir=skill.relative_dir,
                 status="conflict_skipped",
-                target_path=str(target_dir),
+                target_path=str(existing_dir),
                 content_hash=existing_hash,
             ))
             continue
@@ -575,10 +610,36 @@ def _resolve_skill_source_dir(skill: SkillDescriptor) -> Optional[Path]:
     return None
 
 
+def _first_existing_local_skill_dir(target_home: Path, skill: SkillDescriptor) -> Optional[Path]:
+    for skill_dir in _candidate_local_skill_dirs(target_home, skill):
+        if skill_dir.is_dir():
+            return skill_dir
+    return None
+
+
+def _existing_local_skill_dirs(target_home: Path, skill: SkillDescriptor) -> list[Path]:
+    return [skill_dir for skill_dir in _candidate_local_skill_dirs(target_home, skill) if skill_dir.is_dir()]
+
+
+def _candidate_local_skill_dirs(target_home: Path, skill: SkillDescriptor) -> list[Path]:
+    primary = Path(_target_skill_dir(target_home, skill))
+    candidates = [primary]
+    if skill.source_root in _RESTORABLE_SKILL_ROOTS and _is_safe_relative_posix_path(skill.relative_dir):
+        for source_root in ("agents", "codex"):
+            candidate = Path(_target_skill_dir_for_root(target_home, source_root, skill.relative_dir))
+            if candidate not in candidates:
+                candidates.append(candidate)
+    return candidates
+
+
 def _target_skill_dir(target_home: Path, skill: SkillDescriptor) -> str:
-    if skill.source_root == "agents":
-        return str(target_home / ".agents" / "skills" / skill.relative_dir)
-    return str(target_home / ".codex" / "skills" / skill.relative_dir)
+    return _target_skill_dir_for_root(target_home, skill.source_root, skill.relative_dir)
+
+
+def _target_skill_dir_for_root(target_home: Path, source_root: str, relative_dir: str) -> str:
+    if source_root == "agents":
+        return str(target_home / ".agents" / "skills" / relative_dir)
+    return str(target_home / ".codex" / "skills" / relative_dir)
 
 
 def _deserialize_skill_descriptor(raw_skill: object) -> Optional[SkillDescriptor]:
