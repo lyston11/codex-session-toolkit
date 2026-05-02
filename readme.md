@@ -1,145 +1,36 @@
 # Codex Session Toolkit
 
-`Codex Session Toolkit` 是一个面向 Codex 会话的浏览、迁移、导入导出和修复工具箱。
-它不是单一的 clone 脚本，而是一套统一的 TUI + CLI，用来处理会话管理里最常见的几类问题。
+`Codex Session Toolkit` 是一个面向 Codex Desktop / CLI 会话的 TUI 优先工具箱，用来浏览会话、导出 Bundle、跨设备导入、同步 Skills、修复 Desktop 可见性，并把本地 Bundle 工作区同步到独立 GitHub 仓库。
+
+它不是单个脚本，而是一套统一的交互式 TUI + 可脚本化 CLI。日常使用建议从 TUI 进入；CLI 适合批处理、dry-run 和自动化。
 
 ![Codex Session Toolkit 界面预览](./assets/1234.png)
 
-## 适用场景
+## 解决什么问题
 
-如果你经常在 Codex Desktop 和 CLI 之间切换，或者有多台机器需要同步会话，这个项目主要帮你解决这些事：
+如果你有这些场景，这个工具就是为它们设计的：
 
-- 快速浏览本机最近会话，确认 session 类型、provider、cwd、rollout 路径
-- 把单个会话或整批 Desktop / CLI 会话导出成 Bundle，迁移到另一台电脑
-- 从别的设备导入 Bundle，并按设备文件夹、分类文件夹管理导出记录
-- 独立同步本机自定义 Skills，避免每次会话迁移都把整台机器的 Skill 库搬过去
-- 在切换 provider 后继续复用旧会话，又不覆盖原始 rollout
-- 修复 Codex Desktop 左侧线程不可见、`session_index.jsonl` 缺失、`threads` 表不同步等问题
+- 在 Codex Desktop 和 Codex CLI 之间切换，想快速找到某个会话
+- 换电脑后，希望把旧机器的会话按项目导入到新机器
+- 只想同步某个项目的会话，而不是把整台机器的会话混在一起
+- 希望会话导入后仍能在 Codex Desktop 左侧线程栏里正常显示
+- 自定义 Skills 分散在多台机器上，需要独立导出、导入和去重
+- 想把 `./codex_bundles` 同步到 GitHub，但不想和本项目源码仓库混在一起
+- 切换 provider 或账号登录模式后，旧会话需要安全迁移或修复
+- 导入覆盖前想自动保留备份，必要时能在 TUI 中找回
 
-## 最近增强
+## 核心设计
 
-- **账号登录模式 Provider 识别**：当 `~/.codex/config.toml` 没有 `model_provider` 时，会从 Desktop `threads` 表和现有 rollout 中推断当前账号会话的 provider；导入和 Desktop 修复不再卡在传统 config 字段上
-- **Desktop 线程标题保留**：导出时会优先读取源机器 Desktop `state_*.sqlite` 里的 `threads.title`，导入时原样写回左侧线程栏；第一条用户消息会单独保存为 `FIRST_USER_MESSAGE`，只在没有真实标题时作为兜底
-- **会话浏览优先显示名称**：`Session / Browse` 右侧优先显示 Desktop `threads.title` 或 `session_index.thread_name`；没有名称时才回退到首条消息、工作区或时间
-- **Skills 独立迁移**：主菜单新增 `Skills / Transfer`，可单独浏览、导出和导入本机自定义 Skills
-- **会话只带实际依赖 Skills**：会话 Bundle 会记录可用 Skills 元数据，但只打包本会话明确使用过的自定义 Skills，避免跨设备同步时把 Skill 库越搬越满
-- **TUI 会话备份管理**：导入会话时如需覆盖本机旧 rollout，会先生成 `.bak.<timestamp>` 备份；现在可在 `Repair / Maintenance` 中浏览、恢复或删除，恢复前也会再备份当前文件
-- `Session / Browse` 新增按项目路径查看与导出：粘贴项目路径后，可只浏览该项目下的会话，并批量导出到 `./codex_bundles/<machine>/sessions/project/<project>/<timestamp>/`
-- `Bundle / Transfer` 新增按项目文件夹导入：在 `project` 分类下继续选择具体项目文件夹，并把会话 `cwd` 映射到当前机器的目标项目路径
-- 项目导入会显示本机匹配状态：优先复用原路径，其次尝试同名项目目录；若目标路径不存在，可直接选择是否创建后再导入
+- **TUI 优先**：常用能力都在交互界面中完整提供，避免用户记复杂命令。
+- **Bundle 中转**：所有跨设备会话和 Skills 都先进入 `./codex_bundles/`，不直接在两台机器之间改 `~/.codex/`。
+- **独立 GitHub 同步**：GitHub 同步只针对 `./codex_bundles/`，必须连接用户新建的独立仓库，不允许同步到本项目源码仓库。
+- **会话和 Skills 分层**：会话 Bundle 只携带本会话实际依赖的自定义 Skills；全量 Skill 库同步走 `Skills / Transfer`。
+- **保守写入**：导入、修复、清理、同步等写入动作支持 Dry-run；危险操作会二次确认。
+- **可恢复**：导入覆盖本机会话前会生成 `.bak.<timestamp>` 备份，TUI 可浏览、恢复或删除。
 
-## 功能概览
+## 快速开始
 
-### Session / Browse
-
-- 浏览最近会话
-- 搜索并查看会话详情
-- 导出单个会话为 Bundle
-- 按项目路径查看该项目下的全部会话
-- 按项目路径批量导出该项目下的全部会话为 Bundle
-
-### Bundle / Transfer
-
-- 浏览 Bundle 仓库（显示 Skill 打包状态）
-- 校验 Bundle 健康度
-- 批量导出全部 Desktop 会话为 Bundle
-- 批量导出全部 Active Desktop 会话为 Bundle
-- 批量导出全部 CLI 会话为 Bundle
-- 导出时自动识别会话中的可用 Skill，打包自定义 Skill 文件和元数据
-- 只打包本会话实际依赖的自定义 Skills；全量 Skill 同步请使用 `Skills / Transfer`
-- 导入单个 Bundle 为会话
-- 先选设备文件夹、再选分类文件夹，批量导入整类 Bundle
-- `project` 分类支持继续选择项目文件夹，显示本机同名/同路径项目状态，并映射到本机项目路径后批量导入
-- 导入时保留本地更新更晚的 rollout，只补齐缺失 history，避免覆盖更新过的会话
-- 导入时自动恢复打包的 Skill，冲突默认跳过，缺失汇总报告
-
-### Skills / Transfer
-
-- 浏览本机 Skills（默认只显示自定义 Skills）
-- 导出单个自定义 Skill
-- 导出全部自定义 Skills 为 standalone Skills Bundle
-- CLI 也支持按名称或路径导出单个 Skill
-- 浏览 standalone Skills Bundle
-- 导入单个 Skills Bundle
-- 批量导入 Skills Bundle，可按来源机器过滤
-- 删除本机自定义 Skill（会要求二次确认，不删除系统/运行时 Skill）
-- `.agents/skills/foo` 与 `.codex/skills/foo` 会按相同相对目录识别为同一个 Skill，避免重复导入
-
-## 最常见的工作流
-
-### 1. 按项目整理并导出会话
-
-- 进入 `Session / Browse`
-- 选择 `按项目路径查看并导出会话`
-- 粘贴项目根目录路径
-- 确认匹配到的会话列表后，按 `x` 批量导出
-
-### 2. 把另一台机器上的某个项目会话导入到本机项目目录
-
-- 进入 `Bundle / Transfer`
-- 选择 `批量导入 Bundle 为会话`
-- 依次选择 `设备 -> project 分类 -> 项目文件夹`
-- 查看本机匹配状态和默认目标路径
-- 如有需要，改成你的本机项目目录后导入
-
-### 3. 导入后补齐 Desktop 可见性
-
-- 如果导入的是 Desktop / CLI 会话，工具会顺手维护 `session_index.jsonl`、`threads` 表和 workspace roots
-- 如果 Bundle 来自新版本导出，Desktop 左侧线程名会优先使用源机器保存过的短标题，而不是简单取会话第一句话
-- 如果工作目录或目标项目目录缺失，可直接选择自动创建
-- 如果源会话来自 `custom` provider，而当前机器使用账号登录会话，导入时会优先按目标 Desktop 当前 provider 改写 rollout，避免导入后仍挂在旧 provider 上
-
-### 4. 在两台设备之间同步 Skills
-
-- 在源机器进入 `Skills / Transfer`
-- 选择 `导出全部自定义 Skills`
-- 把生成的 `codex_bundles/<machine>/skills/all/<timestamp>/` 目录带到目标机器同名位置
-- 在目标机器进入 `Skills / Transfer`
-- 选择 `导入单个 Skills Bundle` 或 `批量导入 Skills Bundle`
-- 已存在且内容一致的 Skill 会直接复用；内容冲突默认跳过，不覆盖本机版本
-
-### 5. 从 TUI 找回覆盖前的本机会话
-
-- 进入 `Repair / Maintenance`
-- 选择 `管理会话备份`
-- 按 `/` 搜索 session id、provider、cwd 或路径
-- 按 `d` 查看备份详情，确认备份路径和恢复目标
-- 按 `r` 恢复选中备份
-- 按 `x` 删除不再需要的选中备份
-- 输入 `DELETE` 二次确认
-
-恢复时如果当前 rollout 仍存在，工具会先生成一份 `rollout-xxx.jsonl.bak.restore.<timestamp>`，再把选中的备份复制回原目标位置。
-删除备份只会删除选中的 `.bak.*` 文件，不会删除当前会话文件。
-
-### Repair / Maintenance
-
-- 迁移到当前 Provider
-- 修复 active 会话在 Desktop 中显示
-- 管理会话备份：浏览、恢复或删除
-- 清理旧版无标记副本
-- 支持 Dry-run 预演
-- 自动修复 / 重建 `session_index.jsonl`
-- 自动 upsert `state_*.sqlite` 的 `threads` 表
-- 自动补充 Desktop workspace roots
-- 可选将 CLI 会话纳入 Desktop
-- 默认不恢复 archived 会话，并清理旧修复残留的 archived Desktop threads；如确实需要，可在 CLI 使用 `--include-archived`
-- 会话导入覆盖前的备份会保存在原 rollout 同目录，例如 `rollout-xxx.jsonl.bak.<timestamp>`；TUI 会自动扫描 active 与 archived 目录
-
-## 快速安装与启动
-
-### 推荐：本地隔离安装
-
-仓库已经自带安装脚本。大多数情况下，不需要自己手敲 `pip install`，直接执行安装脚本即可。
-默认所有依赖和安装结果都会被封装进项目根目录下的本地 `.venv/`，不会写进你的 base Python 环境。
-
-安装脚本会自动完成这些事：
-
-- 在项目根目录创建隔离的本地 `.venv/`
-- 把当前项目安装到这个本地环境里
-- 如果发现旧的 `.venv` 仍然暴露 system site-packages，会自动重建为真正隔离的环境
-- 保留仓库 launcher，安装完成后可以直接启动工具
-
-macOS / Linux:
+### macOS / Linux
 
 ```bash
 chmod +x ./install.sh ./install.command ./codex-session-toolkit ./codex-session-toolkit.command
@@ -147,124 +38,305 @@ chmod +x ./install.sh ./install.command ./codex-session-toolkit ./codex-session-
 ./codex-session-toolkit
 ```
 
-macOS 也可以直接双击：
+macOS 也可以双击：
 
 - `install.command`
 - `codex-session-toolkit.command`
 
-Windows：
+### Windows
 
-- 双击 `install.bat`
-- 或运行：
+双击 `install.bat`，或运行：
 
 ```powershell
 .\install.ps1
 .\codex-session-toolkit.cmd
 ```
 
-安装完成后常用入口：
-
-- macOS / Linux：
+安装脚本会在项目根目录创建隔离的本地 `.venv/`，不会污染 base Python 环境。安装后也可以直接运行：
 
 ```bash
-./codex-session-toolkit
-./codex-session-toolkit.command
 ./.venv/bin/codex-session-toolkit
 ```
 
-- Windows：
+Windows：
 
 ```powershell
-.\codex-session-toolkit.cmd
 .\.venv\Scripts\codex-session-toolkit.cmd
 ```
 
-查看当前版本：
+查看版本：
 
 ```bash
 ./codex-session-toolkit --version
 ```
 
-## TUI 使用方式
+## TUI 五大功能域
 
-在交互终端里无参数启动，会进入统一 TUI。
+无参数启动会进入主界面：
 
-主菜单分为 4 个功能域：
+```bash
+codex-session-toolkit
+```
+
+主菜单包含 5 个功能域：
 
 1. `Session / Browse`
 2. `Bundle / Transfer`
 3. `Skills / Transfer`
 4. `Repair / Maintenance`
+5. `GitHub / Sync`
 
-当前交互方式以两级结构为主：
+### Session / Browse
 
-- 首页先选择功能域
-- 回车进入该功能页
-- 在功能页中选择具体动作
-- 需要补充执行方式或修复范围时，再进入二级选择菜单
-- `project` 分类导入会进入第三级：`设备 -> 分类 -> 项目文件夹`
+用于找会话、看详情、按项目组织会话。
 
-常用按键：
+- 浏览最近会话
+- 搜索 session id、标题、预览、provider、cwd
+- 查看会话详情
+- 导出单个会话为 Bundle
+- 粘贴项目路径，只浏览这个项目下的会话
+- 按项目批量导出当前项目下的全部会话
 
-- `↑/↓` 或 `j/k`：移动
-- `Enter`：进入功能页或执行动作
-- `←/→`：切换上一页 / 下一页功能页
-- `PgUp/PgDn`：功能页切换
-- `h`：帮助
-- `q`：返回或退出
-- `0`：直接退出
+项目导出会写入：
 
-二级选择菜单按键：
+```text
+./codex_bundles/<machine>/sessions/project/<project>/<timestamp>/<session_id>/
+```
 
-- `↑/↓` 或 `j/k`：选择执行方式或修复范围
-- `Enter`：确认当前选项
-- `q / ← / Esc`：返回上一步
+### Bundle / Transfer
 
-浏览器相关按键：
+用于浏览、校验、导出和导入会话 Bundle。
 
-- `/`：搜索会话 / Bundle / 备份
-- `Enter`：在浏览模式下进入当前条目的操作面板，在选择模式下直接确认
-- `d`：只查看详情，不直接执行导入 / 导出
-- `e`：在会话列表中直接导出为 Bundle
-- `p`：在项目会话浏览器中重新输入项目路径
-- `x`：在项目会话浏览器中批量导出当前项目下全部会话
-- `s`：切换 Bundle 导出方式
-- `m`：按导出机器切换 Bundle 搜索范围
-- `l`：切换“显示全部历史 Bundle / 仅显示最新 Bundle”
-- `i / v`：导入当前 Bundle 为会话 / 导入并自动创建缺失目录
-- `g`：在 Skills 列表切换是否显示系统/运行时 Skills
-- `r`（Skills 列表）：删除选中的自定义 Skill
-- `r`（会话备份列表）：恢复选中的备份
-- `x`：在 Skills 列表导出全部自定义 Skills；在会话备份列表删除选中的备份
+- 浏览 `./codex_bundles/` 中的 Bundle
+- 校验 Bundle manifest、session JSONL、history JSONL
+- 批量导出全部 Desktop 会话
+- 批量导出 active Desktop 会话
+- 批量导出 CLI 会话
+- 导入单个 Bundle 为会话
+- 按 `设备 -> 分类 -> 项目` 批量导入
+- 导入 project 分类时，可把源机器 cwd 映射到当前机器项目目录
+- 导入时自动维护 `session_index.jsonl`、Desktop `threads` 表和 workspace roots
 
-## CLI 用法
+### Skills / Transfer
 
-多数情况下推荐直接使用 TUI。CLI 主要用于脚本化导入导出、dry-run 和修复。
+用于管理自定义 Skills 的独立迁移。
+
+- 浏览本机 Skills，默认只显示自定义 Skills
+- 导出单个自定义 Skill
+- 导出全部自定义 Skills 为 standalone Skills Bundle
+- 浏览 standalone Skills Bundle
+- 导入单个 Skills Bundle
+- 批量导入 Skills Bundle，可按来源机器过滤
+- 删除本机自定义 Skill，删除前会确认
+
+`.agents/skills/foo` 和 `.codex/skills/foo` 会按同一个相对 Skill 识别，避免跨根目录重复导入。
+
+### Repair / Maintenance
+
+用于修复、迁移和找回备份。
+
+- 迁移到当前 Provider
+- 修复会话在 Codex Desktop 中显示
+- 管理会话备份
+- 清理旧版无标记副本
+- 支持 Dry-run 预演
+- 可选把尚未登记的 CLI 会话纳入 Desktop
+
+`repair-desktop` 默认只修复 active 会话。需要 archived 会话时，CLI 可加 `--include-archived`。
+
+### GitHub / Sync
+
+用于把 `./codex_bundles/` 同步到独立 GitHub 仓库。
+
+菜单顺序：
+
+1. `连接独立 GitHub 仓库`
+2. `查看 GitHub 同步状态`
+3. `从 GitHub 拉取更新`
+4. `推送本机更新到 GitHub`
+
+同步范围包含：
+
+- 会话 Bundle：`sessions/`
+- standalone Skills Bundle：`skills/`
+
+GitHub 同步不会直接提交或推送 `~/.codex/` 原始会话目录。
+
+## 推荐工作流
+
+### 1. 导出某个项目的全部会话
+
+1. 打开 TUI。
+2. 进入 `Session / Browse`。
+3. 选择 `按项目路径查看并导出会话`。
+4. 粘贴项目根目录路径。
+5. 确认匹配到的会话列表。
+6. 按 `x` 批量导出。
+7. 第一次建议选择 Dry-run，预览完成后按 Enter 会回到执行选择页。
+
+### 2. 在另一台电脑导入项目会话
+
+1. 把源机器的 `./codex_bundles/` 拷贝过来，或先从 GitHub 拉取更新。
+2. 打开 TUI。
+3. 进入 `Bundle / Transfer`。
+4. 选择 `批量导入 Bundle 为会话`。
+5. 依次选择 `设备 -> project 分类 -> 项目文件夹`。
+6. 查看工具识别出的本机项目路径。
+7. 必要时修改目标项目路径。
+8. 选择是否自动创建缺失目录。
+9. 执行导入。
+
+导入时如果会覆盖本机旧 rollout，工具会先备份旧文件。
+
+### 3. 同步自定义 Skills
+
+源机器：
+
+1. 进入 `Skills / Transfer`。
+2. 选择 `导出全部自定义 Skills`。
+3. 得到 `./codex_bundles/<machine>/skills/all/<timestamp>/`。
+
+目标机器：
+
+1. 进入 `Skills / Transfer`。
+2. 选择 `导入单个 Skills Bundle` 或 `批量导入 Skills Bundle`。
+3. 内容一致的 Skill 会直接复用。
+4. 内容冲突默认跳过，不覆盖本机版本。
+
+### 4. 连接 GitHub 同步仓库
+
+先在 GitHub 上新建一个独立仓库，例如：
+
+```text
+git@github.com:you/codex-bundles.git
+```
+
+然后在 TUI 中：
+
+1. 进入 `GitHub / Sync`。
+2. 选择 `连接独立 GitHub 仓库`。
+3. 输入这个新仓库地址。
+4. 工具会拒绝连接到当前项目源码仓库 remote。
+5. 连接后可选择是否立即首次推送本机 Bundle。
+
+连接动作支持 Dry-run。Dry-run 结束后按 Enter 会回到同一个执行选择页，不会回主菜单。
+
+### 5. 拉取 / 推送 GitHub 更新
+
+拉取：
+
+1. 进入 `GitHub / Sync`。
+2. 选择 `从 GitHub 拉取更新`。
+3. TUI 会显示当前连接的 remote 和分支，例如 `origin/main`。
+4. 选择 `拉取`、`Dry-run 预览` 或 `返回`。
+
+推送：
+
+1. 进入 `GitHub / Sync`。
+2. 选择 `推送本机更新到 GitHub`。
+3. TUI 会显示待同步变更数量、会话变更数量和 Skills 变更数量。
+4. 选择 `推送`、`Dry-run 预览` 或 `返回`。
+
+同步策略：
+
+- 状态页会先显示本地快照，再用进度条检查远端更新时间。
+- 首页、Bundle、Skills 页面只显示本地同步提示，不会偷偷联网检查远端。
+- 导入手动拷贝来的 Bundle 时不会弹强制拉取提示。
+- 拉取或推送前会检查远端更新。
+- 可自动合并时自动合并。
+- 文件冲突时停止并列出冲突文件，避免静默覆盖。
+- 路径展示统一为 POSIX 风格，兼容 macOS `/` 与 Windows `\` 输入。
+
+### 6. 找回导入覆盖前的本机会话
+
+1. 进入 `Repair / Maintenance`。
+2. 选择 `管理会话备份`。
+3. 按 `/` 搜索 session id、provider、cwd 或路径。
+4. 按 `d` 查看详情。
+5. 按 `r` 恢复选中备份。
+6. 按 `x` 删除不再需要的备份。
+7. 输入 `DELETE` 二次确认。
+
+恢复前如果当前 rollout 仍存在，工具会先生成一份 `rollout-xxx.jsonl.bak.restore.<timestamp>`，再恢复选中的备份。
+
+## 常用按键
+
+主界面和功能页：
+
+| 按键 | 作用 |
+|---|---|
+| `↑/↓` 或 `j/k` | 移动 |
+| `Enter` | 进入功能页或执行当前动作 |
+| `←/→` | 切换功能页 |
+| `PgUp/PgDn` | 切换功能页 |
+| `h` | 打开帮助 |
+| `q` | 返回或退出 |
+| `0` | 直接退出 |
+
+二级选择页：
+
+| 按键 | 作用 |
+|---|---|
+| `↑/↓` 或 `j/k` | 选择执行方式、修复范围或同步方式 |
+| `Enter` | 确认当前选项 |
+| `q` / `←` / `Esc` | 返回上一步 |
+
+浏览器页面：
+
+| 按键 | 作用 |
+|---|---|
+| `/` | 搜索会话、Bundle、Skill 或备份 |
+| `Enter` | 打开当前条目的操作面板，选择模式下直接确认 |
+| `d` | 查看详情 |
+| `e` | 在会话列表中导出当前会话 |
+| `p` | 在项目会话浏览器中重新输入项目路径 |
+| `x` | 在项目会话浏览器导出当前项目全部会话；在 Skills 列表导出全部自定义 Skills；在备份列表删除备份 |
+| `s` | 切换 Bundle 导出方式 |
+| `m` | 按导出机器切换 Bundle 搜索范围 |
+| `l` | 切换显示全部历史 Bundle / 仅显示最新 Bundle |
+| `i` / `v` | 导入当前 Bundle / 导入并自动创建缺失目录 |
+| `g` | 在 Skills 列表切换是否显示系统/运行时 Skills |
+| `r` | 在 Skills 列表删除自定义 Skill；在备份列表恢复备份 |
+
+## CLI 速查
+
+### 启动和浏览
 
 ```bash
-# 启动 TUI / 查看版本
 codex-session-toolkit
 codex-session-toolkit --version
-
-# 浏览
 codex-session-toolkit list
 codex-session-toolkit list <session_id_or_keyword>
+codex-session-toolkit list-project-sessions /Users/example/project-a
 codex-session-toolkit list-bundles
+codex-session-toolkit validate-bundles
+```
 
-# 导出
+### 导出会话
+
+```bash
 codex-session-toolkit export <session_id>
+codex-session-toolkit export-project /Users/example/project-a --dry-run
 codex-session-toolkit export-project /Users/example/project-a
 codex-session-toolkit export-active-desktop-all
+codex-session-toolkit export-desktop-all
 codex-session-toolkit export-cli-all
+```
 
-# 导入
+### 导入会话
+
+```bash
 codex-session-toolkit import <session_id_or_bundle_dir>
-codex-session-toolkit import <session_id> --desktop-visible
+codex-session-toolkit import <session_id_or_bundle_dir> --desktop-visible
 codex-session-toolkit import-desktop-all --machine Work-Laptop --export-group active
-codex-session-toolkit import-desktop-all --machine Work-Laptop --project project-a --target-project-path /Users/example/project-a --desktop-visible
+codex-session-toolkit import-desktop-all --machine Work-Laptop --export-group project --project project-a --target-project-path /Users/example/project-a --desktop-visible
+```
 
-# Skills
+### Skills
+
+```bash
 codex-session-toolkit list-skills
+codex-session-toolkit list-skills --include-system
 codex-session-toolkit export-skills
 codex-session-toolkit export-skills my-skill
 codex-session-toolkit list-skill-bundles
@@ -272,162 +344,180 @@ codex-session-toolkit import-skill-bundle <skill_bundle_dir_or_skill_name>
 codex-session-toolkit import-skill-bundles --machine Work-Laptop
 codex-session-toolkit delete-skill my-skill --source-root agents --dry-run
 codex-session-toolkit delete-skill my-skill --source-root agents
-
-# 会话备份（建议优先在 TUI 中操作）
-codex-session-toolkit list-backups
-codex-session-toolkit restore-backup <backup_path_or_session_id> --dry-run
-codex-session-toolkit delete-backup <backup_path_or_session_id> --dry-run
-
-# 修复 Desktop 可见性
-codex-session-toolkit repair-desktop
-codex-session-toolkit repair-desktop --dry-run
-codex-session-toolkit repair-desktop --include-cli
-codex-session-toolkit repair-desktop --include-archived
 ```
 
-补充说明：
+### GitHub 同步
 
-- 导出 Bundle 时会保留源会话的原始 `model_provider`，例如 `custom`
-- 导入到 Desktop 环境时，工具会按目标机器当前 provider 准备 rollout
-- Provider 识别顺序为：命令显式参数、`~/.codex/config.toml`、最新 Desktop `threads` 表、最新 rollout 会话文件
-- 账号登录模式下如果 config 没有 `model_provider`，通常会从 `state_*.sqlite` 的 `threads.model_provider` 推断
-- 新版导出会从源机器 Desktop `threads.title` 读取真正的左侧线程短标题，写入 Bundle 的 `THREAD_NAME`
-- 第一条用户消息会写入 `FIRST_USER_MESSAGE`，用于 Desktop 的首条消息预览和极端情况下的兜底标题
-- 导入时优先使用 `THREAD_NAME`；如果旧 Bundle 没有带出标题，才会从现有 Desktop 标题、`session_index.jsonl` 或 rollout 首条用户消息中恢复
-- 如果导入时发现本机同一个 rollout 更旧并需要覆盖，工具会先把当前文件备份为同目录下的 `.bak.<timestamp>`；这些备份可以在 TUI 的 `Repair / Maintenance -> 管理会话备份` 中找回或删除
-- `repair-desktop` 会保留已有 Desktop 短标题，只修复 provider、索引、workspace roots 和 `threads` 登记
-- 旧导出包如果没有 `THREAD_NAME`，目标机器无法凭空还原源机器曾经生成过的短标题；需要在源机器用新版工具重新导出，或带上源机器 `~/.codex/state_*.sqlite` 做标题合并
-- `--project` 用于锁定 `project` 分类下的项目文件夹；`--target-project-path` 用于把会话 `cwd` 映射到本机项目根目录
-- 如果目标目录不存在，可配合 `--desktop-visible` 在导入时自动创建缺失目录
-- `repair-desktop` 默认只修复 active 会话；需要 archived 会话时再显式加 `--include-archived`
-- `--include-cli` 会把尚未登记到 Desktop 的 CLI 会话也写入 Desktop `threads` 表
+```bash
+codex-session-toolkit connect-github git@github.com:you/codex-bundles.git --dry-run
+codex-session-toolkit connect-github git@github.com:you/codex-bundles.git
+codex-session-toolkit connect-github git@github.com:you/codex-bundles.git --push-after-connect
+codex-session-toolkit pull-github --dry-run
+codex-session-toolkit pull-github
+codex-session-toolkit sync-github --dry-run
+codex-session-toolkit sync-github --message "Sync laptop bundles"
+codex-session-toolkit sync-github --no-push
+```
+
+### 备份和修复
+
+```bash
+codex-session-toolkit list-backups
+codex-session-toolkit restore-backup <backup_path_or_session_id> --dry-run
+codex-session-toolkit restore-backup <backup_path_or_session_id>
+codex-session-toolkit delete-backup <backup_path_or_session_id> --dry-run
+codex-session-toolkit delete-backup <backup_path_or_session_id>
+codex-session-toolkit repair-desktop --dry-run
+codex-session-toolkit repair-desktop
+codex-session-toolkit repair-desktop --include-cli
+codex-session-toolkit repair-desktop --include-archived
+codex-session-toolkit clone-provider --dry-run
+codex-session-toolkit clean-clones --dry-run
+```
 
 ## Bundle 目录策略
 
-所有新版 Bundle 相关动作都只允许在当前目录下的 `./codex_bundles/` 中进行。
-
-这包括：
-
-- 导出
-- 浏览
-- 校验
-- 导入
-
-不再提供用户可自定义的 `--bundle-root`。
-
-如果你手动传入一个 Bundle 目录，这个目录也必须位于 `./codex_bundles/` 或旧版兼容目录 `./codex_sessions/` 下面，否则工具会拒绝执行。
+所有新版 Bundle 动作都围绕当前项目目录下的 `./codex_bundles/` 工作区进行。
 
 默认目录：
 
 - Codex 数据目录：`~/.codex/`
-- Bundle 根目录：`./codex_bundles/`
+- Bundle 工作区：`./codex_bundles/`
 
-默认归档结构：
+默认结构：
 
-- `./codex_bundles/<machine>/sessions/single/<timestamp>/<session_id>/`
-- `./codex_bundles/<machine>/sessions/desktop/<timestamp>/<session_id>/`
-- `./codex_bundles/<machine>/sessions/active/<timestamp>/<session_id>/`
-- `./codex_bundles/<machine>/sessions/cli/<timestamp>/<session_id>/`
-- `./codex_bundles/<machine>/sessions/project/<project>/<timestamp>/<session_id>/`
-- `./codex_bundles/<machine>/skills/single/<timestamp>/`
-- `./codex_bundles/<machine>/skills/all/<timestamp>/`
+```text
+./codex_bundles/<machine>/sessions/single/<timestamp>/<session_id>/
+./codex_bundles/<machine>/sessions/desktop/<timestamp>/<session_id>/
+./codex_bundles/<machine>/sessions/active/<timestamp>/<session_id>/
+./codex_bundles/<machine>/sessions/cli/<timestamp>/<session_id>/
+./codex_bundles/<machine>/sessions/project/<project>/<timestamp>/<session_id>/
+./codex_bundles/<machine>/skills/single/<timestamp>/
+./codex_bundles/<machine>/skills/all/<timestamp>/
+```
 
-其中 `<machine>` 默认来自当前电脑主机名；如需手动指定，可以在导出前设置环境变量 `CST_MACHINE_LABEL`。
+`<machine>` 默认来自当前电脑主机名。需要手动指定时，可在导出前设置：
 
-其中 `project` 分类会额外记录：
-
-- 导出项目名
-- 导出项目原路径
-- 每个会话原始 `cwd`
-
-这样在另一台机器导入时，工具就可以先按项目文件夹筛选，再决定映射到本机哪个项目路径。
+```bash
+export CST_MACHINE_LABEL=My-MacBook
+```
 
 兼容旧布局：
 
-- 工具仍会继续识别 `./codex_sessions/`、`./codex_sessions/bundles/` 与 `./codex_sessions/desktop_bundles/` 下的旧导出
-- 但新的导出默认都会写入统一的 `./codex_bundles/<machine>/sessions/...` 或 `./codex_bundles/<machine>/skills/...` 结构
+- 工具仍能识别 `./codex_sessions/`
+- 工具仍能识别 `./codex_sessions/bundles/`
+- 工具仍能识别 `./codex_sessions/desktop_bundles/`
+- 新导出默认写入 `./codex_bundles/`
 
-会话 Bundle 内默认包含：
+如果手动传入 Bundle 目录，这个目录必须位于 `./codex_bundles/` 或旧版兼容目录下，否则工具会拒绝执行。
+
+## Bundle 内容
+
+会话 Bundle 默认包含：
 
 - `codex/<relative rollout path>.jsonl`
 - `history.jsonl`
 - `manifest.env`
-- `skills_manifest.json`（可选，记录会话中使用的 Skill 信息）
-- `skills/`（可选，只包含本会话实际依赖的自定义 Skill 文件）
+- `skills_manifest.json`，可选
+- `skills/`，可选，只包含本会话实际依赖的自定义 Skill 文件
 
-standalone Skills Bundle 内默认包含：
+standalone Skills Bundle 默认包含：
 
 - `manifest.env`
 - `skills_manifest.json`
 - `skills/`
 
-### Skill 搬运
+project 分类还会记录：
 
-会话导出时，工具会自动扫描会话中的 `<skills_instructions>` 块，区分“上下文可用”和“本会话实际使用”：
+- 导出项目名
+- 导出项目原路径
+- 每个会话的原始 `cwd`
 
-- **实际使用过的自定义 Skill**（`~/.agents/skills/` 和 `~/.codex/skills/` 下非 `.system`、非 `codex-primary-runtime` 的目录）会被完整打包到 `skills/` 目录
-- **仅在上下文中可用但没有使用过的 Skill** 只记录元数据，不打包文件，也不会在导入时报 missing
-- **系统 Skill**（`.system/`）和 **运行时 Skill**（`codex-primary-runtime/`）只记录元数据，不打包文件
+这让目标机器可以按项目筛选，再把 cwd 映射到本机项目目录。
 
-如果你想把一台设备上的 Skills 全量同步到另一台设备，请使用 `Skills / Transfer` 或 CLI 的 `export-skills` / `import-skill-bundle`，不要依赖会话导出顺手携带。
+## Skills 搬运规则
 
-导入时自动恢复：
+会话导出时，工具会读取会话上下文中的 `<skills_instructions>`，区分“可用 Skill”和“实际使用过的 Skill”：
 
-- 本机已存在且内容一致 → `already_present`，直接复用
-- 本机不存在 → `restored`，从 Bundle 复制
-- 本机已存在但内容不同 → 默认跳过（`conflict_skipped`），不覆盖
-- 会话实际依赖但 Bundle 中未打包 → `missing`，记录到缺失报告
+- 实际使用过的自定义 Skill 会被完整打包到 `skills/`
+- 只在上下文中可用、但本会话没有实际使用的 Skill 只记录元数据
+- 系统 Skill 和运行时 Skill 只记录元数据，不打包文件
 
-`--skills-mode` 参数控制导入行为：
+导入时默认是 `best-effort`：
+
+| 状态 | 行为 |
+|---|---|
+| 本机不存在 | 从 Bundle 恢复 |
+| 本机已存在且内容一致 | 直接复用 |
+| 本机已存在但内容不同 | 跳过，不覆盖 |
+| 会话依赖但 Bundle 未携带 | 记录 missing，不阻塞 |
+
+`--skills-mode` 可选：
 
 | 模式 | 行为 |
 |---|---|
-| `best-effort`（默认） | 自动恢复，冲突跳过，缺失不阻塞 |
-| `strict` | 缺失或冲突时中止导入 |
-| `skip` | 完全不处理 Skill |
+| `best-effort` | 默认模式，尽量恢复，冲突和缺失记录为 warning |
+| `strict` | 缺失、冲突或异常时中止 |
+| `skip` | 完全不处理 Skills |
 | `overwrite` | 允许覆盖本机已有 Skill |
 
-批量导入时，工具还会额外生成一份 Skill 恢复报告：
+批量导入会生成 Skills 恢复报告，通常位于 `./codex_bundles/_skills_restore_report.<timestamp>.<id>.json`。
 
-- 位置通常在当前 `codex_bundles/` 根目录下，文件名形如 `_skills_restore_report.<timestamp>.<id>.json`
-- 报告会按 session 记录 `restored / already_present / conflict_skipped / missing / failed`
-- CLI 汇总输出也会显示总计数，方便导入后快速判断还需要手工补哪些 Skill
+## Provider 和 Desktop 标题
 
-导出时 `--skills-mode` 也支持同样的 4 种取值：
+工具会尽量保留用户在 Desktop 中看到的真实标题和 provider 语义。
 
-| 模式 | 行为 |
-|---|---|
-| `best-effort`（默认） | 能打包就打包，失败只记 warning，不阻塞导出 |
-| `strict` | 遇到 Skill 侧车生成或打包异常时中止导出 |
-| `skip` | 完全跳过 Skill 检测与打包 |
-| `overwrite` | 对导出流程没有额外意义，行为等同于 `best-effort` |
+- 导出时优先读取源机器 Desktop `state_*.sqlite` 中的 `threads.title`
+- `THREAD_NAME` 用来保存左侧线程短标题
+- `FIRST_USER_MESSAGE` 用来保存第一条用户消息，作为兜底预览
+- 导入时优先使用 `THREAD_NAME`
+- 旧 Bundle 没有标题时，才从现有 Desktop 标题、`session_index.jsonl` 或 rollout 首条用户消息恢复
+- 账号登录模式下，如果 `~/.codex/config.toml` 没有 `model_provider`，会从 Desktop `threads` 表和最新 rollout 中推断
+- `repair-desktop` 会保留已有 Desktop 短标题，只修复 provider、索引、workspace roots 和 `threads` 登记
 
-补充说明：
+Provider 识别顺序：
 
-- `validate-bundles` 当前重点校验 `manifest.env`、bundle 内 session JSONL 和 `history.jsonl`
-- `skills_manifest.json` 的有效性会在导入 Skill 时进一步校验；如果 sidecar 无效，默认会记 warning，并在 `strict` 模式下中止
+1. 命令显式参数
+2. `~/.codex/config.toml`
+3. 最新 Desktop `threads` 表
+4. 最新 rollout 会话文件
 
 ## 安全性说明
 
 - 不修改对话正文内容
 - 不会悄悄覆盖原始 session
+- 导入覆盖前会自动备份旧 rollout
 - 清理操作只针对旧版无标记 clone
+- 删除 Skill 和删除备份都需要确认
 - 导入前会校验 manifest、路径和 JSONL
-- 建议所有写入型动作第一次都先用 dry-run
+- GitHub 同步只处理 `./codex_bundles/`
+- 父项目源码仓库通过 `.gitignore` 忽略 `codex_bundles/`
+- 建议写入型动作第一次都先 Dry-run
 
 ## 运行环境
 
 - Python >= 3.8
 - 无第三方运行时依赖
-- 支持 Windows / macOS / Linux
+- 支持 macOS / Windows / Linux
+- GitHub 同步需要本机可用的 `git`
 
-## 终端环境变量
+## 环境变量
 
-- `NO_COLOR=1`
-- `CST_ASCII_UI=1`
-- `CST_TUI_MAX_WIDTH=120`
-- `CST_MACHINE_LABEL=My-MacBook`
-- `CST_LAUNCH_MODE=auto|source|installed`
+| 变量 | 作用 |
+|---|---|
+| `NO_COLOR=1` | 禁用颜色 |
+| `CST_ASCII_UI=1` | 使用 ASCII UI |
+| `CST_TUI_MAX_WIDTH=120` | 限制 TUI 最大宽度 |
+| `CST_MACHINE_LABEL=My-MacBook` | 指定导出时的机器标签 |
+| `CST_LAUNCH_MODE=auto|source|installed` | 控制 launcher 使用源码模式或安装模式 |
+
+## 开发验证
+
+```bash
+python3 -m ruff check src tests
+python3 -m compileall -q src tests
+python3 -m unittest discover -s tests -v
+```
 
 ## 社区支持
 

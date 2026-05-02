@@ -196,26 +196,29 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
                     border_codes=(Ansi.DIM, Ansi.YELLOW),
                 )
                 continue
-            dry_run = app._prompt_execution_mode(
-                title=f"导出项目 {project_label} 下的全部会话",
-                default_dry_run=False,
-            )
-            if dry_run is None:
-                continue
-            cli_args = ["export-project"]
-            if dry_run:
-                cli_args.append("--dry-run")
-            cli_args.append(project_path)
-            action_name = f"导出项目 {project_label} 下的 {len(entries)} 个会话为 Bundle"
-            if dry_run:
-                action_name += "（Dry-run）"
-            app._run_action(
-                action_name,
-                cli_args,
-                dry_run=dry_run,
-                runner=lambda args=cli_args: app._run_toolkit(list(args)),
-                danger=False,
-            )
+            while True:
+                dry_run = app._prompt_execution_mode(
+                    title=f"导出项目 {project_label} 下的全部会话",
+                    default_dry_run=False,
+                )
+                if dry_run is None:
+                    break
+                cli_args = ["export-project"]
+                if dry_run:
+                    cli_args.append("--dry-run")
+                cli_args.append(project_path)
+                action_name = f"导出项目 {project_label} 下的 {len(entries)} 个会话为 Bundle"
+                if dry_run:
+                    action_name += "（Dry-run）"
+                app._run_action(
+                    action_name,
+                    cli_args,
+                    dry_run=dry_run,
+                    runner=lambda args=cli_args: app._run_toolkit(list(args)),
+                    danger=False,
+                )
+                if not dry_run:
+                    break
             continue
 
 
@@ -532,6 +535,7 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
             f"{style_text('导出机器', Ansi.DIM)} : {snapshot.current_machine_label}",
             f"{style_text('历史视图', Ansi.DIM)} : {'每台机器每个会话仅显示最新一份 Bundle' if latest_only else '显示全部历史 Bundle'}",
         ]
+        info_lines.extend(app._github_sync_hint_lines())
 
         list_lines: list[str] = []
         if not entries:
@@ -678,6 +682,7 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
             f"{style_text('匹配数量', Ansi.DIM)} : {len(entries)}",
             f"{style_text('显示范围', Ansi.DIM)} : {'自定义 + 系统/运行时 Skills' if include_system else '仅自定义 Skills'}",
         ]
+        info_lines.extend(app._github_sync_hint_lines())
 
         list_lines: list[str] = []
         if not entries:
@@ -838,6 +843,7 @@ def open_skill_bundle_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["S
             f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
             f"{style_text('匹配数量', Ansi.DIM)} : {len(entries)}",
         ]
+        info_lines.extend(app._github_sync_hint_lines())
 
         list_lines: list[str] = []
         if not entries:

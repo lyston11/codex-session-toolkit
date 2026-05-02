@@ -141,6 +141,26 @@ def create_parser() -> argparse.ArgumentParser:
     delete_skill_parser.add_argument("--source-root", choices=["agents", "codex"], default="", help="Limit deletion to one local Skills root")
     delete_skill_parser.add_argument("--dry-run", action="store_true", help="Preview the Skill that would be deleted")
 
+    connect_github_parser = subparsers.add_parser("connect-github", help=command_help("connect-github"))
+    connect_github_parser.add_argument("remote_url", help="Dedicated GitHub repository URL for ./codex_bundles")
+    connect_github_parser.add_argument("--branch", default="main", help="Remote branch to push to")
+    connect_github_parser.add_argument("--remote-name", default="origin", help="Git remote name")
+    connect_github_parser.add_argument("--dry-run", action="store_true", help="Preview git connection setup without writing")
+    connect_github_parser.add_argument("--push-after-connect", action="store_true", help="After connecting, commit and push local bundles")
+    connect_github_parser.add_argument("--message", default="Sync Codex bundles", help="Initial push commit message")
+
+    pull_github_parser = subparsers.add_parser("pull-github", help=command_help("pull-github"))
+    pull_github_parser.add_argument("--branch", default="main", help="Remote branch to pull from")
+    pull_github_parser.add_argument("--remote-name", default="origin", help="Git remote name")
+    pull_github_parser.add_argument("--dry-run", action="store_true", help="Preview pull operations without writing")
+
+    sync_github_parser = subparsers.add_parser("sync-github", help=command_help("sync-github"))
+    sync_github_parser.add_argument("--branch", default="main", help="Remote branch to push to")
+    sync_github_parser.add_argument("--remote-name", default="origin", help="Git remote name")
+    sync_github_parser.add_argument("--message", default="Sync Codex bundles", help="Commit message")
+    sync_github_parser.add_argument("--dry-run", action="store_true", help="Preview git operations without writing")
+    sync_github_parser.add_argument("--no-push", action="store_true", help="Commit locally without pushing")
+
     list_backups_parser = subparsers.add_parser("list-backups", help=command_help("list-backups"))
     _add_optional_pattern(list_backups_parser)
     _add_limit(list_backups_parser)

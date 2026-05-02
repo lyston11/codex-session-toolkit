@@ -190,6 +190,99 @@ class SkillDeleteResult:
 
 
 @dataclass(frozen=True)
+class GitHubConnectResult:
+    bundle_root: Path
+    remote_name: str
+    remote_url: str
+    branch: str
+    dry_run: bool
+    initialized_repo: bool = False
+    configured_remote: bool = False
+    commands: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class GitHubSyncStatus:
+    bundle_root: Path
+    remote_name: str
+    remote_url: str = ""
+    branch: str = ""
+    bundle_root_exists: bool = False
+    is_git_repo: bool = False
+    is_connected: bool = False
+    uses_project_source_remote: bool = False
+    project_remote_url: str = ""
+    changed_files: List[str] = field(default_factory=list)
+    session_changed_files: List[str] = field(default_factory=list)
+    skill_changed_files: List[str] = field(default_factory=list)
+    other_changed_files: List[str] = field(default_factory=list)
+    has_head_commit: bool = False
+    local_commit_hash: str = ""
+    local_updated_at: str = ""
+    remote_checked: bool = False
+    remote_branch_exists: bool = False
+    remote_commit_hash: str = ""
+    remote_updated_at: str = ""
+    local_ahead_count: int = 0
+    remote_ahead_count: int = 0
+    remote_check_error: str = ""
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class GitHubSyncResult:
+    bundle_root: Path
+    remote_name: str
+    remote_url: str
+    branch: str
+    dry_run: bool
+    push_enabled: bool
+    initialized_repo: bool = False
+    configured_remote: bool = False
+    changed_files: List[str] = field(default_factory=list)
+    session_changed_files: List[str] = field(default_factory=list)
+    skill_changed_files: List[str] = field(default_factory=list)
+    other_changed_files: List[str] = field(default_factory=list)
+    committed: bool = False
+    commit_hash: str = ""
+    remote_checked: bool = False
+    pulled: bool = False
+    merged_remote: bool = False
+    conflict: bool = False
+    conflict_files: List[str] = field(default_factory=list)
+    pushed: bool = False
+    skipped_reason: str = ""
+    commands: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class GitHubPullResult:
+    bundle_root: Path
+    remote_name: str
+    remote_url: str
+    branch: str
+    dry_run: bool
+    changed_files: List[str] = field(default_factory=list)
+    session_changed_files: List[str] = field(default_factory=list)
+    skill_changed_files: List[str] = field(default_factory=list)
+    other_changed_files: List[str] = field(default_factory=list)
+    local_commit_hash: str = ""
+    local_updated_at: str = ""
+    remote_commit_hash: str = ""
+    remote_updated_at: str = ""
+    local_ahead_count: int = 0
+    remote_ahead_count: int = 0
+    remote_checked: bool = False
+    remote_branch_exists: bool = False
+    pulled: bool = False
+    merged_remote: bool = False
+    conflict: bool = False
+    conflict_files: List[str] = field(default_factory=list)
+    skipped_reason: str = ""
+    commands: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class SessionBackupRestoreResult:
     session_id: str
     backup_path: Path
