@@ -437,7 +437,13 @@ def import_desktop_all(
     default_bundle_root = normalize_bundle_root(paths, None, paths.default_desktop_bundle_root)
     bundle_root = normalize_bundle_root(paths, bundle_root, paths.default_desktop_bundle_root)
     if not bundle_root.is_dir():
-        raise ToolkitError(f"Missing bundle root: {bundle_root}")
+        legacy_roots = (
+            paths.legacy_session_bundle_root,
+            paths.legacy_bundle_root,
+            paths.legacy_desktop_bundle_root,
+        )
+        if bundle_root != default_bundle_root or not any(Path(root).expanduser().is_dir() for root in legacy_roots):
+            raise ToolkitError(f"Missing bundle root: {bundle_root}")
 
     normalized_project_filter = project_filter_to_key(project_filter)
     normalized_target_project_path = normalize_project_path(target_project_path)
@@ -481,10 +487,11 @@ def import_desktop_all(
     total_skills_conflict_skipped = 0
     total_skills_missing = 0
     total_skills_failed = 0
+    report_root = bundle_root if bundle_root.is_dir() else paths.legacy_session_bundle_root
     report_candidate_path = (
         None
         if skills_mode == "skip"
-        else bundle_root / f"_skills_restore_report.{int(time.time())}.{uuid4().hex}.json"
+        else report_root / f"_skills_restore_report.{int(time.time())}.{uuid4().hex}.json"
     )
     skills_restore_report_path = None
     warnings: list[OperationWarning] = []

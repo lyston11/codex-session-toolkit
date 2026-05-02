@@ -42,6 +42,28 @@ class BundleSummary:
 
 
 @dataclass(frozen=True)
+class LocalSkillSummary:
+    name: str
+    source_root: str
+    relative_dir: str
+    skill_dir: Path
+    location_kind: str
+    content_hash: str = ""
+
+
+@dataclass(frozen=True)
+class SkillBundleSummary:
+    bundle_dir: Path
+    exported_at: str
+    source_machine: str = ""
+    source_machine_key: str = ""
+    export_group: str = ""
+    skill_count: int = 0
+    bundled_skill_count: int = 0
+    skills: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class BundleValidationResult:
     source_group: str
     bundle_dir: Path
@@ -115,6 +137,38 @@ class ExportResult:
     skills_available_count: int = 0
     skills_manifest_path: Optional[Path] = None
     warnings: List[OperationWarning] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SkillExportResult:
+    bundle_dir: Path
+    source_machine: str
+    source_machine_key: str
+    exported_count: int
+    skipped_count: int = 0
+    manifest_file: Optional[Path] = None
+    warnings: List[OperationWarning] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SkillImportResult:
+    bundle_dir: Path
+    restored_count: int = 0
+    already_present_count: int = 0
+    conflict_skipped_count: int = 0
+    missing_count: int = 0
+    failed_count: int = 0
+    warnings: List[OperationWarning] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SkillDeleteResult:
+    name: str
+    source_root: str
+    relative_dir: str
+    skill_dir: Path
+    dry_run: bool
+    deleted: bool = False
 
 
 @dataclass(frozen=True)

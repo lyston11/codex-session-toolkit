@@ -41,6 +41,10 @@ class CodexPaths:
 
     @property
     def local_bundle_workspace(self) -> Path:
+        return Path.cwd() / "codex_bundles"
+
+    @property
+    def legacy_session_bundle_workspace(self) -> Path:
         return Path.cwd() / "codex_sessions"
 
     @property
@@ -53,11 +57,19 @@ class CodexPaths:
 
     @property
     def legacy_bundle_root(self) -> Path:
-        return self.local_bundle_workspace / "bundles"
+        return self.legacy_session_bundle_workspace / "bundles"
 
     @property
     def legacy_desktop_bundle_root(self) -> Path:
-        return self.local_bundle_workspace / "desktop_bundles"
+        return self.legacy_session_bundle_workspace / "desktop_bundles"
+
+    @property
+    def legacy_session_bundle_root(self) -> Path:
+        return self.legacy_session_bundle_workspace
+
+    @property
+    def skills_bundle_root(self) -> Path:
+        return self.local_bundle_workspace
 
     @property
     def agents_skills_dir(self) -> Path:

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Optional
 
 from ..errors import ToolkitError
 from ..services.browse import get_project_session_summaries, get_session_summaries
+from ..services.skills_transfer import list_local_skills, list_skill_bundles
 from ..support import detect_machine_key, project_label_from_path, project_label_to_key
 from .navigation_state import (
     apply_list_key,
@@ -19,7 +20,7 @@ from .terminal import Ansi, align_line, app_logo_lines, ellipsize_middle, glyphs
 from .terminal_io import read_key
 
 if TYPE_CHECKING:
-    from ..models import BundleSummary, SessionSummary
+    from ..models import BundleSummary, LocalSkillSummary, SessionSummary, SkillBundleSummary
     from .app import ToolkitTuiApp
 
 
@@ -76,7 +77,7 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
         project_label = project_label_from_path(project_path) or "root"
         project_key = project_label_to_key(project_label)
         export_root_preview = (
-            f"{app.context.bundle_root_label}/{detect_machine_key()}/project/{project_key}/<timestamp>"
+            f"{app.context.bundle_root_label}/{detect_machine_key()}/sessions/project/{project_key}/<timestamp>"
         )
         if needs_reload:
             try:
@@ -481,6 +482,300 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
                 ["import", "--desktop-visible", str(bundle.bundle_dir)],
                 dry_run=False,
                 runner=lambda path=str(bundle.bundle_dir): app._run_toolkit(["import", "--desktop-visible", path]),
+                danger=False,
+            )
+            continue
+
+
+def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["LocalSkillSummary"]:
+    filter_text = ""
+    selected_index = 0
+    include_system = False
+    pointer = glyphs().get("pointer", ">")
+
+    while True:
+        try:
+            entries = list_local_skills(
+                app.paths,
+                pattern=filter_text,
+                include_system=include_system,
+            )
+        except ToolkitError as exc:
+            app._show_detail_panel("读取本机 Skills 失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+            return None
+
+        selected_index = clamp_selected_index(selected_index, len(entries))
+        box_width, center = app._screen_layout()
+        subtitle = (
+            "↑/↓ 选择 · Enter 查看详情 · / 搜索 · g 切换系统 Skills · e 导出选中 · r 删除选中 · x 导出全部 · q 返回"
+            if mode == "view"
+            else "↑/↓ 选择 · Enter 确认 · / 搜索 · g 切换系统 Skills · d 查看详情 · q 返回"
+        )
+        title = "浏览本机 Skills" if mode == "view" else "选择要导出的 Skill"
+        info_lines = [
+            f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
+            f"{style_text('匹配数量', Ansi.DIM)} : {len(entries)}",
+            f"{style_text('显示范围', Ansi.DIM)} : {'自定义 + 系统/运行时 Skills' if include_system else '仅自定义 Skills'}",
+        ]
+
+        list_lines: list[str] = []
+        if not entries:
+            list_lines.append("没有匹配 Skills。按 / 修改搜索词，按 g 切换显示范围，或按 q 返回。")
+        else:
+            start, end = selection_window(len(entries), selected_index, 10)
+            for idx in range(start, end):
+                skill = entries[idx]
+                line = (
+                    f"{pointer if idx == selected_index else ' '} "
+                    f"{skill.name} | {skill.source_root}/{skill.location_kind} | {skill.relative_dir}"
+                )
+                if idx == selected_index:
+                    list_lines.append(style_text(line, Ansi.BOLD, Ansi.BRIGHT_BLUE))
+                    list_lines.append(
+                        "  "
+                        + style_text(
+                            ellipsize_middle(str(skill.skill_dir), max(10, box_width - 10)),
+                            Ansi.DIM,
+                        )
+                    )
+                else:
+                    list_lines.append(line)
+
+        render_browser_frame(
+            app,
+            title=title,
+            subtitle=subtitle,
+            info_lines=info_lines,
+            list_lines=list_lines,
+            list_border_codes=(Ansi.DIM, Ansi.BRIGHT_BLUE),
+            box_width=box_width,
+            center=center,
+        )
+
+        key = read_key()
+        if key is None:
+            raw_prompt = "命令 [Enter/\\/g/e/r/x/d/q]：" if mode == "view" else "命令 [Enter/\\/g/d/q]："
+            raw = input(raw_prompt).strip()
+            key = raw if raw else "ENTER"
+
+        transition = apply_list_key(key, selected_index=selected_index, item_count=len(entries))
+        selected_index = transition.selected_index
+        if transition.confirm_selected:
+            if not entries:
+                continue
+            selected = entries[selected_index]
+            if mode == "view":
+                app._show_detail_panel(
+                    "Skill 详情",
+                    app._local_skill_detail_lines(selected),
+                    border_codes=(Ansi.DIM, Ansi.BRIGHT_BLUE),
+                )
+                continue
+            return selected
+        if transition.exit_requested:
+            return None
+        if transition.show_detail and entries:
+            app._show_detail_panel(
+                "Skill 详情",
+                app._local_skill_detail_lines(entries[selected_index]),
+                border_codes=(Ansi.DIM, Ansi.BRIGHT_BLUE),
+            )
+            continue
+
+        key_str = transition.matched_hotkey
+        if key_str in {"/", "f"}:
+            new_filter = app._prompt_value(
+                title=title,
+                prompt_label="输入搜索词",
+                help_lines=[
+                    "可按 Skill 名称 / 相对目录 / 来源根 / 路径搜索。",
+                    "留空表示不搜索。",
+                ],
+                allow_empty=True,
+            )
+            filter_text = new_filter or ""
+            selected_index = 0
+            continue
+        if key_str == "g":
+            include_system = not include_system
+            selected_index = 0
+            continue
+        if key_str == "e" and entries and mode == "view":
+            selected = entries[selected_index]
+            if selected.location_kind != "custom":
+                app._show_detail_panel(
+                    "导出 Skill",
+                    ["系统/运行时 Skills 只记录元数据，不作为 standalone Skills Bundle 导出。"],
+                    border_codes=(Ansi.DIM, Ansi.YELLOW),
+                )
+                continue
+            app._run_action(
+                f"导出 Skill {selected.relative_dir}",
+                ["export-skills", selected.relative_dir],
+                dry_run=False,
+                runner=lambda pattern=selected.relative_dir: app._run_toolkit(["export-skills", pattern]),
+                danger=False,
+            )
+            continue
+        if key_str == "r" and entries and mode == "view":
+            selected = entries[selected_index]
+            if selected.location_kind != "custom":
+                app._show_detail_panel(
+                    "删除 Skill",
+                    ["系统/运行时 Skills 不能在这里删除。"],
+                    border_codes=(Ansi.DIM, Ansi.YELLOW),
+                )
+                continue
+            cli_args = ["delete-skill", selected.relative_dir, "--source-root", selected.source_root]
+            if not app._confirm_dangerous_action(
+                cli_args,
+                warning=f"将删除本机 Skill：{selected.source_root}/{selected.relative_dir}。",
+                impact=str(selected.skill_dir),
+            ):
+                continue
+            app._run_action(
+                f"删除本机 Skill {selected.relative_dir}",
+                cli_args,
+                dry_run=False,
+                runner=lambda args=cli_args: app._run_toolkit(args),
+                danger=True,
+            )
+            selected_index = 0
+            continue
+        if key_str == "x" and mode == "view":
+            app._run_action(
+                "导出全部自定义 Skills",
+                ["export-skills"],
+                dry_run=False,
+                runner=lambda: app._run_toolkit(["export-skills"]),
+                danger=False,
+            )
+            continue
+
+
+def open_skill_bundle_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["SkillBundleSummary"]:
+    filter_text = ""
+    selected_index = 0
+    pointer = glyphs().get("pointer", ">")
+
+    while True:
+        try:
+            entries = list_skill_bundles(app.paths, pattern=filter_text)
+        except ToolkitError as exc:
+            app._show_detail_panel("读取 Skills Bundle 失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+            return None
+
+        selected_index = clamp_selected_index(selected_index, len(entries))
+        box_width, center = app._screen_layout()
+        subtitle = (
+            "↑/↓ 选择 · Enter 查看详情 · / 搜索 · i 导入选中 · a 导入全部 · q 返回"
+            if mode == "view"
+            else "↑/↓ 选择 · Enter 确认 · / 搜索 · d 查看详情 · q 返回"
+        )
+        title = "浏览 Skills Bundle" if mode == "view" else "选择要导入的 Skills Bundle"
+        info_lines = [
+            f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
+            f"{style_text('匹配数量', Ansi.DIM)} : {len(entries)}",
+        ]
+
+        list_lines: list[str] = []
+        if not entries:
+            list_lines.append("没有匹配 Skills Bundle。按 / 修改搜索词，或按 q 返回。")
+        else:
+            start, end = selection_window(len(entries), selected_index, 10)
+            for idx in range(start, end):
+                bundle = entries[idx]
+                names = ", ".join(bundle.skills[:3])
+                if len(bundle.skills) > 3:
+                    names += f", ... +{len(bundle.skills) - 3}"
+                line = (
+                    f"{pointer if idx == selected_index else ' '} "
+                    f"{bundle.exported_at or '-'} | {bundle.source_machine or '-'} | "
+                    f"{bundle.bundled_skill_count}/{bundle.skill_count} | {names or '（空）'}"
+                )
+                if idx == selected_index:
+                    list_lines.append(style_text(line, Ansi.BOLD, Ansi.BRIGHT_BLUE))
+                    list_lines.append(
+                        "  "
+                        + style_text(
+                            ellipsize_middle(str(bundle.bundle_dir), max(10, box_width - 10)),
+                            Ansi.DIM,
+                        )
+                    )
+                else:
+                    list_lines.append(line)
+
+        render_browser_frame(
+            app,
+            title=title,
+            subtitle=subtitle,
+            info_lines=info_lines,
+            list_lines=list_lines,
+            list_border_codes=(Ansi.DIM, Ansi.BRIGHT_BLUE),
+            box_width=box_width,
+            center=center,
+        )
+
+        key = read_key()
+        if key is None:
+            raw_prompt = "命令 [Enter/\\/i/a/d/q]：" if mode == "view" else "命令 [Enter/\\/d/q]："
+            raw = input(raw_prompt).strip()
+            key = raw if raw else "ENTER"
+
+        transition = apply_list_key(key, selected_index=selected_index, item_count=len(entries))
+        selected_index = transition.selected_index
+        if transition.confirm_selected:
+            if not entries:
+                continue
+            selected = entries[selected_index]
+            if mode == "view":
+                app._show_detail_panel(
+                    "Skills Bundle 详情",
+                    app._skill_bundle_detail_lines(selected),
+                    border_codes=(Ansi.DIM, Ansi.BRIGHT_BLUE),
+                )
+                continue
+            return selected
+        if transition.exit_requested:
+            return None
+        if transition.show_detail and entries:
+            app._show_detail_panel(
+                "Skills Bundle 详情",
+                app._skill_bundle_detail_lines(entries[selected_index]),
+                border_codes=(Ansi.DIM, Ansi.BRIGHT_BLUE),
+            )
+            continue
+
+        key_str = transition.matched_hotkey
+        if key_str in {"/", "f"}:
+            new_filter = app._prompt_value(
+                title=title,
+                prompt_label="输入搜索词",
+                help_lines=[
+                    "可按 Skill 名称 / 来源机器 / Bundle 路径搜索。",
+                    "留空表示不搜索。",
+                ],
+                allow_empty=True,
+            )
+            filter_text = new_filter or ""
+            selected_index = 0
+            continue
+        if key_str == "i" and entries and mode == "view":
+            selected = entries[selected_index]
+            app._run_action(
+                f"导入 Skills Bundle {selected.bundle_dir.name}",
+                ["import-skill-bundle", str(selected.bundle_dir)],
+                dry_run=False,
+                runner=lambda path=str(selected.bundle_dir): app._run_toolkit(["import-skill-bundle", path]),
+                danger=False,
+            )
+            continue
+        if key_str == "a" and mode == "view":
+            app._run_action(
+                "批量导入 Skills Bundle",
+                ["import-skill-bundles"],
+                dry_run=False,
+                runner=lambda: app._run_toolkit(["import-skill-bundles"]),
                 danger=False,
             )
             continue

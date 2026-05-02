@@ -14,7 +14,7 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 from ..commands import run_cli as run_toolkit_cli
 from ..errors import ToolkitError
-from ..models import BundleSummary, SessionSummary
+from ..models import BundleSummary, LocalSkillSummary, SessionSummary, SkillBundleSummary
 from ..paths import CodexPaths
 from ..presenters.reports import (
     print_cleanup_result,
@@ -33,8 +33,10 @@ from .bundle_flows import default_target_project_path as _default_target_project
 from .bundle_flows import select_batch_bundle_import_scope as _select_batch_bundle_import_scope_flow
 from .bundle_flows import select_project_bundle_import_scope as _select_project_bundle_import_scope_flow
 from .browser_flows import open_bundle_browser as _open_bundle_browser_flow
+from .browser_flows import open_local_skill_browser as _open_local_skill_browser_flow
 from .browser_flows import open_project_session_browser as _open_project_session_browser_flow
 from .browser_flows import open_session_browser as _open_session_browser_flow
+from .browser_flows import open_skill_bundle_browser as _open_skill_bundle_browser_flow
 from .navigation_state import apply_home_key, apply_section_key, clamp_selected_index
 from .prompt_flows import confirm_dangerous_action as _confirm_dangerous_action_flow
 from .prompt_flows import confirm_toggle as _confirm_toggle_flow
@@ -182,6 +184,8 @@ class ToolkitTuiApp:
             return Ansi.RED
         if menu_action.is_dry_run:
             return Ansi.YELLOW
+        if menu_action.section_id == "skills":
+            return Ansi.BRIGHT_BLUE
         if menu_action.section_id == "bundle":
             return Ansi.MAGENTA
         if menu_action.section_id == "repair":
@@ -194,6 +198,8 @@ class ToolkitTuiApp:
         return TUI_ACTION_NOTES.get(menu_action.action_id, [])
 
     def _section_color(self, menu_section: TuiMenuSection) -> str:
+        if menu_section.section_id == "skills":
+            return Ansi.BRIGHT_BLUE
         if menu_section.section_id == "bundle":
             return Ansi.MAGENTA
         if menu_section.section_id == "repair":
@@ -234,6 +240,28 @@ class ToolkitTuiApp:
 
     def _bundle_detail_lines(self, bundle: BundleSummary) -> List[str]:
         return _bundle_detail_lines_flow(self, bundle)
+
+    def _local_skill_detail_lines(self, skill: LocalSkillSummary) -> List[str]:
+        return [
+            f"{style_text('Skill', Ansi.DIM)}      : {skill.name}",
+            f"{style_text('来源根', Ansi.DIM)}     : {skill.source_root}",
+            f"{style_text('类型', Ansi.DIM)}       : {skill.location_kind}",
+            f"{style_text('相对目录', Ansi.DIM)}   : {skill.relative_dir}",
+            f"{style_text('内容 Hash', Ansi.DIM)}  : {skill.content_hash or '-'}",
+            f"{style_text('路径', Ansi.DIM)}       : {skill.skill_dir}",
+        ]
+
+    def _skill_bundle_detail_lines(self, bundle: SkillBundleSummary) -> List[str]:
+        lines = [
+            f"{style_text('导出时间', Ansi.DIM)} : {bundle.exported_at or '-'}",
+            f"{style_text('来源机器', Ansi.DIM)} : {bundle.source_machine or bundle.source_machine_key or '-'}",
+            f"{style_text('导出分组', Ansi.DIM)} : {bundle.export_group or '-'}",
+            f"{style_text('Skill 数', Ansi.DIM)} : {bundle.bundled_skill_count}/{bundle.skill_count}",
+            f"{style_text('路径', Ansi.DIM)}     : {bundle.bundle_dir}",
+        ]
+        if bundle.skills:
+            lines.append(f"{style_text('包含', Ansi.DIM)}     : {', '.join(bundle.skills)}")
+        return lines
 
     def _bundle_browser_snapshot(
         self,
@@ -396,6 +424,12 @@ class ToolkitTuiApp:
     def _open_bundle_browser(self, *, mode: str, source_group: str = "all") -> Optional[BundleSummary]:
         return _open_bundle_browser_flow(self, mode=mode, source_group=source_group)
 
+    def _open_local_skill_browser(self, *, mode: str) -> Optional[LocalSkillSummary]:
+        return _open_local_skill_browser_flow(self, mode=mode)
+
+    def _open_skill_bundle_browser(self, *, mode: str) -> Optional[SkillBundleSummary]:
+        return _open_skill_bundle_browser_flow(self, mode=mode)
+
     def _select_batch_bundle_import_scope(self) -> Optional[BatchBundleImportSelection]:
         return _select_batch_bundle_import_scope_flow(self)
 
@@ -434,8 +468,14 @@ class ToolkitTuiApp:
             preview_cmd=preview_cmd,
         )
 
-    def _confirm_dangerous_action(self, cli_args: Sequence[str]) -> bool:
-        return _confirm_dangerous_action_flow(self, cli_args)
+    def _confirm_dangerous_action(
+        self,
+        cli_args: Sequence[str],
+        *,
+        warning: str = "Clean 会删除旧版无标记副本文件。",
+        impact: str = "旧版无标记 clone 文件",
+    ) -> bool:
+        return _confirm_dangerous_action_flow(self, cli_args, warning=warning, impact=impact)
 
     def run(self) -> int:
         selected_section = 0

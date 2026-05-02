@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Tuple
 
 from ..errors import ToolkitError
-from ..models import OperationWarning
+from ..models import LocalSkillSummary, OperationWarning
 
 SKILLS_MANIFEST_FILENAME = "skills_manifest.json"
 SKILLS_DIR_NAME = "skills"
@@ -25,6 +25,7 @@ _SYSTEM_PREFIX = ".system/"
 _RUNTIME_PREFIX = "codex-primary-runtime/"
 _RESTORABLE_SKILL_ROOTS = {"agents", "codex"}
 _VALID_LOCATION_KINDS = {"custom", "system", "runtime"}
+_VALID_DEPENDENCY_LEVELS = {"available", "required", "uncertain"}
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,8 @@ class SkillDescriptor:
     bundled: bool = False
     bundle_path: str = ""
     content_hash: str = ""
+    dependency_level: str = "available"
+    evidence: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -114,6 +117,8 @@ def parse_skills_from_session(session_file: Path) -> SkillsManifest:
         is_used = count > 0
         if is_used:
             used_count += 1
+        dependency_level = "required" if is_used else "available"
+        evidence = ("explicit_skill_usage",) if is_used else ("available_in_context",)
         descriptors.append(SkillDescriptor(
             name=name,
             skill_file=skill_file,
@@ -122,6 +127,8 @@ def parse_skills_from_session(session_file: Path) -> SkillsManifest:
             location_kind=location_kind,
             used=is_used,
             usage_count=count,
+            dependency_level=dependency_level,
+            evidence=evidence,
         ))
 
     return SkillsManifest(
@@ -149,12 +156,77 @@ def compute_skill_directory_hash(skill_dir: Path) -> str:
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
+def collect_local_skill_summaries(
+    target_home: Path,
+    *,
+    include_system: bool = False,
+) -> list[LocalSkillSummary]:
+    summaries: list[LocalSkillSummary] = []
+    seen_relative_dirs: set[str] = set()
+    roots = (
+        ("agents", target_home / ".agents" / "skills"),
+        ("codex", target_home / ".codex" / "skills"),
+    )
+    for source_root, root_dir in roots:
+        if not root_dir.is_dir():
+            continue
+        for skill_file in sorted(root_dir.rglob(SKILL_MD_NAME)):
+            skill_dir = skill_file.parent
+            try:
+                relative_dir = skill_dir.relative_to(root_dir).as_posix()
+            except ValueError:
+                continue
+            location_kind = classify_skill_location(relative_dir)
+            if location_kind != "custom" and not include_system:
+                continue
+            if location_kind == "custom" and relative_dir in seen_relative_dirs:
+                continue
+            if location_kind == "custom":
+                seen_relative_dirs.add(relative_dir)
+            try:
+                content_hash = compute_skill_directory_hash(skill_dir)
+            except OSError:
+                content_hash = ""
+            summaries.append(LocalSkillSummary(
+                name=skill_dir.name,
+                source_root=source_root,
+                relative_dir=relative_dir,
+                skill_dir=skill_dir,
+                location_kind=location_kind,
+                content_hash=content_hash,
+            ))
+    return summaries
+
+
+def build_skills_manifest_from_local_summaries(summaries: list[LocalSkillSummary]) -> SkillsManifest:
+    skills: list[SkillDescriptor] = []
+    for summary in summaries:
+        skills.append(SkillDescriptor(
+            name=summary.name,
+            skill_file=str(summary.skill_dir / SKILL_MD_NAME),
+            source_root=summary.source_root,
+            relative_dir=summary.relative_dir,
+            location_kind=summary.location_kind,
+            used=True,
+            usage_count=1,
+            dependency_level="required",
+            evidence=("skills_transfer",),
+        ))
+    return SkillsManifest(
+        available_skill_count=len(skills),
+        used_skill_count=len(skills),
+        bundled_skill_count=0,
+        skills=tuple(skills),
+    )
+
+
 def bundle_skills(manifest: SkillsManifest, bundle_dir: Path) -> SkillsBundleResult:
     updated: list[SkillDescriptor] = []
     bundled_count = 0
     warnings: list[OperationWarning] = []
     for skill in manifest.skills:
-        if skill.location_kind != "custom" or skill.bundled:
+        required = _is_required_skill(skill)
+        if skill.location_kind != "custom" or skill.bundled or not required:
             updated.append(skill)
             continue
         if not _is_restorable_custom_skill(skill):
@@ -217,6 +289,8 @@ def bundle_skills(manifest: SkillsManifest, bundle_dir: Path) -> SkillsBundleRes
             bundled=True,
             bundle_path=bundle_path,
             content_hash=content_hash,
+            dependency_level=skill.dependency_level,
+            evidence=skill.evidence,
         ))
         bundled_count += 1
 
@@ -250,6 +324,8 @@ def write_skills_manifest(manifest: SkillsManifest, bundle_dir: Path) -> Path:
                 "bundled": s.bundled,
                 "bundle_path": s.bundle_path,
                 "content_hash": s.content_hash,
+                "dependency_level": s.dependency_level,
+                "evidence": list(s.evidence),
             }
             for s in manifest.skills
         ],
@@ -299,7 +375,7 @@ def restore_skills(
     warnings: list[OperationWarning] = []
     for skill in manifest.skills:
         if not skill.bundled:
-            if skill.location_kind == "custom":
+            if skill.location_kind == "custom" and _is_required_skill(skill):
                 existing_dir = _first_existing_local_skill_dir(target_home, skill)
                 if existing_dir is not None:
                     try:
@@ -546,7 +622,18 @@ def _detect_skill_usage(session_file: Path, skill_names: List[str]) -> Dict[str,
     if not skill_names:
         return {}
     counts: Dict[str, int] = {name: 0 for name in skill_names}
-    skill_patterns = {name: re.compile(r"(?:/\s*" + re.escape(name) + r"|Skill\s*\(\s*skill\s*=\s*['\"]" + re.escape(name) + r"['\"]|skill.*" + re.escape(name) + r")", re.IGNORECASE) for name in skill_names}
+    skill_patterns = {
+        name: re.compile(
+            r"(?:"
+            r"/\s*" + re.escape(name) + r"\b"
+            r"|Skill\s*\(\s*skill\s*=\s*['\"]" + re.escape(name) + r"['\"]"
+            r"|\[\$?" + re.escape(name) + r"\]\("
+            r"|['\"]skill['\"]\s*:\s*['\"]" + re.escape(name) + r"['\"]"
+            r")",
+            re.IGNORECASE,
+        )
+        for name in skill_names
+    }
     skill_file_patterns = {name: re.compile(re.escape(name) + r"/SKILL\.md", re.IGNORECASE) for name in skill_names}
 
     with session_file.open("r", encoding="utf-8") as fh:
@@ -567,8 +654,10 @@ def _detect_skill_usage(session_file: Path, skill_names: List[str]) -> Dict[str,
 
             text_to_check = ""
 
-            if obj.get("type") == "response_item" and payload.get("role") == "assistant":
+            if obj.get("type") == "response_item" and payload.get("role") in {"assistant", "user"}:
                 text_to_check = _extract_text_from_content(payload.get("content"))
+            elif obj.get("type") == "message" and payload.get("role") in {"assistant", "user"}:
+                text_to_check = str(payload.get("text") or "")
             elif obj.get("type") == "response_item" and payload.get("type") in ("function_call", "custom_tool_call"):
                 text_to_check = json.dumps(payload)
 
@@ -656,6 +745,8 @@ def _deserialize_skill_descriptor(raw_skill: object) -> Optional[SkillDescriptor
     bundled = _required_bool(raw_skill.get("bundled"))
     bundle_path = _required_string(raw_skill.get("bundle_path"))
     content_hash = _required_string(raw_skill.get("content_hash"))
+    dependency_level = _optional_dependency_level(raw_skill.get("dependency_level"), used)
+    evidence = _optional_string_tuple(raw_skill.get("evidence"))
 
     if None in {
         name,
@@ -668,6 +759,8 @@ def _deserialize_skill_descriptor(raw_skill: object) -> Optional[SkillDescriptor
         bundled,
         bundle_path,
         content_hash,
+        dependency_level,
+        evidence,
     }:
         return None
     assert name is not None
@@ -680,8 +773,12 @@ def _deserialize_skill_descriptor(raw_skill: object) -> Optional[SkillDescriptor
     assert bundled is not None
     assert bundle_path is not None
     assert content_hash is not None
+    assert dependency_level is not None
+    assert evidence is not None
 
     if location_kind not in _VALID_LOCATION_KINDS:
+        return None
+    if dependency_level not in _VALID_DEPENDENCY_LEVELS:
         return None
     if not _is_safe_relative_posix_path(relative_dir):
         return None
@@ -701,6 +798,8 @@ def _deserialize_skill_descriptor(raw_skill: object) -> Optional[SkillDescriptor
         bundled=bundled,
         bundle_path=bundle_path,
         content_hash=content_hash,
+        dependency_level=dependency_level,
+        evidence=evidence,
     )
 
 
@@ -724,9 +823,34 @@ def _required_non_negative_int(value: object) -> Optional[int]:
     return value
 
 
+def _optional_dependency_level(value: object, used: Optional[bool]) -> Optional[str]:
+    if value is None:
+        return "required" if used else "available"
+    if not isinstance(value, str):
+        return None
+    return value
+
+
+def _optional_string_tuple(value: object) -> Optional[Tuple[str, ...]]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        return None
+    items: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            return None
+        items.append(item)
+    return tuple(items)
+
+
 def _non_negative_int_or_default(value: object, default: int) -> int:
     parsed = _required_non_negative_int(value)
     return default if parsed is None else parsed
+
+
+def _is_required_skill(skill: SkillDescriptor) -> bool:
+    return skill.used or skill.dependency_level == "required"
 
 
 def _is_restorable_custom_skill(skill: SkillDescriptor) -> bool:

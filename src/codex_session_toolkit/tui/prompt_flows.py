@@ -257,12 +257,18 @@ def prompt_desktop_repair_scope(app: "ToolkitTuiApp") -> Optional[bool]:
     return choice == "c"
 
 
-def confirm_dangerous_action(app: "ToolkitTuiApp", cli_args: Sequence[str]) -> bool:
+def confirm_dangerous_action(
+    app: "ToolkitTuiApp",
+    cli_args: Sequence[str],
+    *,
+    warning: str = "Clean 会删除旧版无标记副本文件。",
+    impact: str = "旧版无标记 clone 文件",
+) -> bool:
     box_width = app._print_branded_header("危险操作确认", "该操作会删除文件，且无法恢复。")
     info_lines = [
-        style_text("【危险】", Ansi.BOLD, Ansi.RED) + "Clean 会删除旧版无标记副本文件。",
+        style_text("【危险】", Ansi.BOLD, Ansi.RED) + warning,
         f"{style_text('执行方式', Ansi.DIM)} : 直接在 TUI 中执行",
-        f"{style_text('影响范围', Ansi.DIM)} : 旧版无标记 clone 文件",
+        f"{style_text('影响范围', Ansi.DIM)} : {impact}",
         f"{style_text('命令预览', Ansi.DIM)} : {app._cli_preview(cli_args)}",
         "",
         "确认方式：输入 DELETE 并回车。",

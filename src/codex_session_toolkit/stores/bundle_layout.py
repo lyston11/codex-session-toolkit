@@ -80,6 +80,10 @@ def infer_bundle_machine(bundle_root: Path, bundle_dir: Path, manifest: dict) ->
     except ValueError:
         relative_parts = ()
 
+    if len(relative_parts) >= 5 and relative_parts[1] == "sessions" and relative_parts[2] in KNOWN_BUNDLE_GROUPS:
+        machine_key = relative_parts[0]
+        return machine_key, manifest_label or machine_key
+
     if len(relative_parts) >= 4 and relative_parts[1] in KNOWN_BUNDLE_GROUPS:
         machine_key = relative_parts[0]
         return machine_key, manifest_label or machine_key
@@ -93,7 +97,9 @@ def infer_bundle_export_group(bundle_root: Path, bundle_dir: Path) -> tuple[str,
     except ValueError:
         relative_parts = ()
 
-    if len(relative_parts) >= 4 and relative_parts[1] in KNOWN_BUNDLE_GROUPS:
+    if len(relative_parts) >= 5 and relative_parts[1] == "sessions" and relative_parts[2] in KNOWN_BUNDLE_GROUPS:
+        export_group = canonical_export_group_name(relative_parts[2])
+    elif len(relative_parts) >= 4 and relative_parts[1] in KNOWN_BUNDLE_GROUPS:
         export_group = canonical_export_group_name(relative_parts[1])
     elif len(relative_parts) >= 3 and relative_parts[0] in KNOWN_BUNDLE_GROUPS:
         export_group = canonical_export_group_name(relative_parts[0])
@@ -144,7 +150,9 @@ def infer_bundle_project_metadata(
         relative_parts = ()
 
     project_key = ""
-    if len(relative_parts) >= 5 and relative_parts[1] == "project":
+    if len(relative_parts) >= 6 and relative_parts[1] == "sessions" and relative_parts[2] == "project":
+        project_key = relative_parts[3]
+    elif len(relative_parts) >= 5 and relative_parts[1] == "project":
         project_key = relative_parts[2]
     elif len(relative_parts) >= 4 and relative_parts[0] == "project":
         project_key = relative_parts[1]
