@@ -3,7 +3,7 @@
 `Codex Session Toolkit` 是一个面向 Codex 会话的浏览、迁移、导入导出和修复工具箱。
 它不是单一的 clone 脚本，而是一套统一的 TUI + CLI，用来处理会话管理里最常见的几类问题。
 
-![Codex Session Toolkit 界面预览](./assets/12345.png)
+![Codex Session Toolkit 界面预览](./assets/1234.png)
 
 ## 适用场景
 
