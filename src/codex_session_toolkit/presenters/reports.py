@@ -16,6 +16,7 @@ from ..models import (
     LocalSkillSummary,
     OperationWarning,
     RepairResult,
+    SessionBackupDeleteResult,
     SessionBackupRestoreResult,
     SessionBackupSummary,
     SessionSummary,
@@ -268,6 +269,14 @@ def print_session_backup_restore_result(result: SessionBackupRestoreResult) -> i
     print(f"Target: {result.target_path}")
     if result.current_backup_path is not None:
         print(f"Current target backed up to: {result.current_backup_path}")
+    return 0
+
+
+def print_session_backup_delete_result(result: SessionBackupDeleteResult) -> int:
+    action = "Would delete session backup" if result.dry_run else "Deleted session backup"
+    print(f"{action}: {result.session_id}")
+    print(f"Backup: {result.backup_path}")
+    print(f"Target: {result.target_path}")
     return 0
 
 

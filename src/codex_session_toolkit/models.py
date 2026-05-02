@@ -200,6 +200,15 @@ class SessionBackupRestoreResult:
 
 
 @dataclass(frozen=True)
+class SessionBackupDeleteResult:
+    session_id: str
+    backup_path: Path
+    target_path: Path
+    dry_run: bool
+    deleted: bool = False
+
+
+@dataclass(frozen=True)
 class BatchExportResult:
     summary_label: str
     bundle_root: Path

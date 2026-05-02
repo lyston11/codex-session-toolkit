@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..errors import ToolkitError
-from ..models import SessionBackupRestoreResult, SessionBackupSummary
+from ..models import SessionBackupDeleteResult, SessionBackupRestoreResult, SessionBackupSummary
 from ..paths import CodexPaths
 from ..stores.session_files import build_session_preview, session_id_from_filename
 from ..stores.session_parser import parse_session_summary_file
@@ -93,6 +93,26 @@ def restore_session_backup(
         dry_run=False,
         restored=True,
         current_backup_path=current_backup_path,
+    )
+
+
+def delete_session_backup(
+    paths: CodexPaths,
+    backup_path_or_session_id: str,
+    *,
+    dry_run: bool = False,
+) -> SessionBackupDeleteResult:
+    summary = resolve_session_backup(paths, backup_path_or_session_id)
+
+    if not dry_run:
+        summary.backup_path.unlink()
+
+    return SessionBackupDeleteResult(
+        session_id=summary.session_id,
+        backup_path=summary.backup_path,
+        target_path=summary.target_path,
+        dry_run=dry_run,
+        deleted=not dry_run,
     )
 
 

@@ -359,11 +359,11 @@ def open_session_backup_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional[
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
         subtitle = (
-            "↑/↓ 选择 · Enter 查看详情 · / 搜索 · r 恢复选中备份 · d 查看详情 · q 返回"
+            "↑/↓ 选择 · Enter 查看详情 · / 搜索 · r 恢复选中 · x 删除选中 · d 查看详情 · q 返回"
             if mode == "view"
             else "↑/↓ 选择 · Enter 确认 · / 搜索 · d 查看详情 · q 返回"
         )
-        title = "浏览/恢复会话备份" if mode == "view" else "选择会话备份"
+        title = "管理会话备份" if mode == "view" else "选择会话备份"
         info_lines = [
             f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
             f"{style_text('匹配数量', Ansi.DIM)} : {len(entries)}",
@@ -405,7 +405,7 @@ def open_session_backup_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional[
 
         key = read_key()
         if key is None:
-            raw_prompt = "命令 [Enter/\\/r/d/q]：" if mode == "view" else "命令 [Enter/\\/d/q]："
+            raw_prompt = "命令 [Enter/\\/r/x/d/q]：" if mode == "view" else "命令 [Enter/\\/d/q]："
             raw = input(raw_prompt).strip()
             key = raw if raw else "ENTER"
 
@@ -445,6 +445,27 @@ def open_session_backup_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional[
                 allow_empty=True,
             )
             filter_text = new_filter or ""
+            selected_index = 0
+            needs_reload = True
+            continue
+        if key_str == "x" and entries and mode == "view":
+            selected = entries[selected_index]
+            cli_args = ["delete-backup", str(selected.backup_path)]
+            if not app._confirm_dangerous_action(
+                cli_args,
+                title="删除会话备份确认",
+                subtitle="该操作只删除选中的 .bak.* 备份文件，不删除当前会话文件。",
+                warning=f"将删除会话 {selected.session_id} 的这份备份。",
+                impact=str(selected.backup_path),
+            ):
+                continue
+            app._run_action(
+                f"删除会话备份 {selected.session_id}",
+                cli_args,
+                dry_run=False,
+                runner=lambda args=cli_args: app._run_toolkit(args),
+                danger=True,
+            )
             selected_index = 0
             needs_reload = True
             continue

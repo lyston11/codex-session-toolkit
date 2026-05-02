@@ -105,7 +105,7 @@ class PackagingSmokeTests(unittest.TestCase):
         )
         self.assertEqual(labels_by_action["provider_migration"], "迁移到当前 Provider")
         self.assertEqual(labels_by_action["desktop_repair"], "修复会话在 Desktop 中显示")
-        self.assertEqual(labels_by_action["browse_backups"], "浏览/恢复会话备份")
+        self.assertEqual(labels_by_action["browse_backups"], "管理会话备份")
         self.assertEqual(labels_by_action["clean_legacy"], "清理旧版无标记副本")
         self.assertEqual(labels_by_action["project_sessions"], "按项目路径查看并导出会话")
         self.assertEqual(labels_by_action["list_skills"], "浏览本机 Skills")

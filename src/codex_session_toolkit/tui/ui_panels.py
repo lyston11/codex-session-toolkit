@@ -146,7 +146,7 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         "  Session / Browse   : 浏览本机会话、按项目路径筛会话、导出单个会话或整项目会话",
         "  Bundle / Transfer  : 浏览 Bundle、校验 Bundle、批量导出与批量导入（project 分类支持按项目文件夹导入）",
         "  Skills / Transfer  : 独立浏览、导出和导入 Skills Bundle",
-        "  Repair / Maintenance : Provider 迁移、Desktop 显示修复、会话备份恢复和旧副本清理",
+        "  Repair / Maintenance : Provider 迁移、Desktop 显示修复、会话备份管理和旧副本清理",
         "",
         style_text("常用 CLI（更完整的工具链能力）：", Ansi.BOLD),
         "  clone-provider                克隆活动会话到当前 provider",
@@ -170,6 +170,7 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         "  delete-skill                  删除本机自定义 Skill",
         "  list-backups                  列出导入覆盖前的会话备份",
         "  restore-backup                恢复一个会话备份",
+        "  delete-backup                 删除一个会话备份",
         "  repair-desktop                修复 active 会话在 Desktop 中的显示与登记",
         "  repair-desktop --include-archived 同时修复 archived 会话",
         "",
@@ -194,6 +195,7 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         f"  {app._cli_preview(('delete-skill', 'my-skill', '--source-root', 'agents', '--dry-run'))}",
         f"  {app._cli_preview(('list-backups',))}",
         f"  {app._cli_preview(('restore-backup', '019d582f-e8f4-7ce3-9948-c0406b4faaf2', '--dry-run'))}",
+        f"  {app._cli_preview(('delete-backup', '019d582f-e8f4-7ce3-9948-c0406b4faaf2', '--dry-run'))}",
         f"  {app._cli_preview(('repair-desktop', '--dry-run'))}",
         "",
         style_text("终端兼容：", Ansi.BOLD),
@@ -215,7 +217,7 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         "  0                  直接退出",
         "",
         style_text("浏览器说明：", Ansi.BOLD),
-        "  /                  在会话列表 / Bundle 列表中搜索",
+        "  /                  在会话列表 / Bundle 列表 / 备份列表中搜索",
         "  Enter              在浏览模式下进入单条操作面板，在选择模式下直接确认",
         "  d                  只打开详情面板，不执行导入/导出",
         "  e                  在会话列表直接导出为 Bundle",
@@ -227,7 +229,7 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         "  i / v              在 Bundle 列表直接导入为会话 / 导入为会话并自动建目录",
         "  g                  在 Skills 列表切换是否显示系统/运行时 Skills",
         "  r                  在 Skills 列表删除选中的自定义 Skill；在会话备份列表恢复选中备份",
-        "  x                  在 Skills 列表导出全部自定义 Skills",
+        "  x                  在 Skills 列表导出全部自定义 Skills；在会话备份列表删除选中备份",
     ]
     for line in render_box(lines, width=box_width, border_codes=(Ansi.DIM,)):
         print(line)
