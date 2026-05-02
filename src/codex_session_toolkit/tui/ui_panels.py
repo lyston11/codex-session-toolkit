@@ -147,6 +147,7 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         "  Bundle / Transfer  : 浏览 Bundle、校验 Bundle、批量导出与批量导入（project 分类支持按项目文件夹导入）",
         "  Skills / Transfer  : 独立浏览、导出和导入 Skills Bundle",
         "  Repair / Maintenance : Provider 迁移、Desktop 显示修复、会话备份管理和旧副本清理",
+        "  GitHub / Sync      : 查看本地/远端更新时间，连接独立仓库，Pull / Push ./codex_bundles",
         "",
         style_text("常用 CLI（更完整的工具链能力）：", Ansi.BOLD),
         "  clone-provider                克隆活动会话到当前 provider",
@@ -173,6 +174,10 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         "  delete-backup                 删除一个会话备份",
         "  repair-desktop                修复 active 会话在 Desktop 中的显示与登记",
         "  repair-desktop --include-archived 同时修复 archived 会话",
+        "  GitHub / Sync                 TUI 内查看状态、连接独立仓库、拉取远端、推送本机更新",
+        "  connect-github                CLI 连接一个独立 GitHub Bundle 仓库",
+        "  pull-github                   CLI 拉取远端 Bundle 更新",
+        "  sync-github                   CLI 推送 ./codex_bundles 到已连接仓库",
         "",
         style_text("兼容入口参数：", Ansi.BOLD),
         "  --dry-run          模拟运行（不写入/不删除）",
@@ -197,6 +202,10 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         f"  {app._cli_preview(('restore-backup', '019d582f-e8f4-7ce3-9948-c0406b4faaf2', '--dry-run'))}",
         f"  {app._cli_preview(('delete-backup', '019d582f-e8f4-7ce3-9948-c0406b4faaf2', '--dry-run'))}",
         f"  {app._cli_preview(('repair-desktop', '--dry-run'))}",
+        "  TUI: GitHub / Sync -> 查看 GitHub 同步状态",
+        f"  {app._cli_preview(('connect-github', 'git@github.com:you/codex-bundles.git', '--dry-run'))}",
+        f"  {app._cli_preview(('pull-github', '--dry-run'))}",
+        f"  {app._cli_preview(('sync-github', '--dry-run'))}",
         "",
         style_text("终端兼容：", Ansi.BOLD),
         "  NO_COLOR=1         关闭颜色输出",
@@ -255,6 +264,7 @@ def render_home(app: "ToolkitTuiApp", selected_section_index: int) -> None:
         f"  {style_text('Sessions', Ansi.DIM)} : {ellipsize_middle(app.context.active_sessions_dir, max(16, box_width - 40))}",
         f"{style_text('Config', Ansi.DIM)} : {ellipsize_middle(app.context.config_path, max(16, box_width - 18))}",
     ]
+    info_lines.extend(app._github_sync_hint_lines())
     for line in render_box(info_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
         output_lines.append(line)
     output_lines.append("")
@@ -328,6 +338,8 @@ def render_section_page(app: "ToolkitTuiApp", section_index: int, action_offset:
         f"{style_text('执行方式', Ansi.DIM)} : 直接在 TUI 中执行",
         f"{style_text('目标 Provider', Ansi.DIM)} : {style_text(app.context.target_provider, Ansi.BOLD, Ansi.CYAN)}",
     ]
+    if menu_section.section_id in {"bundle", "skills"}:
+        info_lines.extend(app._github_sync_hint_lines())
     for note in app._action_notes(selected_action)[:1]:
         info_lines.append(f"{style_text('说明', Ansi.DIM)} : {note}")
     for line in render_box(info_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):

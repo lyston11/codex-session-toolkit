@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
 from .maintenance_modes import run_cleanup_mode, run_clone_mode
+from .progress_flows import run_callable_with_progress, run_cli_args_with_progress
+from .sync_prompts import maybe_offer_github_sync_after_action
 from .terminal import Ansi, render_box, style_text
 
 if TYPE_CHECKING:
     from .app import ToolkitTuiApp
     from .view_models import TuiMenuAction
+
+
+@dataclass(frozen=True)
+class GitHubConnectSelection:
+    remote_url: str
+    branch: str
+    push_after_connect: bool
+    message: str
 
 
 def build_desktop_repair_cli_args(target_provider: str, *, include_cli: bool, dry_run: bool) -> list[str]:
@@ -22,6 +33,195 @@ def build_desktop_repair_cli_args(target_provider: str, *, include_cli: bool, dr
     if dry_run:
         cli_args.append("--dry-run")
     return cli_args
+
+
+def _github_status_snapshot_with_progress(app: "ToolkitTuiApp", *, title: str):
+    return run_callable_with_progress(
+        app,
+        title=title,
+        detail_lines=[
+            "正在读取本地同步状态。",
+            "正在准备同步信息。",
+        ],
+        task=lambda: app._github_sync_status(),
+    )
+
+
+def _user_action_progress_lines(
+    app: "ToolkitTuiApp",
+    *,
+    action_name: str,
+    cli_args: Sequence[str],
+    dry_run: bool,
+    color: str,
+) -> list[str]:
+    command_name = cli_args[0] if cli_args else ""
+    if command_name in {"connect-github", "pull-github", "sync-github"}:
+        mode = "预演，不会写入" if dry_run else "直接执行"
+        bundle_root_label = getattr(app.context, "bundle_root_label", "./codex_bundles")
+        return [
+            f"{style_text('当前操作', Ansi.DIM)} : {style_text(action_name, Ansi.BOLD, color)}",
+            f"{style_text('同步目录', Ansi.DIM)} : {bundle_root_label}",
+            f"{style_text('同步内容', Ansi.DIM)} : 会话 Bundle 和 Skills Bundle",
+            f"{style_text('执行模式', Ansi.DIM)} : {mode}",
+        ]
+    return [
+        f"{style_text('当前操作', Ansi.DIM)} : {style_text(action_name, Ansi.BOLD, color)}",
+        f"{style_text('执行模式', Ansi.DIM)} : {'预演，不会写入' if dry_run else '直接执行'}",
+    ]
+
+
+def _collect_github_connect_selection(app: "ToolkitTuiApp") -> Optional[GitHubConnectSelection]:
+    status = _github_status_snapshot_with_progress(app, title="连接独立 GitHub 仓库")
+    status_lines = app._github_sync_status_lines(status)
+    if status.remote_url and not status.uses_project_source_remote:
+        status_lines.append("可以沿用当前 remote，也可以输入新的独立 Bundle 仓库地址。")
+    remote_url = app._prompt_value(
+        title="连接独立 GitHub 仓库",
+        prompt_label="独立 GitHub 仓库 URL",
+        help_lines=status_lines + [
+            "",
+            "请先在 GitHub 上创建一个新的独立仓库，专门保存 codex_bundles。",
+            "不要填写当前项目源码仓库地址；工具会拒绝连接到源码仓库 remote。",
+            "示例：git@github.com:you/codex-bundles.git",
+        ],
+        default=(status.remote_url if status.remote_url and not status.uses_project_source_remote else ""),
+        allow_empty=False,
+    )
+    if remote_url is None:
+        return None
+    branch = app._prompt_value(
+        title="连接独立 GitHub 仓库",
+        prompt_label="目标分支",
+        help_lines=["默认推送到 main。"],
+        default=status.branch or "main",
+        allow_empty=False,
+    )
+    if branch is None:
+        return None
+    push_after_connect = app._confirm_toggle(
+        title="连接独立 GitHub 仓库",
+        question="连接成功后是否立即推送本机 Bundle",
+        yes_label="y",
+        no_label="n",
+        default_yes=True,
+    )
+    message = "Sync Codex bundles"
+    if push_after_connect:
+        message_answer = app._prompt_value(
+            title="连接独立 GitHub 仓库",
+            prompt_label="首次推送提交信息",
+            help_lines=["连接成功后会把本机会话 Bundle 和 Skills Bundle 首次推送到这个独立仓库。"],
+            default=message,
+            allow_empty=False,
+        )
+        if message_answer is None:
+            return None
+        message = message_answer
+    return GitHubConnectSelection(
+        remote_url=remote_url,
+        branch=branch,
+        push_after_connect=push_after_connect,
+        message=message,
+    )
+
+
+def _build_github_connect_request(selection: GitHubConnectSelection, *, dry_run: bool) -> tuple[str, list[str]]:
+    args = ["connect-github", selection.remote_url, "--branch", selection.branch]
+    if selection.push_after_connect:
+        args.extend(["--push-after-connect", "--message", selection.message])
+    if dry_run:
+        args.append("--dry-run")
+    action_name = "连接独立 GitHub 仓库"
+    if selection.push_after_connect:
+        action_name += "并首次推送"
+    if dry_run:
+        action_name += "（Dry-run）"
+    return action_name, args
+
+
+def _github_connected_status_or_none(app: "ToolkitTuiApp", *, title: str):
+    status = _github_status_snapshot_with_progress(app, title=title)
+    status_lines = app._github_sync_status_lines(status)
+    if not status.is_connected:
+        app._show_detail_panel(
+            title,
+            status_lines + ["请先返回 GitHub / Sync，选择“连接独立 GitHub 仓库”。"],
+            border_codes=(Ansi.DIM, Ansi.YELLOW),
+        )
+        return None
+    return status
+
+
+def _prompt_github_pull_dry_run(app: "ToolkitTuiApp", status) -> Optional[bool]:
+    branch = status.branch or "main"
+    summary_lines = app._github_sync_status_lines(status) + [
+        "",
+        f"{style_text('拉取来源', Ansi.DIM)} : {status.remote_name}/{branch}",
+        f"{style_text('同步范围', Ansi.DIM)} : 会话 Bundle 和 Skills Bundle",
+        "本地未提交变更如果会被覆盖，工具会停止并提示先处理本地变更。",
+    ]
+    confirm = app._prompt_choice(
+        title="从 GitHub 拉取更新",
+        prompt_label="选择拉取方式",
+        help_lines=summary_lines,
+        choices=[
+            ("p", f"从 {status.remote_name}/{branch} 拉取"),
+            ("d", "Dry-run 预览"),
+            ("q", "返回"),
+        ],
+        default="p",
+    )
+    if confirm not in {"p", "d"}:
+        return None
+    return confirm == "d"
+
+
+def _build_github_pull_request(status, *, dry_run: bool) -> tuple[str, list[str]]:
+    args = ["pull-github", "--branch", status.branch or "main"]
+    if dry_run:
+        args.append("--dry-run")
+    action_name = "从 GitHub 拉取更新"
+    if dry_run:
+        action_name += "（Dry-run）"
+    return action_name, args
+
+
+def _prompt_github_push_dry_run(app: "ToolkitTuiApp", status) -> Optional[bool]:
+    branch = status.branch or "main"
+    summary_lines = [
+        f"{style_text('推送目标', Ansi.DIM)} : {status.remote_name}/{branch}",
+        f"{style_text('同步范围', Ansi.DIM)} : 会话 Bundle 和 Skills Bundle",
+        f"{style_text('待同步变更', Ansi.DIM)} : {len(status.changed_files)}",
+        f"{style_text('会话变更', Ansi.DIM)} : {len(status.session_changed_files)}",
+        f"{style_text('Skills 变更', Ansi.DIM)} : {len(status.skill_changed_files)}",
+        "推送前会检查远端更新；冲突时会停止并列出文件。",
+    ]
+    confirm = app._prompt_choice(
+        title="推送本机更新到 GitHub",
+        prompt_label="选择推送方式",
+        help_lines=summary_lines,
+        choices=[
+            ("p", f"推送到 {status.remote_name}/{branch}"),
+            ("d", "Dry-run 预览"),
+            ("q", "返回"),
+        ],
+        default="p",
+    )
+    if confirm not in {"p", "d"}:
+        return None
+    return confirm == "d"
+
+
+def _build_github_push_request(status, *, dry_run: bool) -> tuple[str, list[str]]:
+    branch = status.branch or "main"
+    args = ["sync-github", "--branch", branch, "--message", "Sync Codex bundles"]
+    if dry_run:
+        args.append("--dry-run")
+    action_name = "推送本机更新到 GitHub"
+    if dry_run:
+        action_name += "（Dry-run）"
+    return action_name, args
 
 
 def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuAction") -> tuple[Optional[str], Optional[list[str]]]:
@@ -118,6 +318,40 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
             action_name += f"（{machine_filter}）"
         return action_name, args
 
+    if menu_action.action_id == "github_status":
+        app._show_github_sync_status()
+        return None, None
+
+    if menu_action.action_id == "connect_github":
+        selection = _collect_github_connect_selection(app)
+        if selection is None:
+            return None, None
+        dry_run = app._prompt_execution_mode(
+            title="连接独立 GitHub 仓库",
+            default_dry_run=False,
+        )
+        if dry_run is None:
+            return None, None
+        return _build_github_connect_request(selection, dry_run=dry_run)
+
+    if menu_action.action_id == "pull_github":
+        status = _github_connected_status_or_none(app, title="从 GitHub 拉取更新")
+        if status is None:
+            return None, None
+        dry_run = _prompt_github_pull_dry_run(app, status)
+        if dry_run is None:
+            return None, None
+        return _build_github_pull_request(status, dry_run=dry_run)
+
+    if menu_action.action_id == "sync_github":
+        status = _github_connected_status_or_none(app, title="推送本机更新到 GitHub")
+        if status is None:
+            return None, None
+        dry_run = _prompt_github_push_dry_run(app, status)
+        if dry_run is None:
+            return None, None
+        return _build_github_push_request(status, dry_run=dry_run)
+
     if menu_action.action_id == "import_desktop_all":
         selection = app._select_batch_bundle_import_scope()
         if not selection:
@@ -164,29 +398,32 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
 def execute_menu_action(app: "ToolkitTuiApp", chosen_action: "TuiMenuAction") -> None:
     choice_id = chosen_action.action_id
     if choice_id == "provider_migration":
-        dry_run = app._prompt_execution_mode(
-            title="迁移到当前 Provider",
-            default_dry_run=False,
-        )
-        if dry_run is None:
-            return
+        while True:
+            dry_run = app._prompt_execution_mode(
+                title="迁移到当前 Provider",
+                default_dry_run=False,
+            )
+            if dry_run is None:
+                return
 
-        cli_args = ["clone-provider"]
-        if dry_run:
-            cli_args.append("--dry-run")
-        action_name = "迁移到当前 Provider（保留原会话，创建副本）"
-        if dry_run:
-            action_name += "（Dry-run）"
-        app._run_action(
-            action_name,
-            cli_args,
-            dry_run=dry_run,
-            runner=lambda dry_run=dry_run: run_clone_mode(
-                target_provider=app.context.target_provider,
+            cli_args = ["clone-provider"]
+            if dry_run:
+                cli_args.append("--dry-run")
+            action_name = "迁移到当前 Provider（保留原会话，创建副本）"
+            if dry_run:
+                action_name += "（Dry-run）"
+            app._run_action(
+                action_name,
+                cli_args,
                 dry_run=dry_run,
-            ),
-            danger=False,
-        )
+                runner=lambda dry_run=dry_run: run_clone_mode(
+                    target_provider=app.context.target_provider,
+                    dry_run=dry_run,
+                ),
+                danger=False,
+            )
+            if not dry_run:
+                return
         return
 
     if choice_id == "desktop_repair":
@@ -194,59 +431,131 @@ def execute_menu_action(app: "ToolkitTuiApp", chosen_action: "TuiMenuAction") ->
         if include_cli is None:
             return
 
-        dry_run = app._prompt_execution_mode(
-            title="修复会话在 Desktop 中显示",
-            default_dry_run=True,
-        )
-        if dry_run is None:
-            return
+        while True:
+            dry_run = app._prompt_execution_mode(
+                title="修复会话在 Desktop 中显示",
+                default_dry_run=True,
+            )
+            if dry_run is None:
+                return
 
-        cli_args = build_desktop_repair_cli_args(
-            app.context.target_provider,
-            include_cli=include_cli,
-            dry_run=dry_run,
-        )
-        action_name = "修复会话在 Desktop 中显示"
-        if include_cli:
-            action_name += "并纳入 CLI 会话"
-        if dry_run:
-            action_name += "（Dry-run）"
-        app._run_action(
-            action_name,
-            cli_args,
-            dry_run=dry_run,
-            runner=lambda args=cli_args: app._run_toolkit(args),
-            danger=False,
-        )
+            cli_args = build_desktop_repair_cli_args(
+                app.context.target_provider,
+                include_cli=include_cli,
+                dry_run=dry_run,
+            )
+            action_name = "修复会话在 Desktop 中显示"
+            if include_cli:
+                action_name += "并纳入 CLI 会话"
+            if dry_run:
+                action_name += "（Dry-run）"
+            app._run_action(
+                action_name,
+                cli_args,
+                dry_run=dry_run,
+                runner=lambda args=cli_args: app._run_toolkit(args),
+                danger=False,
+            )
+            if not dry_run:
+                return
         return
 
     if choice_id == "clean_legacy":
-        dry_run = app._prompt_execution_mode(
-            title="清理旧版无标记副本",
-            default_dry_run=True,
-        )
-        if dry_run is None:
-            return
-
-        cli_args = ["clean-clones"]
-        action_name = "清理旧版无标记副本"
-        if dry_run:
-            cli_args.append("--dry-run")
-            action_name += "（Dry-run）"
-        else:
-            if not app._confirm_dangerous_action(cli_args):
+        while True:
+            dry_run = app._prompt_execution_mode(
+                title="清理旧版无标记副本",
+                default_dry_run=True,
+            )
+            if dry_run is None:
                 return
-            action_name += "（删除）"
-        app._run_action(
-            action_name,
-            cli_args,
-            dry_run=dry_run,
-            runner=lambda dry_run=dry_run: run_cleanup_mode(
-                target_provider=app.context.target_provider,
+
+            cli_args = ["clean-clones"]
+            action_name = "清理旧版无标记副本"
+            if dry_run:
+                cli_args.append("--dry-run")
+                action_name += "（Dry-run）"
+            else:
+                if not app._confirm_dangerous_action(cli_args):
+                    return
+                action_name += "（删除）"
+            app._run_action(
+                action_name,
+                cli_args,
                 dry_run=dry_run,
-            ),
-            danger=True,
-        )
+                runner=lambda dry_run=dry_run: run_cleanup_mode(
+                    target_provider=app.context.target_provider,
+                    dry_run=dry_run,
+                ),
+                danger=True,
+            )
+            if not dry_run:
+                return
+        return
+
+    if choice_id == "connect_github":
+        selection = _collect_github_connect_selection(app)
+        if selection is None:
+            return
+        while True:
+            dry_run = app._prompt_execution_mode(
+                title="连接独立 GitHub 仓库",
+                default_dry_run=False,
+            )
+            if dry_run is None:
+                return
+            action_name, cli_args = _build_github_connect_request(selection, dry_run=dry_run)
+            app._run_action(
+                action_name,
+                cli_args,
+                dry_run=dry_run,
+                runner=lambda args=cli_args: app._run_toolkit(args),
+                danger=False,
+                use_progress=True,
+            )
+            if not dry_run:
+                return
+        return
+
+    if choice_id == "pull_github":
+        status = _github_connected_status_or_none(app, title="从 GitHub 拉取更新")
+        if status is None:
+            return
+        while True:
+            dry_run = _prompt_github_pull_dry_run(app, status)
+            if dry_run is None:
+                return
+            action_name, cli_args = _build_github_pull_request(status, dry_run=dry_run)
+            app._run_action(
+                action_name,
+                cli_args,
+                dry_run=dry_run,
+                runner=lambda args=cli_args: app._run_toolkit(args),
+                danger=False,
+                use_progress=True,
+            )
+            if not dry_run:
+                return
+        return
+
+    if choice_id == "sync_github":
+        status = _github_connected_status_or_none(app, title="推送本机更新到 GitHub")
+        if status is None:
+            return
+        while True:
+            dry_run = _prompt_github_push_dry_run(app, status)
+            if dry_run is None:
+                return
+            action_name, cli_args = _build_github_push_request(status, dry_run=dry_run)
+            app._run_action(
+                action_name,
+                cli_args,
+                dry_run=dry_run,
+                runner=lambda args=cli_args: app._run_toolkit(args),
+                danger=False,
+                use_progress=True,
+            )
+            if not dry_run:
+                return
         return
 
     if choice_id == "delete_skill":
@@ -271,12 +580,14 @@ def execute_menu_action(app: "ToolkitTuiApp", chosen_action: "TuiMenuAction") ->
 
     action_name, cli_args = app._resolve_menu_action_request(chosen_action)
     if cli_args is not None:
+        dry_run = chosen_action.is_dry_run or "--dry-run" in cli_args
         app._run_action(
             action_name or chosen_action.label,
             cli_args,
-            dry_run=chosen_action.is_dry_run,
+            dry_run=dry_run,
             runner=lambda args=cli_args: app._run_toolkit(args),
             danger=chosen_action.is_dangerous,
+            use_progress=chosen_action.section_id == "github",
         )
 
 
@@ -289,6 +600,7 @@ def run_action(
     runner: Callable[[], int],
     danger: bool,
     preview_cmd: Optional[str] = None,
+    use_progress: bool = False,
 ) -> None:
     box_width = app._print_branded_header("执行中…")
     color = Ansi.RED if danger and not dry_run else Ansi.YELLOW if dry_run else Ansi.CYAN
@@ -307,11 +619,53 @@ def run_action(
         info_lines.append(style_text("【危险】", Ansi.BOLD, Ansi.RED) + "将删除文件，无法恢复。")
     elif dry_run:
         info_lines.append(style_text("【DRY-RUN】", Ansi.BOLD, Ansi.YELLOW) + "不写入/不删除。")
-    for line in render_box(info_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
+    display_lines = (
+        _user_action_progress_lines(
+            app,
+            action_name=action_name,
+            cli_args=cli_args,
+            dry_run=dry_run,
+            color=color,
+        )
+        if use_progress
+        else info_lines
+    )
+    for line in render_box(display_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
         print(line)
     print("")
 
-    result = runner()
+    if use_progress:
+        progress_result = run_cli_args_with_progress(
+            app,
+            title=action_name,
+            detail_lines=display_lines,
+            cli_args=list(cli_args),
+        )
+        box_width = app._print_branded_header("执行结果")
+        print(style_text(f"▶ {action_name}", Ansi.BOLD, color))
+        print("")
+        for line in render_box(display_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
+            print(line)
+        print("")
+        if progress_result.stdout.strip():
+            print(progress_result.stdout.rstrip())
+        if progress_result.stderr.strip():
+            if progress_result.stdout.strip():
+                print("")
+            print(style_text("错误输出：", Ansi.BOLD, Ansi.YELLOW))
+            print(progress_result.stderr.rstrip())
+        result = progress_result.return_code
+    else:
+        result = runner()
     if result != 0:
         print(style_text(f"\n操作返回状态码：{result}", Ansi.BOLD, Ansi.YELLOW))
-    input(style_text("\n按 Enter 返回菜单...", Ansi.DIM))
+    if maybe_offer_github_sync_after_action(
+        app,
+        action_name=action_name,
+        cli_args=cli_args,
+        result_code=result,
+        dry_run=dry_run,
+    ):
+        return
+    next_step = "选择" if dry_run else "菜单"
+    input(style_text(f"\n按 Enter 返回{next_step}...", Ansi.DIM))

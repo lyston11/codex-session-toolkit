@@ -14,7 +14,7 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 from ..commands import run_cli as run_toolkit_cli
 from ..errors import ToolkitError
-from ..models import BundleSummary, LocalSkillSummary, SessionBackupSummary, SessionSummary, SkillBundleSummary
+from ..models import BundleSummary, GitHubSyncStatus, LocalSkillSummary, SessionBackupSummary, SessionSummary, SkillBundleSummary
 from ..paths import CodexPaths
 from .action_flows import execute_menu_action as _execute_menu_action_flow
 from .action_flows import resolve_menu_action_request as _resolve_menu_action_request_flow
@@ -33,6 +33,9 @@ from .browser_flows import open_project_session_browser as _open_project_session
 from .browser_flows import open_session_backup_browser as _open_session_backup_browser_flow
 from .browser_flows import open_session_browser as _open_session_browser_flow
 from .browser_flows import open_skill_bundle_browser as _open_skill_bundle_browser_flow
+from .github_flows import github_sync_status as _github_sync_status_flow
+from .github_flows import github_sync_status_lines as _github_sync_status_lines_flow
+from .github_flows import show_github_sync_status as _show_github_sync_status_flow
 from .navigation_state import apply_home_key, apply_section_key, clamp_selected_index
 from .prompt_flows import confirm_dangerous_action as _confirm_dangerous_action_flow
 from .prompt_flows import confirm_toggle as _confirm_toggle_flow
@@ -41,6 +44,7 @@ from .prompt_flows import prompt_desktop_repair_scope as _prompt_desktop_repair_
 from .prompt_flows import prompt_execution_mode as _prompt_execution_mode_flow
 from .prompt_flows import prompt_value as _prompt_value_flow
 from .prompt_flows import render_prompt_choice as _render_prompt_choice_flow
+from .sync_prompts import github_sync_hint_lines as _github_sync_hint_lines_flow
 from .terminal import (
     Ansi,
     align_line,
@@ -158,6 +162,8 @@ class ToolkitTuiApp:
             return Ansi.BRIGHT_BLUE
         if menu_action.section_id == "bundle":
             return Ansi.MAGENTA
+        if menu_action.section_id == "github":
+            return Ansi.YELLOW
         if menu_action.section_id == "repair":
             return Ansi.GREEN
         if menu_action.action_id == "exit":
@@ -172,12 +178,26 @@ class ToolkitTuiApp:
             return Ansi.BRIGHT_BLUE
         if menu_section.section_id == "bundle":
             return Ansi.MAGENTA
+        if menu_section.section_id == "github":
+            return Ansi.YELLOW
         if menu_section.section_id == "repair":
             return Ansi.GREEN
         return Ansi.CYAN
 
     def _section_notes(self, menu_section: TuiMenuSection) -> List[str]:
         return SECTION_NOTES.get(menu_section.section_id, [])
+
+    def _github_sync_status(self, *, check_remote: bool = False) -> GitHubSyncStatus:
+        return _github_sync_status_flow(self, check_remote=check_remote)
+
+    def _github_sync_status_lines(self, status: Optional[GitHubSyncStatus] = None) -> List[str]:
+        return _github_sync_status_lines_flow(self, status)
+
+    def _show_github_sync_status(self) -> None:
+        return _show_github_sync_status_flow(self)
+
+    def _github_sync_hint_lines(self, *, force: bool = False) -> List[str]:
+        return _github_sync_hint_lines_flow(self, force=force)
 
     def _session_detail_lines(self, summary: SessionSummary) -> List[str]:
         return [
@@ -448,6 +468,7 @@ class ToolkitTuiApp:
         runner: Callable[[], int],
         danger: bool,
         preview_cmd: Optional[str] = None,
+        use_progress: bool = False,
     ) -> None:
         return _run_action_flow(
             self,
@@ -457,6 +478,7 @@ class ToolkitTuiApp:
             runner=runner,
             danger=danger,
             preview_cmd=preview_cmd,
+            use_progress=use_progress,
         )
 
     def _confirm_dangerous_action(

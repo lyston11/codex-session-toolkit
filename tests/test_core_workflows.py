@@ -4,6 +4,7 @@ import os
 import shlex
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from contextlib import contextmanager, redirect_stdout
@@ -17,6 +18,7 @@ if str(SRC_DIR) not in os.sys.path:
     os.sys.path.insert(0, str(SRC_DIR))
 
 from codex_session_toolkit.paths import CodexPaths  # noqa: E402
+from codex_session_toolkit.commands import run_cli  # noqa: E402
 from codex_session_toolkit.errors import ToolkitError  # noqa: E402
 from codex_session_toolkit.models import BundleSummary  # noqa: E402
 from codex_session_toolkit.presenters.reports import print_batch_import_result  # noqa: E402
@@ -24,6 +26,16 @@ from codex_session_toolkit.services.backups import delete_session_backup, list_s
 from codex_session_toolkit.services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles  # noqa: E402
 from codex_session_toolkit.services.clone import clone_to_provider  # noqa: E402
 from codex_session_toolkit.services.exporting import export_active_desktop_all, export_project_sessions, export_session  # noqa: E402
+from codex_session_toolkit.services.github_sync import (  # noqa: E402
+    _conflict_paths,
+    _git_status_paths,
+    _group_bundle_changes,
+    _normalize_git_relative_path,
+    connect_bundles_to_github,
+    get_github_sync_status,
+    pull_bundles_from_github,
+    sync_bundles_to_github,
+)
 from codex_session_toolkit.services.importing import import_desktop_all, import_session  # noqa: E402
 from codex_session_toolkit.services.provider import detect_provider  # noqa: E402
 from codex_session_toolkit.services.repair import repair_desktop  # noqa: E402
@@ -480,6 +492,457 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertEqual(len(summaries), 1)
             self.assertIn("Cherry-Studio", summaries[0].preview)
             self.assertIn("2026-04-10 10:00", summaries[0].preview)
+
+    def test_connect_bundles_to_github_dry_run_previews_without_git_writes(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git executable is not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            bundle_root = workspace / "codex_bundles"
+            workspace.mkdir(exist_ok=True)
+
+            with pushd(workspace):
+                result = connect_bundles_to_github(
+                    CodexPaths(home=home),
+                    "git@github.com:example/codex-bundles.git",
+                    dry_run=True,
+                )
+
+            self.assertFalse((bundle_root / ".git").exists())
+            self.assertTrue(result.initialized_repo)
+            self.assertTrue(result.configured_remote)
+            self.assertEqual(result.remote_url, "git@github.com:example/codex-bundles.git")
+
+    def test_github_sync_normalizes_windows_relative_paths(self) -> None:
+        raw_status = "\n".join(
+            [
+                r" M machine-a\sessions\single\20260502\demo-session\manifest.env",
+                r"?? machine-a\skills\all\20260502\demo-skill\SKILL.md",
+                r"R  machine-a\old\skill.md -> machine-a\skills\all\20260502\renamed\SKILL.md",
+                r" A machine-a//notes\note.md",
+            ]
+        )
+
+        with patch("codex_session_toolkit.services.github_sync._git_output", return_value=raw_status):
+            status_paths = _git_status_paths(Path("/bundle"))
+
+        self.assertEqual(
+            status_paths,
+            [
+                "machine-a/notes/note.md",
+                "machine-a/sessions/single/20260502/demo-session/manifest.env",
+                "machine-a/skills/all/20260502/demo-skill/SKILL.md",
+                "machine-a/skills/all/20260502/renamed/SKILL.md",
+            ],
+        )
+        groups = _group_bundle_changes(
+            [
+                r"machine-a\sessions\single\20260502\demo-session\manifest.env",
+                r"/machine-a//skills\all\20260502\demo-skill\SKILL.md",
+                r".\machine-a\meta\manifest.json",
+            ]
+        )
+        self.assertEqual(groups.sessions, ["machine-a/sessions/single/20260502/demo-session/manifest.env"])
+        self.assertEqual(groups.skills, ["machine-a/skills/all/20260502/demo-skill/SKILL.md"])
+        self.assertEqual(groups.other, ["machine-a/meta/manifest.json"])
+        self.assertEqual(_normalize_git_relative_path(r"\machine-a//skills\demo\SKILL.md"), "machine-a/skills/demo/SKILL.md")
+
+    def test_github_sync_normalizes_windows_conflict_paths(self) -> None:
+        raw_status = "\n".join(
+            [
+                r"UU machine-a\sessions\single\20260502\demo-session\manifest.env",
+                r"AA machine-a\skills\all\20260502\demo-skill\SKILL.md",
+                r" M machine-a\notes\note.md",
+            ]
+        )
+
+        with patch("codex_session_toolkit.services.github_sync._git_output", return_value=raw_status):
+            conflict_paths = _conflict_paths(Path("/bundle"))
+
+        self.assertEqual(
+            conflict_paths,
+            [
+                "machine-a/sessions/single/20260502/demo-session/manifest.env",
+                "machine-a/skills/all/20260502/demo-skill/SKILL.md",
+            ],
+        )
+
+    def test_sync_bundles_to_github_initializes_commits_and_pushes(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git executable is not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            remote = Path(tmpdir) / "remote.git"
+            bundle_root = workspace / "codex_bundles"
+            session_file = bundle_root / "machine-a" / "sessions" / "single" / "20260502" / "demo-session" / "manifest.env"
+            skill_file = bundle_root / "machine-a" / "skills" / "all" / "20260502" / "demo-skill" / "SKILL.md"
+            workspace.mkdir()
+            session_file.parent.mkdir(parents=True)
+            skill_file.parent.mkdir(parents=True)
+            session_file.write_text("SESSION_ID=demo\n", encoding="utf-8")
+            skill_file.write_text("# demo skill\n", encoding="utf-8")
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            with pushd(workspace):
+                connect_result = connect_bundles_to_github(
+                    CodexPaths(home=home),
+                    str(remote),
+                    branch="main",
+                )
+                result = sync_bundles_to_github(
+                    CodexPaths(home=home),
+                    branch="main",
+                    message="Sync test bundles",
+                )
+
+            self.assertTrue(connect_result.initialized_repo)
+            self.assertTrue(connect_result.configured_remote)
+            self.assertFalse(result.initialized_repo)
+            self.assertFalse(result.configured_remote)
+            self.assertEqual(
+                result.changed_files,
+                [
+                    "machine-a/sessions/single/20260502/demo-session/manifest.env",
+                    "machine-a/skills/all/20260502/demo-skill/SKILL.md",
+                ],
+            )
+            self.assertEqual(result.session_changed_files, ["machine-a/sessions/single/20260502/demo-session/manifest.env"])
+            self.assertEqual(result.skill_changed_files, ["machine-a/skills/all/20260502/demo-skill/SKILL.md"])
+            self.assertTrue(result.committed)
+            self.assertTrue(result.commit_hash)
+            self.assertTrue(result.remote_checked)
+            self.assertTrue(result.pushed)
+            remote_session_content = subprocess.run(
+                ["git", "--git-dir", str(remote), "show", "main:machine-a/sessions/single/20260502/demo-session/manifest.env"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            ).stdout
+            remote_skill_content = subprocess.run(
+                ["git", "--git-dir", str(remote), "show", "main:machine-a/skills/all/20260502/demo-skill/SKILL.md"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            ).stdout
+            self.assertEqual(remote_session_content, "SESSION_ID=demo\n")
+            self.assertEqual(remote_skill_content, "# demo skill\n")
+
+    def test_connect_github_can_push_after_connect_for_tui_first_sync(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git executable is not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            remote = Path(tmpdir) / "remote.git"
+            bundle_root = workspace / "codex_bundles"
+            session_path = "machine-a/sessions/single/20260502/demo-session/manifest.env"
+            session_file = bundle_root / session_path
+            workspace.mkdir()
+            session_file.parent.mkdir(parents=True)
+            session_file.write_text("SESSION_ID=demo\n", encoding="utf-8")
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            with pushd(workspace), redirect_stdout(io.StringIO()):
+                exit_code = run_cli(
+                    [
+                        "connect-github",
+                        str(remote),
+                        "--branch",
+                        "main",
+                        "--push-after-connect",
+                        "--message",
+                        "Initial bundle sync",
+                    ],
+                    paths=CodexPaths(home=home),
+                )
+
+            self.assertEqual(exit_code, 0)
+            remote_content = subprocess.run(
+                ["git", "--git-dir", str(remote), "show", f"main:{session_path}"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            ).stdout
+            self.assertEqual(remote_content, "SESSION_ID=demo\n")
+
+    def test_sync_bundles_to_github_requires_connected_bundle_repo(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git executable is not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            bundle_root = workspace / "codex_bundles"
+            bundle_root.mkdir(parents=True)
+
+            with pushd(workspace):
+                with self.assertRaises(ToolkitError):
+                    sync_bundles_to_github(CodexPaths(home=home), dry_run=True)
+
+    def test_github_sync_status_reports_tui_connection_state(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git executable is not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            remote = Path(tmpdir) / "remote.git"
+            bundle_root = workspace / "codex_bundles"
+            session_file = bundle_root / "machine-a" / "sessions" / "single" / "20260502" / "demo-session" / "manifest.env"
+            skill_file = bundle_root / "machine-a" / "skills" / "all" / "20260502" / "demo-skill" / "SKILL.md"
+            workspace.mkdir()
+            session_file.parent.mkdir(parents=True)
+            skill_file.parent.mkdir(parents=True)
+            session_file.write_text("SESSION_ID=demo\n", encoding="utf-8")
+            skill_file.write_text("# demo skill\n", encoding="utf-8")
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            with pushd(workspace):
+                initial_status = get_github_sync_status(CodexPaths(home=home))
+                connect_bundles_to_github(CodexPaths(home=home), str(remote), branch="main")
+                connected_status = get_github_sync_status(CodexPaths(home=home))
+
+            self.assertFalse(initial_status.is_connected)
+            self.assertFalse(initial_status.is_git_repo)
+            self.assertTrue(connected_status.is_connected)
+            self.assertTrue(connected_status.is_git_repo)
+            self.assertFalse(connected_status.remote_checked)
+            self.assertEqual(connected_status.remote_url, str(remote))
+            self.assertEqual(connected_status.session_changed_files, ["machine-a/sessions/single/20260502/demo-session/manifest.env"])
+            self.assertEqual(connected_status.skill_changed_files, ["machine-a/skills/all/20260502/demo-skill/SKILL.md"])
+
+    def test_connect_bundles_to_github_rejects_project_source_remote(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git executable is not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            remote = Path(tmpdir) / "source.git"
+            workspace.mkdir()
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "init"], cwd=workspace, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=workspace, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            with pushd(workspace):
+                with self.assertRaises(ToolkitError):
+                    connect_bundles_to_github(CodexPaths(home=home), str(remote))
+
+    def test_sync_bundles_to_github_rejects_project_source_remote(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git executable is not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            remote = Path(tmpdir) / "source.git"
+            bundle_root = workspace / "codex_bundles"
+            workspace.mkdir()
+            bundle_root.mkdir()
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "init"], cwd=workspace, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=workspace, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "init"], cwd=bundle_root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=bundle_root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            with pushd(workspace):
+                status = get_github_sync_status(CodexPaths(home=home), check_remote=True)
+                with self.assertRaises(ToolkitError):
+                    sync_bundles_to_github(CodexPaths(home=home), dry_run=True)
+
+            self.assertFalse(status.is_connected)
+            self.assertTrue(status.uses_project_source_remote)
+            self.assertEqual(status.project_remote_url, str(remote))
+
+    def test_sync_bundles_to_github_stops_on_remote_conflict(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git executable is not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            remote = Path(tmpdir) / "remote.git"
+            other_clone = Path(tmpdir) / "other"
+            bundle_root = workspace / "codex_bundles"
+            session_path = "machine-a/sessions/single/20260502/demo-session/manifest.env"
+            session_file = bundle_root / session_path
+            workspace.mkdir()
+            session_file.parent.mkdir(parents=True)
+            session_file.write_text("SESSION_ID=v1\n", encoding="utf-8")
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            with pushd(workspace):
+                connect_bundles_to_github(CodexPaths(home=home), str(remote), branch="main")
+                first_result = sync_bundles_to_github(CodexPaths(home=home), branch="main", message="Initial bundles")
+
+            self.assertTrue(first_result.pushed)
+            subprocess.run(["git", "clone", str(remote), str(other_clone)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            (other_clone / session_path).write_text("SESSION_ID=remote-v2\n", encoding="utf-8")
+            subprocess.run(["git", "config", "user.name", "Remote Device"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "config", "user.email", "remote-device@example.local"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "add", "-A"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "commit", "-m", "Remote bundle update"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "push", "origin", "main"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            session_file.write_text("SESSION_ID=local-v2\n", encoding="utf-8")
+            with pushd(workspace):
+                result = sync_bundles_to_github(CodexPaths(home=home), branch="main", message="Local bundle update")
+
+            self.assertTrue(result.committed)
+            self.assertTrue(result.remote_checked)
+            self.assertTrue(result.conflict)
+            self.assertFalse(result.pushed)
+            self.assertEqual(result.skipped_reason, "merge_conflict")
+            self.assertEqual(result.conflict_files, [session_path])
+            self.assertEqual(session_file.read_text(encoding="utf-8"), "SESSION_ID=local-v2\n")
+
+    def test_sync_bundles_to_github_merges_non_conflicting_remote_changes(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git executable is not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            remote = Path(tmpdir) / "remote.git"
+            other_clone = Path(tmpdir) / "other"
+            bundle_root = workspace / "codex_bundles"
+            first_session_path = "machine-a/sessions/single/20260502/session-a/manifest.env"
+            second_session_path = "machine-a/sessions/single/20260502/session-b/manifest.env"
+            skill_path = "machine-a/skills/all/20260502/demo-skill/SKILL.md"
+            first_session_file = bundle_root / first_session_path
+            second_session_file = bundle_root / second_session_path
+            workspace.mkdir()
+            first_session_file.parent.mkdir(parents=True)
+            first_session_file.write_text("SESSION_ID=session-a\n", encoding="utf-8")
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            with pushd(workspace):
+                connect_bundles_to_github(CodexPaths(home=home), str(remote), branch="main")
+                sync_bundles_to_github(CodexPaths(home=home), branch="main", message="Initial bundles")
+
+            subprocess.run(["git", "clone", str(remote), str(other_clone)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            (other_clone / skill_path).parent.mkdir(parents=True)
+            (other_clone / skill_path).write_text("# remote skill\n", encoding="utf-8")
+            subprocess.run(["git", "config", "user.name", "Remote Device"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "config", "user.email", "remote-device@example.local"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "add", "-A"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "commit", "-m", "Remote skill update"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "push", "origin", "main"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            second_session_file.parent.mkdir(parents=True)
+            second_session_file.write_text("SESSION_ID=session-b\n", encoding="utf-8")
+            with pushd(workspace):
+                result = sync_bundles_to_github(CodexPaths(home=home), branch="main", message="Local session update")
+
+            self.assertFalse(result.conflict)
+            self.assertTrue(result.merged_remote)
+            self.assertTrue(result.pushed)
+            remote_skill_content = subprocess.run(
+                ["git", "--git-dir", str(remote), "show", f"main:{skill_path}"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            ).stdout
+            remote_session_content = subprocess.run(
+                ["git", "--git-dir", str(remote), "show", f"main:{second_session_path}"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            ).stdout
+            self.assertEqual(remote_skill_content, "# remote skill\n")
+            self.assertEqual(remote_session_content, "SESSION_ID=session-b\n")
+
+    def test_pull_bundles_from_github_updates_local_bundle_workspace(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git executable is not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            remote = Path(tmpdir) / "remote.git"
+            other_clone = Path(tmpdir) / "other"
+            bundle_root = workspace / "codex_bundles"
+            skill_path = "machine-a/skills/all/20260502/demo-skill/SKILL.md"
+            skill_file = bundle_root / skill_path
+            workspace.mkdir()
+            skill_file.parent.mkdir(parents=True)
+            skill_file.write_text("# local skill\n", encoding="utf-8")
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            with pushd(workspace):
+                connect_bundles_to_github(CodexPaths(home=home), str(remote), branch="main")
+                sync_bundles_to_github(CodexPaths(home=home), branch="main", message="Initial skill bundle")
+
+            subprocess.run(["git", "clone", str(remote), str(other_clone)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            (other_clone / skill_path).write_text("# remote skill v2\n", encoding="utf-8")
+            subprocess.run(["git", "config", "user.name", "Remote Device"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "config", "user.email", "remote-device@example.local"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "add", "-A"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "commit", "-m", "Remote skill update"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "push", "origin", "main"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            with pushd(workspace):
+                status = get_github_sync_status(CodexPaths(home=home), check_remote=True)
+                result = pull_bundles_from_github(CodexPaths(home=home), branch="main")
+
+            self.assertTrue(status.remote_checked)
+            self.assertTrue(status.remote_branch_exists)
+            self.assertEqual(status.remote_ahead_count, 1)
+            self.assertTrue(status.remote_updated_at)
+            self.assertTrue(result.pulled)
+            self.assertFalse(result.conflict)
+            self.assertEqual(result.remote_ahead_count, 1)
+            self.assertEqual(skill_file.read_text(encoding="utf-8"), "# remote skill v2\n")
+
+    def test_pull_bundles_from_github_blocks_when_local_changes_would_be_overwritten(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git executable is not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            remote = Path(tmpdir) / "remote.git"
+            other_clone = Path(tmpdir) / "other"
+            bundle_root = workspace / "codex_bundles"
+            session_path = "machine-a/sessions/single/20260502/demo-session/manifest.env"
+            session_file = bundle_root / session_path
+            workspace.mkdir()
+            session_file.parent.mkdir(parents=True)
+            session_file.write_text("SESSION_ID=v1\n", encoding="utf-8")
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            with pushd(workspace):
+                connect_bundles_to_github(CodexPaths(home=home), str(remote), branch="main")
+                sync_bundles_to_github(CodexPaths(home=home), branch="main", message="Initial bundles")
+
+            subprocess.run(["git", "clone", str(remote), str(other_clone)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            (other_clone / session_path).write_text("SESSION_ID=remote-v2\n", encoding="utf-8")
+            subprocess.run(["git", "config", "user.name", "Remote Device"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "config", "user.email", "remote-device@example.local"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "add", "-A"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "commit", "-m", "Remote bundle update"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "push", "origin", "main"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            session_file.write_text("SESSION_ID=local-uncommitted\n", encoding="utf-8")
+            with pushd(workspace):
+                result = pull_bundles_from_github(CodexPaths(home=home), branch="main")
+
+            self.assertFalse(result.pulled)
+            self.assertFalse(result.conflict)
+            self.assertEqual(result.remote_ahead_count, 1)
+            self.assertEqual(result.skipped_reason, "local_changes_block_pull")
+            self.assertEqual(result.changed_files, [session_path])
+            self.assertEqual(session_file.read_text(encoding="utf-8"), "SESSION_ID=local-uncommitted\n")
 
     def test_collect_known_bundle_summaries_infers_export_groups(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

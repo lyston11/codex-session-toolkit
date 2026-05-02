@@ -17,12 +17,14 @@ SECTION_TITLES = {
     "session": "Session / Browse",
     "bundle": "Bundle / Transfer",
     "skills": "Skills / Transfer",
+    "github": "GitHub / Sync",
     "repair": "Repair / Maintenance",
 }
 SECTION_BORDER_CODES = {
     "session": (Ansi.DIM, Ansi.CYAN),
     "bundle": (Ansi.DIM, Ansi.MAGENTA),
     "skills": (Ansi.DIM, Ansi.BRIGHT_BLUE),
+    "github": (Ansi.DIM, Ansi.YELLOW),
     "repair": (Ansi.DIM, Ansi.GREEN),
 }
 
@@ -31,6 +33,7 @@ TUI_ACTION_SECTION_OVERRIDES = {
     "project_sessions": "session",
     "provider_migration": "repair",
     "desktop_repair": "repair",
+    "github_status": "github",
     "exit": "system",
 }
 
@@ -65,6 +68,23 @@ TUI_ACTION_NOTES = {
     "import_skill_bundle": ["选择一个 Skills Bundle 导入；同内容复用，冲突默认跳过。"],
     "import_skill_bundles": ["批量导入 standalone Skills Bundle，可按来源机器过滤。"],
     "delete_skill": ["删除本机自定义 Skill。只允许删除 .agents/.codex 下的 custom Skill。"],
+    "github_status": [
+        "先快速读取本地连接状态，再检查 GitHub 远端更新时间。",
+        "检测期间会显示进度，不让 TUI 空白卡住。",
+    ],
+    "connect_github": [
+        "先在 GitHub 上创建一个独立仓库，然后把 ./codex_bundles 连接到这个仓库。",
+        "TUI 会询问是否连接后立即首次推送本机 Bundle。",
+        "工具会拒绝连接到当前项目源码仓库的 remote。",
+    ],
+    "sync_github": [
+        "把 ./codex_bundles 中的会话 Bundle 和 Skills Bundle 推送到已连接的独立仓库。",
+        "同步前会检查远端更新；可合并则合并，冲突会停止并报告。",
+    ],
+    "pull_github": [
+        "从已连接的独立 GitHub 仓库拉取会话 Bundle 和 Skills Bundle 更新。",
+        "如果本地未提交变更会被远端更新覆盖，工具会停止并提示先处理本地变更。",
+    ],
     "desktop_repair": [
         "修复会话在 Desktop 中的显示、索引和登记信息。",
     ],
@@ -91,6 +111,10 @@ SECTION_NOTES = {
     "repair": [
         "按目标处理 Provider 迁移、Desktop 显示修复与旧副本清理。",
         "动作内部只保留必要选项，避免把底层实现细节直接摊给使用者。",
+    ],
+    "github": [
+        "聚焦把本机导出的 Bundle 工作区同步到一个独立 GitHub 仓库。",
+        "用于跨设备共享 codex_bundles，而不直接触碰 ~/.codex 会话数据。",
     ],
 }
 
@@ -142,6 +166,10 @@ def build_tui_menu_actions() -> List[TuiMenuAction]:
         _menu_action("import_skill_bundle", "i", "导入单个 Skills Bundle", ("import-skill-bundle", "<bundle_dir|skill_name>")),
         _menu_action("import_skill_bundles", "m", "批量导入 Skills Bundle", ("import-skill-bundles",)),
         _menu_action("delete_skill", "d", "删除本机 Skill", ("delete-skill", "<skill_name>"), is_dangerous=True),
+        _menu_action("connect_github", "c", "连接独立 GitHub 仓库", ("connect-github", "<repo_url>")),
+        _menu_action("github_status", "s", "查看 GitHub 同步状态"),
+        _menu_action("pull_github", "p", "从 GitHub 拉取更新", ("pull-github",)),
+        _menu_action("sync_github", "g", "推送本机更新到 GitHub", ("sync-github",)),
         _menu_action("provider_migration", "1", "迁移到当前 Provider"),
         _menu_action("desktop_repair", "2", "修复会话在 Desktop 中显示"),
         _menu_action("browse_backups", "3", "管理会话备份", ("list-backups",)),

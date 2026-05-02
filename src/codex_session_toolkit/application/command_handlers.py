@@ -13,6 +13,9 @@ from ..presenters.reports import (
     print_cleanup_result,
     print_clone_run_result,
     print_export_result,
+    print_github_connect_result,
+    print_github_pull_result,
+    print_github_sync_result,
     print_import_result,
     print_local_skill_rows,
     print_repair_result,
@@ -31,6 +34,7 @@ from ..services.browse import get_bundle_summaries, get_project_session_summarie
 from ..services.clone import cleanup_clones, clone_to_provider
 from ..services.exporting import export_active_desktop_all, export_cli_all, export_desktop_all, export_project_sessions, export_session
 from ..services.importing import import_desktop_all, import_session
+from ..services.github_sync import connect_bundles_to_github, pull_bundles_from_github, sync_bundles_to_github
 from ..services.repair import repair_desktop
 from ..services.skills_transfer import (
     delete_local_skill,
@@ -219,6 +223,62 @@ def _handle_delete_skill(args: argparse.Namespace, paths: CodexPaths) -> int:
     )
 
 
+def _handle_connect_github(args: argparse.Namespace, paths: CodexPaths) -> int:
+    result = connect_bundles_to_github(
+        paths,
+        remote_url=args.remote_url,
+        remote_name=args.remote_name,
+        branch=args.branch,
+        dry_run=args.dry_run,
+    )
+    exit_code = print_github_connect_result(result)
+    if not args.push_after_connect:
+        return exit_code
+
+    if args.dry_run and result.initialized_repo:
+        print("")
+        print("Initial push preview skipped: bundle repo is not connected yet in dry-run mode.")
+        return exit_code
+
+    print("")
+    print("Initial push after connect:")
+    push_exit_code = print_github_sync_result(
+        sync_bundles_to_github(
+            paths,
+            remote_name=args.remote_name,
+            branch=args.branch,
+            message=args.message,
+            dry_run=args.dry_run,
+            push=True,
+        )
+    )
+    return exit_code or push_exit_code
+
+
+def _handle_sync_github(args: argparse.Namespace, paths: CodexPaths) -> int:
+    return print_github_sync_result(
+        sync_bundles_to_github(
+            paths,
+            remote_name=args.remote_name,
+            branch=args.branch,
+            message=args.message,
+            dry_run=args.dry_run,
+            push=not args.no_push,
+        )
+    )
+
+
+def _handle_pull_github(args: argparse.Namespace, paths: CodexPaths) -> int:
+    return print_github_pull_result(
+        pull_bundles_from_github(
+            paths,
+            remote_name=args.remote_name,
+            branch=args.branch,
+            dry_run=args.dry_run,
+        )
+    )
+
+
 def _handle_list_backups(args: argparse.Namespace, paths: CodexPaths) -> int:
     return print_session_backup_rows(
         list_session_backups(
@@ -281,6 +341,9 @@ COMMAND_HANDLERS: Mapping[str, CommandHandler] = {
     "import-skill-bundle": _handle_import_skill_bundle,
     "import-skill-bundles": _handle_import_skill_bundles,
     "delete-skill": _handle_delete_skill,
+    "connect-github": _handle_connect_github,
+    "pull-github": _handle_pull_github,
+    "sync-github": _handle_sync_github,
     "list-backups": _handle_list_backups,
     "restore-backup": _handle_restore_backup,
     "delete-backup": _handle_delete_backup,

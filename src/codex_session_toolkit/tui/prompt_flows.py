@@ -32,12 +32,16 @@ def prompt_value(
     allow_empty: bool = True,
 ) -> Optional[str]:
     box_width = app._print_branded_header(title)
-    for line in render_box(help_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
+    rendered_help = list(help_lines)
+    rendered_help.append("输入 q 取消并返回。")
+    for line in render_box(rendered_help, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
         print(line)
     print("")
 
     suffix = f"（默认：{default}）" if default else ""
     raw = input(style_text(f"{prompt_label}{suffix}：", Ansi.BOLD, Ansi.CYAN)).strip()
+    if raw.lower() in {"q", "quit", "esc", "0"}:
+        return None
     if not raw:
         if default:
             return default
@@ -83,21 +87,17 @@ def render_prompt_choice(
 ) -> None:
     box_width, center = app._screen_layout()
     pointer = glyphs().get("pointer", ">")
-    output_lines: List[str] = []
 
     selected_index = max(0, min(selected_index, len(choices) - 1))
     _, selected_label = choices[selected_index]
 
+    header_lines: List[str] = []
     for line in app_logo_lines(max_width=100):
-        output_lines.append(align_line(line, box_width, center=center))
-    output_lines.append(align_line(style_text("Codex 会话工具箱", Ansi.BOLD, Ansi.CYAN), box_width, center=center))
-    output_lines.append(align_line(style_text(title, Ansi.DIM), box_width, center=center))
-    output_lines.append(align_line(style_text(f"当前选择：{selected_label}", Ansi.DIM), box_width, center=center))
-    output_lines.append("")
-
-    for line in render_box(help_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
-        output_lines.append(line)
-    output_lines.append("")
+        header_lines.append(align_line(line, box_width, center=center))
+    header_lines.append(align_line(style_text("Codex 会话工具箱", Ansi.BOLD, Ansi.CYAN), box_width, center=center))
+    header_lines.append(align_line(style_text(title, Ansi.DIM), box_width, center=center))
+    header_lines.append(align_line(style_text(f"当前选择：{selected_label}", Ansi.DIM), box_width, center=center))
+    header_lines.append("")
 
     choice_lines = [style_text(prompt_label, Ansi.BOLD)]
     for idx, (key, label) in enumerate(choices):
@@ -108,9 +108,7 @@ def render_prompt_choice(
             choice_lines.append(prefix + style_text(item_label, Ansi.BOLD, Ansi.UNDERLINE, Ansi.CYAN))
         else:
             choice_lines.append("  " + style_text(hotkey, Ansi.DIM, Ansi.CYAN) + " " + label)
-    for line in render_box(choice_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.CYAN)):
-        output_lines.append(line)
-    output_lines.append("")
+    choice_box_lines = render_box(choice_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.CYAN))
 
     shortcut_labels = "/".join(key for key, _ in choices)
     footer = "↑/↓ 选择  |  Enter 确认"
@@ -118,17 +116,61 @@ def render_prompt_choice(
         footer += f"  |  {shortcut_labels} 快捷选择"
     if allow_cancel:
         footer += "  |  q/←/Esc 返回"
-    output_lines.append(style_text(footer, Ansi.DIM))
+    footer_lines = ["", style_text(footer, Ansi.DIM)]
+
+    max_rows = _prompt_screen_height(app)
+    compact_header_lines = [
+        align_line(style_text("Codex 会话工具箱", Ansi.BOLD, Ansi.CYAN), box_width, center=center),
+        align_line(style_text(title, Ansi.DIM), box_width, center=center),
+        align_line(style_text(f"当前选择：{selected_label}", Ansi.DIM), box_width, center=center),
+        "",
+    ]
+    minimum_rows = len(header_lines) + 3 + 1 + len(choice_box_lines) + len(footer_lines)
+    if minimum_rows > max_rows:
+        header_lines = compact_header_lines
+
+    tail_lines = [""] + choice_box_lines + footer_lines
+    available_help_rows = max_rows - len(header_lines) - len(tail_lines)
+    if available_help_rows >= 3 and help_lines:
+        help_content_limit = max(1, available_help_rows - 2)
+        help_box_lines = render_box(
+            _fit_prompt_help_lines(help_lines, help_content_limit),
+            width=box_width,
+            border_codes=(Ansi.DIM, Ansi.BLUE),
+        )
+        output_lines = header_lines + help_box_lines + tail_lines
+    else:
+        output_lines = header_lines + tail_lines
+
+    if len(output_lines) > max_rows:
+        output_lines = output_lines[-max_rows:]
 
     hide_cursor = "\033[?25l"
     show_cursor = "\033[?25h"
     home_cursor = "\033[H"
     clear_to_eol = "\033[K"
     clear_to_eos = "\033[J"
-    visible_lines = app._fit_lines_to_screen(output_lines)
-    full_output = "\n".join(line + clear_to_eol for line in visible_lines) + "\n"
+    full_output = "\n".join(line + clear_to_eol for line in output_lines) + "\n"
     sys.stdout.write(hide_cursor + home_cursor + full_output + clear_to_eos + show_cursor)
     sys.stdout.flush()
+
+
+def _prompt_screen_height(app: "ToolkitTuiApp") -> int:
+    screen_height = getattr(app, "_screen_height", None)
+    if callable(screen_height):
+        return max(8, int(screen_height()))
+    return max(8, term_height())
+
+
+def _fit_prompt_help_lines(help_lines: List[str], max_lines: int) -> List[str]:
+    if max_lines <= 0:
+        return []
+    if len(help_lines) <= max_lines:
+        return list(help_lines)
+    if max_lines == 1:
+        return list(help_lines[:1])
+    visible_count = max_lines
+    return list(help_lines[:visible_count])
 
 
 def prompt_choice(
@@ -183,21 +225,25 @@ def prompt_choice(
     key_to_index = {key: idx for idx, (key, _) in enumerate(normalized_choices)}
     selected_index = key_to_index.get(default.lower(), 0) if default else 0
     last_size = (term_width(), term_height())
+    needs_render = True
 
     while True:
-        render_prompt_choice(
-            app,
-            title=title,
-            prompt_label=prompt_label,
-            help_lines=help_lines,
-            choices=choices,
-            selected_index=selected_index,
-            allow_cancel=allow_cancel,
-        )
+        if needs_render:
+            render_prompt_choice(
+                app,
+                title=title,
+                prompt_label=prompt_label,
+                help_lines=help_lines,
+                choices=choices,
+                selected_index=selected_index,
+                allow_cancel=allow_cancel,
+            )
+            needs_render = False
         key = read_key(timeout_ms=200)
         current_size = (term_width(), term_height())
         if current_size != last_size:
             last_size = current_size
+            needs_render = True
             continue
         if key is None:
             continue
@@ -209,7 +255,9 @@ def prompt_choice(
             allow_left_exit=allow_cancel,
             detail_keys=(),
         )
-        selected_index = transition.selected_index
+        if transition.selected_index != selected_index:
+            selected_index = transition.selected_index
+            needs_render = True
         if transition.confirm_selected:
             return normalized_choices[selected_index][0]
         if transition.exit_requested:

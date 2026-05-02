@@ -13,6 +13,10 @@ from .models import (
     CloneFileResult,
     CloneRunResult,
     ExportResult,
+    GitHubConnectResult,
+    GitHubPullResult,
+    GitHubSyncResult,
+    GitHubSyncStatus,
     ImportResult,
     RepairResult,
     SessionBackupDeleteResult,
@@ -30,6 +34,9 @@ from .presenters.reports import (
     print_clone_file_result,
     print_clone_run_result,
     print_export_result,
+    print_github_connect_result,
+    print_github_pull_result,
+    print_github_sync_result,
     print_import_result,
     print_repair_result,
     print_session_backup_delete_result,
@@ -43,6 +50,7 @@ from .services.backups import delete_session_backup, list_session_backups, resto
 from .services.clone import cleanup_clones, clone_to_provider
 from .services.exporting import export_active_desktop_all, export_cli_all, export_desktop_all, export_project_sessions, export_session
 from .services.importing import import_desktop_all, import_session
+from .services.github_sync import connect_bundles_to_github, get_github_sync_status, pull_bundles_from_github, sync_bundles_to_github
 from .services.provider import detect_provider
 from .services.repair import repair_desktop
 
@@ -95,6 +103,10 @@ __all__ = [
     "CloneRunResult",
     "CodexPaths",
     "ExportResult",
+    "GitHubConnectResult",
+    "GitHubPullResult",
+    "GitHubSyncResult",
+    "GitHubSyncStatus",
     "ImportResult",
     "RepairResult",
     "SessionBackupDeleteResult",
@@ -130,6 +142,9 @@ __all__ = [
     "print_clone_file_result",
     "print_clone_run_result",
     "print_export_result",
+    "print_github_connect_result",
+    "print_github_pull_result",
+    "print_github_sync_result",
     "print_import_result",
     "print_repair_result",
     "print_session_backup_delete_result",
@@ -140,5 +155,9 @@ __all__ = [
     "repair_desktop",
     "restore_session_backup",
     "run_cli",
+    "connect_bundles_to_github",
+    "get_github_sync_status",
+    "pull_bundles_from_github",
+    "sync_bundles_to_github",
     "validate_bundles",
 ]

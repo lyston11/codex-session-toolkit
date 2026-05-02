@@ -15,7 +15,7 @@
 - `cli.py`、`commands.py`、`command_parser.py`、`__main__.py` 是入口层。入口层只负责启动、参数接入、兼容 CLI 行为。
 - `command_catalog.py` 是命令目录的单一来源，维护 command name、domain、help、summary。CLI parser、TUI menu 和测试都应引用这里，不要重复定义命令集合。
 - `application/command_handlers.py` 是 CLI 命令到 service/presenter 的编排层。不要把 argparse 细节或 TUI 逻辑放进这里。
-- `services/` 是用例层，负责导入、导出、修复、迁移、Skills 同步等业务流程。services 可以调用 stores，但不能依赖 CLI/TUI/compat facade。
+- `services/` 是用例层，负责导入、导出、修复、迁移、Skills 同步、GitHub 同步等业务流程。services 可以调用 stores，但不能依赖 CLI/TUI/compat facade。
 - `stores/` 是存储、扫描、解析、序列化层。stores 不能依赖 services、presenters、TUI 或入口层。
 - `presenters/` 只负责输出格式和报告展示，不能反向调用 services 或 stores。
 - `tui/` 是交互界面层。TUI flow 可以调用 services，但不要让 flow 模块 runtime import `tui.app`。
@@ -26,9 +26,12 @@
 - CLI 命令名、领域分组和帮助文案归 `command_catalog.py`。
 - argparse 构造归 `command_parser.py`；命令执行归 `application/command_handlers.py`。
 - TUI 菜单目录归 `tui/menu_catalog.py`；`tui/view_models.py` 只放被动数据结构。
+- 面向用户的主流程优先在 TUI 中提供完整体验；新增 CLI 能力时，应同步评估是否需要 TUI 状态页、确认页或专用 flow，避免只把 CLI 命令挂进菜单。
 - Skills manifest 数据结构、sidecar 读写和恢复报告归 `stores/skills_manifest.py`。
 - Skills 发现、打包、恢复行为归 `stores/skills.py`；保留必要 re-export 兼容旧调用。
 - Session bundle 中的 Skills sidecar 恢复编排归 `services/skill_sidecars.py`。
+- `./codex_bundles` 到 GitHub 的连接和同步编排归 `services/github_sync.py`；不要让 TUI 或 CLI 直接拼 git 命令。GitHub 同步必须使用独立 Bundle 仓库，不能连接到当前项目源码仓库 remote。只有 `connect-github <repo_url>` 可以接收仓库地址，`pull-github` / `sync-github` 必须只使用已经连接好的仓库。同步范围是整个 `./codex_bundles` 工作区，包括会话 Bundle 和 Skills Bundle；TUI 状态页应先渲染本地快照，再用进度检测远端更新时间；连接、拉取、推送等慢 git 动作必须在 TUI 中显示进度，不能空白阻塞。其他功能只能显示本地同步提示或在导出完成后提供可选推送入口，不能自动联网检查远端，不能在导入前弹出强制拉取提示；用户直接拷贝 Bundle 到本机后应能顺畅导入。拉取/推送前必须考虑远端更新和冲突，不能静默覆盖。GitHub 同步内部和结果展示统一使用 POSIX 风格相对路径，必须兼容 macOS `/` 与 Windows `\` 输入。父项目源码仓库必须在 `.gitignore` 中忽略 `codex_bundles/`。
+- `tui/sync_prompts.py` 负责 TUI 中的同步提示和导出后快捷入口。首页、Bundle、Skills 相关页面只允许读取带缓存的本地状态；远端检查只允许在用户明确进入 GitHub / Sync 状态页、Pull 或 Push 时发生。
 - 批量导出选择和元数据计划归 `services/export_planning.py`；实际导出执行归 `services/exporting.py`。
 - 批量导入筛选、latest-only、project remap 和 report path 计划归 `services/import_planning.py`；实际导入执行归 `services/importing.py`。
 - `manifest.env` 写入统一使用 `validation.write_manifest()`，不要在 service 中手写 shell quoting。

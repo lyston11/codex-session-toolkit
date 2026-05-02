@@ -35,6 +35,9 @@ COMMAND_CATALOG: tuple[CommandSpec, ...] = (
     CommandSpec("import-skill-bundle", "skills", "Import one standalone Skills bundle", "Import one standalone Skills bundle"),
     CommandSpec("import-skill-bundles", "skills", "Import all standalone Skills bundles", "Batch import standalone Skills bundles"),
     CommandSpec("delete-skill", "skills", "Delete one local custom Skill", "Delete one local custom Skill"),
+    CommandSpec("connect-github", "github", "Connect local bundles to a dedicated GitHub repository", "Connect bundles to a dedicated repository, optionally push"),
+    CommandSpec("pull-github", "github", "Pull remote bundle updates from the connected GitHub repository", "Pull remote bundle updates into local codex_bundles"),
+    CommandSpec("sync-github", "github", "Push local bundles to the connected GitHub repository", "Commit, merge remote updates, and push local bundles"),
     CommandSpec("clone-provider", "repair", "Clone active sessions to the target provider", "Clone active sessions to the current provider"),
     CommandSpec("repair-desktop", "repair", "Repair Desktop sidebar visibility", "Repair active Desktop visibility/index/provider"),
     CommandSpec("list-backups", "repair", "List session rollout backups", "Browse session overwrite backups"),
@@ -43,11 +46,12 @@ COMMAND_CATALOG: tuple[CommandSpec, ...] = (
     CommandSpec("clean-clones", "repair", "Delete legacy unmarked clone files", "Remove legacy unmarked clone files"),
 )
 
-COMMAND_DOMAIN_ORDER = ("session", "bundle", "skills", "repair")
+COMMAND_DOMAIN_ORDER = ("session", "bundle", "skills", "repair", "github")
 COMMAND_DOMAIN_LABELS = {
     "session": "Session commands",
     "bundle": "Bundle commands",
     "skills": "Skills commands",
+    "github": "GitHub sync commands",
     "repair": "Repair / maintenance commands",
 }
 COMMAND_SPECS_BY_NAME = {spec.name: spec for spec in COMMAND_CATALOG}

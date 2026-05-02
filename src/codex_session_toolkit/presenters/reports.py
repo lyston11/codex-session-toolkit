@@ -12,6 +12,9 @@ from ..models import (
     CloneFileResult,
     CloneRunResult,
     ExportResult,
+    GitHubConnectResult,
+    GitHubPullResult,
+    GitHubSyncResult,
     ImportResult,
     LocalSkillSummary,
     OperationWarning,
@@ -278,6 +281,100 @@ def print_session_backup_delete_result(result: SessionBackupDeleteResult) -> int
     print(f"Backup: {result.backup_path}")
     print(f"Target: {result.target_path}")
     return 0
+
+
+def print_github_connect_result(result: GitHubConnectResult) -> int:
+    action = "Would connect bundles to GitHub" if result.dry_run else "Connected bundles to GitHub"
+    print(action)
+    print(f"Bundle root: {result.bundle_root}")
+    print(f"Remote: {result.remote_name} {result.remote_url}")
+    print(f"Branch: {result.branch}")
+    print(f"Dry run: {'yes' if result.dry_run else 'no'}")
+    print(f"Initialized repo: {'yes' if result.initialized_repo else 'no'}")
+    print(f"Configured remote: {'yes' if result.configured_remote else 'no'}")
+    if result.commands:
+        print("Git commands:")
+        for command in result.commands:
+            print(command)
+    return 0
+
+
+def print_github_sync_result(result: GitHubSyncResult) -> int:
+    action = "Would sync bundles to GitHub" if result.dry_run else "Synced bundles to GitHub"
+    if result.conflict:
+        action = "GitHub sync stopped because of conflicts"
+    print(action)
+    print(f"Bundle root: {result.bundle_root}")
+    print(f"Remote: {result.remote_name} {result.remote_url or '(not configured)'}")
+    print(f"Branch: {result.branch}")
+    print(f"Dry run: {'yes' if result.dry_run else 'no'}")
+    print(f"Push enabled: {'yes' if result.push_enabled else 'no'}")
+    print(f"Initialized repo: {'yes' if result.initialized_repo else 'no'}")
+    print(f"Configured remote: {'yes' if result.configured_remote else 'no'}")
+    print(f"Changed files: {len(result.changed_files)}")
+    print(f"Session bundle changes: {len(result.session_changed_files)}")
+    print(f"Skill bundle changes: {len(result.skill_changed_files)}")
+    print(f"Other changes: {len(result.other_changed_files)}")
+    for path in result.changed_files[:20]:
+        print(path)
+    if len(result.changed_files) > 20:
+        print(f"... and {len(result.changed_files) - 20} more")
+    print(f"Committed: {'yes' if result.committed else 'no'}")
+    if result.commit_hash:
+        print(f"Commit: {result.commit_hash}")
+    print(f"Remote checked: {'yes' if result.remote_checked else 'no'}")
+    print(f"Pulled remote changes: {'yes' if result.pulled else 'no'}")
+    print(f"Merged remote changes: {'yes' if result.merged_remote else 'no'}")
+    print(f"Conflict: {'yes' if result.conflict else 'no'}")
+    for path in result.conflict_files[:20]:
+        print(f"Conflict file: {path}")
+    if len(result.conflict_files) > 20:
+        print(f"... and {len(result.conflict_files) - 20} more conflict files")
+    print(f"Pushed: {'yes' if result.pushed else 'no'}")
+    if result.skipped_reason:
+        print(f"Skipped: {result.skipped_reason}")
+    if result.commands:
+        print("Git commands:")
+        for command in result.commands:
+            print(command)
+    return 1 if result.conflict else 0
+
+
+def print_github_pull_result(result: GitHubPullResult) -> int:
+    action = "Would pull bundles from GitHub" if result.dry_run else "Pulled bundles from GitHub"
+    if result.conflict:
+        action = "GitHub pull stopped because of conflicts"
+    print(action)
+    print(f"Bundle root: {result.bundle_root}")
+    print(f"Remote: {result.remote_name} {result.remote_url or '(not configured)'}")
+    print(f"Branch: {result.branch}")
+    print(f"Dry run: {'yes' if result.dry_run else 'no'}")
+    print(f"Remote checked: {'yes' if result.remote_checked else 'no'}")
+    print(f"Remote branch exists: {'yes' if result.remote_branch_exists else 'no'}")
+    print(f"Local commit: {result.local_commit_hash or '-'}")
+    print(f"Local updated: {result.local_updated_at or '-'}")
+    print(f"Remote commit: {result.remote_commit_hash or '-'}")
+    print(f"Remote updated: {result.remote_updated_at or '-'}")
+    print(f"Local ahead: {result.local_ahead_count}")
+    print(f"Remote ahead: {result.remote_ahead_count}")
+    print(f"Local changed files: {len(result.changed_files)}")
+    print(f"Session bundle changes: {len(result.session_changed_files)}")
+    print(f"Skill bundle changes: {len(result.skill_changed_files)}")
+    print(f"Other changes: {len(result.other_changed_files)}")
+    print(f"Pulled: {'yes' if result.pulled else 'no'}")
+    print(f"Merged remote changes: {'yes' if result.merged_remote else 'no'}")
+    print(f"Conflict: {'yes' if result.conflict else 'no'}")
+    for path in result.conflict_files[:20]:
+        print(f"Conflict file: {path}")
+    if len(result.conflict_files) > 20:
+        print(f"... and {len(result.conflict_files) - 20} more conflict files")
+    if result.skipped_reason:
+        print(f"Skipped: {result.skipped_reason}")
+    if result.commands:
+        print("Git commands:")
+        for command in result.commands:
+            print(command)
+    return 1 if result.conflict or result.skipped_reason == "local_changes_block_pull" else 0
 
 
 def print_batch_export_result(result: BatchExportResult) -> int:
