@@ -4,7 +4,7 @@
 
 它不是单个脚本，而是一套统一的交互式 TUI + 可脚本化 CLI。日常使用建议从 TUI 进入；CLI 适合批处理、dry-run 和自动化。
 
-![Codex Session Toolkit 界面预览](./assets/1234.png)
+![Codex Session Toolkit 界面预览](./assets/12345.png)
 
 ## 解决什么问题
 
