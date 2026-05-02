@@ -56,6 +56,7 @@ CLI_SUBCOMMANDS = {
     "delete-skill",
     "list-backups",
     "restore-backup",
+    "delete-backup",
     "repair-desktop",
 }
 
@@ -99,6 +100,7 @@ def create_arg_parser() -> argparse.ArgumentParser:
             "  delete-skill          Delete one local custom Skill\n"
             "  list-backups          Browse session overwrite backups\n"
             "  restore-backup        Restore one session overwrite backup\n"
+            "  delete-backup         Delete one session overwrite backup\n"
             "  repair-desktop        Repair active Desktop visibility/index/provider\n\n"
             "Legacy flags still work:\n"
             "  --dry-run             Preview clone mode\n"

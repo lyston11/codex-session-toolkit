@@ -20,7 +20,7 @@ from codex_session_toolkit.paths import CodexPaths  # noqa: E402
 from codex_session_toolkit.errors import ToolkitError  # noqa: E402
 from codex_session_toolkit.models import BundleSummary  # noqa: E402
 from codex_session_toolkit.presenters.reports import print_batch_import_result  # noqa: E402
-from codex_session_toolkit.services.backups import list_session_backups, restore_session_backup  # noqa: E402
+from codex_session_toolkit.services.backups import delete_session_backup, list_session_backups, restore_session_backup  # noqa: E402
 from codex_session_toolkit.services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles  # noqa: E402
 from codex_session_toolkit.services.clone import clone_to_provider  # noqa: E402
 from codex_session_toolkit.services.exporting import export_active_desktop_all, export_project_sessions, export_session  # noqa: E402
@@ -1079,6 +1079,53 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertTrue(result.current_backup_path.is_file())
             self.assertIn("Backup version", target.read_text(encoding="utf-8"))
             self.assertIn("Current version", result.current_backup_path.read_text(encoding="utf-8"))
+
+    def test_delete_session_backup_removes_only_backup_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            session_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+            target = write_session(
+                home,
+                session_id,
+                provider="target-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                user_message="Current version",
+            )
+            backup = target.with_name(target.name + ".bak.1770000003")
+            shutil.copy2(target, backup)
+
+            result = delete_session_backup(CodexPaths(home=home), str(backup))
+
+            self.assertTrue(result.deleted)
+            self.assertFalse(backup.exists())
+            self.assertTrue(target.exists())
+
+    def test_delete_session_backup_supports_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            session_id = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+            target = write_session(
+                home,
+                session_id,
+                provider="target-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+            )
+            backup = target.with_name(target.name + ".bak.1770000004")
+            shutil.copy2(target, backup)
+
+            result = delete_session_backup(CodexPaths(home=home), str(backup), dry_run=True)
+
+            self.assertFalse(result.deleted)
+            self.assertTrue(backup.exists())
+            self.assertTrue(target.exists())
 
     def test_restore_session_backup_rejects_paths_outside_session_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -15,6 +15,7 @@ from .models import (
     ExportResult,
     ImportResult,
     RepairResult,
+    SessionBackupDeleteResult,
     SessionBackupRestoreResult,
     SessionBackupSummary,
     SessionSummary,
@@ -31,13 +32,14 @@ from .presenters.reports import (
     print_export_result,
     print_import_result,
     print_repair_result,
+    print_session_backup_delete_result,
     print_session_backup_restore_result,
     print_session_backup_rows,
     print_session_rows,
     print_validation_report,
 )
 from .services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles
-from .services.backups import list_session_backups, restore_session_backup
+from .services.backups import delete_session_backup, list_session_backups, restore_session_backup
 from .services.clone import cleanup_clones, clone_to_provider
 from .services.exporting import export_active_desktop_all, export_cli_all, export_desktop_all, export_project_sessions, export_session
 from .services.importing import import_desktop_all, import_session
@@ -95,6 +97,7 @@ __all__ = [
     "ExportResult",
     "ImportResult",
     "RepairResult",
+    "SessionBackupDeleteResult",
     "SessionBackupRestoreResult",
     "SessionBackupSummary",
     "SessionSummary",
@@ -103,6 +106,7 @@ __all__ = [
     "cleanup_clones",
     "clone_to_provider",
     "create_parser",
+    "delete_session_backup",
     "detect_provider",
     "export_active_desktop_all",
     "export_cli_all",
@@ -128,6 +132,7 @@ __all__ = [
     "print_export_result",
     "print_import_result",
     "print_repair_result",
+    "print_session_backup_delete_result",
     "print_session_backup_restore_result",
     "print_session_backup_rows",
     "print_session_rows",

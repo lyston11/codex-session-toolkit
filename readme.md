@@ -23,7 +23,7 @@
 - **会话浏览优先显示名称**：`Session / Browse` 右侧优先显示 Desktop `threads.title` 或 `session_index.thread_name`；没有名称时才回退到首条消息、工作区或时间
 - **Skills 独立迁移**：主菜单新增 `Skills / Transfer`，可单独浏览、导出和导入本机自定义 Skills
 - **会话只带实际依赖 Skills**：会话 Bundle 会记录可用 Skills 元数据，但只打包本会话明确使用过的自定义 Skills，避免跨设备同步时把 Skill 库越搬越满
-- **TUI 会话备份恢复**：导入会话时如需覆盖本机旧 rollout，会先生成 `.bak.<timestamp>` 备份；现在可在 `Repair / Maintenance` 中浏览和恢复，恢复前也会再备份当前文件
+- **TUI 会话备份管理**：导入会话时如需覆盖本机旧 rollout，会先生成 `.bak.<timestamp>` 备份；现在可在 `Repair / Maintenance` 中浏览、恢复或删除，恢复前也会再备份当前文件
 - `Session / Browse` 新增按项目路径查看与导出：粘贴项目路径后，可只浏览该项目下的会话，并批量导出到 `./codex_bundles/<machine>/sessions/project/<project>/<timestamp>/`
 - `Bundle / Transfer` 新增按项目文件夹导入：在 `project` 分类下继续选择具体项目文件夹，并把会话 `cwd` 映射到当前机器的目标项目路径
 - 项目导入会显示本机匹配状态：优先复用原路径，其次尝试同名项目目录；若目标路径不存在，可直接选择是否创建后再导入
@@ -101,19 +101,21 @@
 ### 5. 从 TUI 找回覆盖前的本机会话
 
 - 进入 `Repair / Maintenance`
-- 选择 `浏览/恢复会话备份`
+- 选择 `管理会话备份`
 - 按 `/` 搜索 session id、provider、cwd 或路径
 - 按 `d` 查看备份详情，确认备份路径和恢复目标
 - 按 `r` 恢复选中备份
+- 按 `x` 删除不再需要的选中备份
 - 输入 `DELETE` 二次确认
 
 恢复时如果当前 rollout 仍存在，工具会先生成一份 `rollout-xxx.jsonl.bak.restore.<timestamp>`，再把选中的备份复制回原目标位置。
+删除备份只会删除选中的 `.bak.*` 文件，不会删除当前会话文件。
 
 ### Repair / Maintenance
 
 - 迁移到当前 Provider
 - 修复 active 会话在 Desktop 中显示
-- 浏览/恢复会话备份
+- 管理会话备份：浏览、恢复或删除
 - 清理旧版无标记副本
 - 支持 Dry-run 预演
 - 自动修复 / 重建 `session_index.jsonl`
@@ -233,7 +235,7 @@ Windows：
 - `g`：在 Skills 列表切换是否显示系统/运行时 Skills
 - `r`（Skills 列表）：删除选中的自定义 Skill
 - `r`（会话备份列表）：恢复选中的备份
-- `x`：在 Skills 列表导出全部自定义 Skills
+- `x`：在 Skills 列表导出全部自定义 Skills；在会话备份列表删除选中的备份
 
 ## CLI 用法
 
@@ -274,6 +276,7 @@ codex-session-toolkit delete-skill my-skill --source-root agents
 # 会话备份（建议优先在 TUI 中操作）
 codex-session-toolkit list-backups
 codex-session-toolkit restore-backup <backup_path_or_session_id> --dry-run
+codex-session-toolkit delete-backup <backup_path_or_session_id> --dry-run
 
 # 修复 Desktop 可见性
 codex-session-toolkit repair-desktop
@@ -291,7 +294,7 @@ codex-session-toolkit repair-desktop --include-archived
 - 新版导出会从源机器 Desktop `threads.title` 读取真正的左侧线程短标题，写入 Bundle 的 `THREAD_NAME`
 - 第一条用户消息会写入 `FIRST_USER_MESSAGE`，用于 Desktop 的首条消息预览和极端情况下的兜底标题
 - 导入时优先使用 `THREAD_NAME`；如果旧 Bundle 没有带出标题，才会从现有 Desktop 标题、`session_index.jsonl` 或 rollout 首条用户消息中恢复
-- 如果导入时发现本机同一个 rollout 更旧并需要覆盖，工具会先把当前文件备份为同目录下的 `.bak.<timestamp>`；这些备份可以在 TUI 的 `Repair / Maintenance -> 浏览/恢复会话备份` 中找回
+- 如果导入时发现本机同一个 rollout 更旧并需要覆盖，工具会先把当前文件备份为同目录下的 `.bak.<timestamp>`；这些备份可以在 TUI 的 `Repair / Maintenance -> 管理会话备份` 中找回或删除
 - `repair-desktop` 会保留已有 Desktop 短标题，只修复 provider、索引、workspace roots 和 `threads` 登记
 - 旧导出包如果没有 `THREAD_NAME`，目标机器无法凭空还原源机器曾经生成过的短标题；需要在源机器用新版工具重新导出，或带上源机器 `~/.codex/state_*.sqlite` 做标题合并
 - `--project` 用于锁定 `project` 分类下的项目文件夹；`--target-project-path` 用于把会话 `cwd` 映射到本机项目根目录

@@ -19,6 +19,7 @@ from .presenters.reports import (
     print_import_result,
     print_local_skill_rows,
     print_repair_result,
+    print_session_backup_delete_result,
     print_session_backup_restore_result,
     print_session_backup_rows,
     print_session_rows,
@@ -29,7 +30,7 @@ from .presenters.reports import (
     print_validation_report,
 )
 from .services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles
-from .services.backups import list_session_backups, restore_session_backup
+from .services.backups import delete_session_backup, list_session_backups, restore_session_backup
 from .services.clone import cleanup_clones, clone_to_provider
 from .services.exporting import export_active_desktop_all, export_cli_all, export_desktop_all, export_project_sessions, export_session
 from .services.importing import import_desktop_all, import_session
@@ -178,6 +179,10 @@ def create_parser() -> argparse.ArgumentParser:
     restore_backup_parser = subparsers.add_parser("restore-backup", help="Restore one session rollout backup")
     restore_backup_parser.add_argument("input_value", help="Backup path, backup filename, or session id")
     restore_backup_parser.add_argument("--dry-run", action="store_true", help="Preview the backup that would be restored")
+
+    delete_backup_parser = subparsers.add_parser("delete-backup", help="Delete one session rollout backup")
+    delete_backup_parser.add_argument("input_value", help="Backup path, backup filename, or session id")
+    delete_backup_parser.add_argument("--dry-run", action="store_true", help="Preview the backup that would be deleted")
 
     repair_parser = subparsers.add_parser("repair-desktop", help="Repair Desktop sidebar visibility")
     repair_parser.add_argument("target_provider", nargs="?", default="", help="Optional provider override")
@@ -337,6 +342,14 @@ def run_cli(argv: Sequence[str], *, paths: Optional[CodexPaths] = None) -> int:
     if args.command == "restore-backup":
         return print_session_backup_restore_result(
             restore_session_backup(
+                paths,
+                args.input_value,
+                dry_run=args.dry_run,
+            )
+        )
+    if args.command == "delete-backup":
+        return print_session_backup_delete_result(
+            delete_session_backup(
                 paths,
                 args.input_value,
                 dry_run=args.dry_run,
