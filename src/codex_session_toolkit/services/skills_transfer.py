@@ -20,19 +20,18 @@ from ..models import (
     SkillImportResult,
 )
 from ..paths import CodexPaths
+from ..stores.skills_manifest import SKILLS_MANIFEST_FILENAME, read_skills_manifest, write_skills_manifest
 from ..stores.skills import (
-    SKILLS_MANIFEST_FILENAME,
     build_skills_manifest_from_local_summaries,
     bundle_skills,
     classify_skill_location,
     collect_local_skill_summaries,
     compute_skill_directory_hash,
-    read_skills_manifest,
     restore_skills,
-    write_skills_manifest,
 )
 from ..support import build_skills_export_root, detect_machine_key, detect_machine_label, ensure_path_within_dir, normalize_bundle_root
 from ..support import restrict_to_local_bundle_workspace
+from ..validation import write_manifest
 
 
 def list_local_skills(
@@ -363,7 +362,6 @@ def _write_skill_bundle_manifest(
     skill_count: int,
     bundled_count: int,
 ) -> None:
-    manifest_file.parent.mkdir(parents=True, exist_ok=True)
     data = OrderedDict(
         BUNDLE_TYPE="skills",
         EXPORTED_AT=exported_at,
@@ -373,9 +371,7 @@ def _write_skill_bundle_manifest(
         SKILL_COUNT=str(skill_count),
         BUNDLED_SKILL_COUNT=str(bundled_count),
     )
-    with manifest_file.open("w", encoding="utf-8") as fh:
-        for key, value in data.items():
-            fh.write(f"{key}={shlex.quote(value)}\n")
+    write_manifest(manifest_file, data)
 
 
 def _read_skill_bundle_manifest(manifest_file: Path) -> dict[str, str]:

@@ -8,11 +8,13 @@ import sys
 from typing import Optional, Sequence
 
 from . import APP_COMMAND, APP_DISPLAY_NAME, __version__
+from .command_catalog import CLI_SUBCOMMANDS, COMMAND_CATALOG, COMMAND_DOMAIN_LABELS, command_domains, commands_for_domain
 from .commands import run_cli as run_toolkit_cli
 from .errors import ToolkitError
 from .paths import CodexPaths
 from .services.provider import detect_provider
-from .tui.app import run_cleanup_mode, run_clone_mode, run_tui
+from .tui.app import run_tui
+from .tui.maintenance_modes import run_cleanup_mode, run_clone_mode
 from .tui.terminal import (
     Ansi,
     horizontal_rule as _hr,
@@ -34,33 +36,6 @@ def resolve_target_model_provider(paths: Optional[CodexPaths] = None) -> str:
         return DEFAULT_MODEL_PROVIDER
 
 
-CLI_SUBCOMMANDS = {
-    "clone-provider",
-    "clean-clones",
-    "list",
-    "list-project-sessions",
-    "list-bundles",
-    "validate-bundles",
-    "export",
-    "export-project",
-    "export-desktop-all",
-    "export-active-desktop-all",
-    "export-cli-all",
-    "import",
-    "import-desktop-all",
-    "list-skills",
-    "export-skills",
-    "list-skill-bundles",
-    "import-skill-bundle",
-    "import-skill-bundles",
-    "delete-skill",
-    "list-backups",
-    "restore-backup",
-    "delete-backup",
-    "repair-desktop",
-}
-
-
 def build_app_context(paths: Optional[CodexPaths] = None) -> ToolkitAppContext:
     paths = paths or CodexPaths()
     return ToolkitAppContext(
@@ -77,41 +52,32 @@ def create_arg_parser() -> argparse.ArgumentParser:
         prog=APP_COMMAND,
         description=f"{APP_DISPLAY_NAME}: clone, transfer, import and repair Codex sessions.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Canonical toolkit commands:\n"
-            "  clone-provider        Clone active sessions to the current provider\n"
-            "  clean-clones          Remove legacy unmarked clone files\n"
-            "  list                  Browse local sessions\n"
-            "  list-project-sessions Browse sessions under one project path\n"
-            "  list-bundles          Browse exported bundle folders\n"
-            "  validate-bundles      Validate bundle folder health\n"
-            "  export                Export one session bundle\n"
-            "  export-project        Batch export all sessions under one project path\n"
-            "  export-desktop-all    Batch export all Desktop sessions\n"
-            "  export-active-desktop-all Batch export all active Desktop sessions\n"
-            "  export-cli-all        Batch export all CLI sessions\n"
-            "  import                Import one bundle\n"
-            "  import-desktop-all    Batch import one machine/category or project folder\n"
-            "  list-skills           Browse local Skills\n"
-            "  export-skills         Export standalone Skills bundle\n"
-            "  list-skill-bundles    Browse standalone Skills bundles\n"
-            "  import-skill-bundle   Import one standalone Skills bundle\n"
-            "  import-skill-bundles  Batch import standalone Skills bundles\n"
-            "  delete-skill          Delete one local custom Skill\n"
-            "  list-backups          Browse session overwrite backups\n"
-            "  restore-backup        Restore one session overwrite backup\n"
-            "  delete-backup         Delete one session overwrite backup\n"
-            "  repair-desktop        Repair active Desktop visibility/index/provider\n\n"
-            "Legacy flags still work:\n"
-            "  --dry-run             Preview clone mode\n"
-            "  --clean               Cleanup legacy clone files\n"
-        ),
+        epilog=_canonical_commands_help(),
     )
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without writing files")
     parser.add_argument("--clean", action="store_true", help="Remove unmarked clones from previous runs")
     parser.add_argument("--no-tui", action="store_true", help="Force CLI mode even in interactive terminal")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
+
+
+def _canonical_commands_help() -> str:
+    command_width = max(len(spec.name) for spec in COMMAND_CATALOG)
+    lines = ["Canonical toolkit commands:"]
+    for domain in command_domains():
+        domain_commands = commands_for_domain(domain)
+        if not domain_commands:
+            continue
+        lines.append(f"  {COMMAND_DOMAIN_LABELS[domain]}:")
+        for spec in domain_commands:
+            lines.append(f"    {spec.name:<{command_width}}  {spec.summary}")
+    lines.extend([
+        "",
+        "Legacy flags still work:",
+        "  --dry-run             Preview clone mode",
+        "  --clean               Cleanup legacy clone files",
+    ])
+    return "\n".join(lines)
 
 
 def print_header(context: ToolkitAppContext, dry_run: bool) -> None:

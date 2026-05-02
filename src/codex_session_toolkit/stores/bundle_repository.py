@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from typing import Iterable, List, Mapping
 
 from ..errors import ToolkitError
 from ..paths import CodexPaths
@@ -68,3 +68,17 @@ def resolve_known_bundle_dir(
 
     candidates.sort(key=bundle_directory_sort_key, reverse=True)
     return candidates[0]
+
+
+def write_batch_export_manifest(
+    manifest_file: Path,
+    metadata: Mapping[str, object],
+    session_ids: Iterable[str],
+) -> Path:
+    manifest_file.parent.mkdir(parents=True, exist_ok=True)
+    with manifest_file.open("w", encoding="utf-8") as fh:
+        for key, value in metadata.items():
+            fh.write(f"# {key}={value}\n")
+        for session_id in session_ids:
+            fh.write(str(session_id) + "\n")
+    return manifest_file

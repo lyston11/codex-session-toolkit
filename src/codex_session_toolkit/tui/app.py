@@ -16,11 +16,6 @@ from ..commands import run_cli as run_toolkit_cli
 from ..errors import ToolkitError
 from ..models import BundleSummary, LocalSkillSummary, SessionBackupSummary, SessionSummary, SkillBundleSummary
 from ..paths import CodexPaths
-from ..presenters.reports import (
-    print_cleanup_result,
-    print_clone_run_result,
-)
-from ..services.clone import cleanup_clones, clone_to_provider
 from .action_flows import execute_menu_action as _execute_menu_action_flow
 from .action_flows import resolve_menu_action_request as _resolve_menu_action_request_flow
 from .action_flows import run_action as _run_action_flow
@@ -65,9 +60,8 @@ from .ui_panels import render_section_page as _render_section_page_flow
 from .ui_panels import session_action_center as _session_action_center_flow
 from .ui_panels import show_detail_panel as _show_detail_panel_flow
 from .ui_panels import tui_help_text as _tui_help_text_flow
+from .menu_catalog import SECTION_NOTES, TUI_ACTION_NOTES, build_tui_menu_actions, build_tui_menu_sections
 from .view_models import (
-    SECTION_NOTES,
-    TUI_ACTION_NOTES,
     BatchBundleImportSelection,
     BundleBrowserSnapshot,
     BundleCategoryFolderOption,
@@ -76,8 +70,6 @@ from .view_models import (
     ToolkitAppContext,
     TuiMenuAction,
     TuiMenuSection,
-    build_tui_menu_actions,
-    build_tui_menu_sections,
 )
 
 FIXED_THEME_LOGO_WIDTH = 100
@@ -89,29 +81,6 @@ def format_bundle_source_label(source_group: str) -> str:
         "bundle": "bundle 分类",
         "desktop": "desktop 分类",
     }.get(source_group, source_group)
-
-
-def run_clone_mode(*, target_provider: str, dry_run: bool) -> int:
-    try:
-        return print_clone_run_result(clone_to_provider(CodexPaths(), target_provider=target_provider, dry_run=dry_run))
-    except ToolkitError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-
-def run_cleanup_mode(
-    *,
-    target_provider: str,
-    dry_run: bool,
-    delete_warning: Optional[str] = None,
-) -> int:
-    if delete_warning and not dry_run:
-        print(style_text(delete_warning, Ansi.BOLD, Ansi.YELLOW))
-    try:
-        return print_cleanup_result(cleanup_clones(CodexPaths(), target_provider=target_provider, dry_run=dry_run))
-    except ToolkitError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
 
 
 class ToolkitTuiApp:

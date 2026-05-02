@@ -3621,7 +3621,7 @@ class CoreWorkflowTests(unittest.TestCase):
             report_path = workspace / "restore-report.json"
             dst_paths = CodexPaths(home=dst_home)
             with patch(
-                "codex_session_toolkit.services.importing.write_batch_skills_restore_report",
+                "codex_session_toolkit.services.skill_sidecars.write_batch_skills_restore_report",
                 side_effect=OSError("simulated report write failure"),
             ):
                 with pushd(workspace):

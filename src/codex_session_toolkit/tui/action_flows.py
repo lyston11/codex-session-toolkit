@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
+from .maintenance_modes import run_cleanup_mode, run_clone_mode
 from .terminal import Ansi, render_box, style_text
 
 if TYPE_CHECKING:
@@ -161,8 +162,6 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
 
 
 def execute_menu_action(app: "ToolkitTuiApp", chosen_action: "TuiMenuAction") -> None:
-    from .app import run_cleanup_mode, run_clone_mode
-
     choice_id = chosen_action.action_id
     if choice_id == "provider_migration":
         dry_run = app._prompt_execution_mode(
