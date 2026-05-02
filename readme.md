@@ -12,6 +12,7 @@
 - 快速浏览本机最近会话，确认 session 类型、provider、cwd、rollout 路径
 - 把单个会话或整批 Desktop / CLI 会话导出成 Bundle，迁移到另一台电脑
 - 从别的设备导入 Bundle，并按设备文件夹、分类文件夹管理导出记录
+- 独立同步本机自定义 Skills，避免每次会话迁移都把整台机器的 Skill 库搬过去
 - 在切换 provider 后继续复用旧会话，又不覆盖原始 rollout
 - 修复 Codex Desktop 左侧线程不可见、`session_index.jsonl` 缺失、`threads` 表不同步等问题
 
@@ -19,8 +20,9 @@
 
 - **账号登录模式 Provider 识别**：当 `~/.codex/config.toml` 没有 `model_provider` 时，会从 Desktop `threads` 表和现有 rollout 中推断当前账号会话的 provider；导入和 Desktop 修复不再卡在传统 config 字段上
 - **Desktop 线程标题保留**：导出时会优先读取源机器 Desktop `state_*.sqlite` 里的 `threads.title`，导入时原样写回左侧线程栏；第一条用户消息会单独保存为 `FIRST_USER_MESSAGE`，只在没有真实标题时作为兜底
-- **Skill 随会话搬运**：导出时自动识别会话中使用的自定义 Skill 并打包到 Bundle；导入时自动恢复到目标机器，冲突跳过，缺失汇总报告
-- `Session / Browse` 新增按项目路径查看与导出：粘贴项目路径后，可只浏览该项目下的会话，并批量导出到 `./codex_sessions/<machine>/project/<project>/<timestamp>/`
+- **Skills 独立迁移**：主菜单新增 `Skills / Transfer`，可单独浏览、导出和导入本机自定义 Skills
+- **会话只带实际依赖 Skills**：会话 Bundle 会记录可用 Skills 元数据，但只打包本会话明确使用过的自定义 Skills，避免跨设备同步时把 Skill 库越搬越满
+- `Session / Browse` 新增按项目路径查看与导出：粘贴项目路径后，可只浏览该项目下的会话，并批量导出到 `./codex_bundles/<machine>/sessions/project/<project>/<timestamp>/`
 - `Bundle / Transfer` 新增按项目文件夹导入：在 `project` 分类下继续选择具体项目文件夹，并把会话 `cwd` 映射到当前机器的目标项目路径
 - 项目导入会显示本机匹配状态：优先复用原路径，其次尝试同名项目目录；若目标路径不存在，可直接选择是否创建后再导入
 
@@ -42,11 +44,24 @@
 - 批量导出全部 Active Desktop 会话为 Bundle
 - 批量导出全部 CLI 会话为 Bundle
 - 导出时自动识别会话中的可用 Skill，打包自定义 Skill 文件和元数据
+- 只打包本会话实际依赖的自定义 Skills；全量 Skill 同步请使用 `Skills / Transfer`
 - 导入单个 Bundle 为会话
 - 先选设备文件夹、再选分类文件夹，批量导入整类 Bundle
 - `project` 分类支持继续选择项目文件夹，显示本机同名/同路径项目状态，并映射到本机项目路径后批量导入
 - 导入时保留本地更新更晚的 rollout，只补齐缺失 history，避免覆盖更新过的会话
 - 导入时自动恢复打包的 Skill，冲突默认跳过，缺失汇总报告
+
+### Skills / Transfer
+
+- 浏览本机 Skills（默认只显示自定义 Skills）
+- 导出单个自定义 Skill
+- 导出全部自定义 Skills 为 standalone Skills Bundle
+- CLI 也支持按名称或路径导出单个 Skill
+- 浏览 standalone Skills Bundle
+- 导入单个 Skills Bundle
+- 批量导入 Skills Bundle，可按来源机器过滤
+- 删除本机自定义 Skill（会要求二次确认，不删除系统/运行时 Skill）
+- `.agents/skills/foo` 与 `.codex/skills/foo` 会按相同相对目录识别为同一个 Skill，避免重复导入
 
 ## 最常见的工作流
 
@@ -71,6 +86,15 @@
 - 如果 Bundle 来自新版本导出，Desktop 左侧线程名会优先使用源机器保存过的短标题，而不是简单取会话第一句话
 - 如果工作目录或目标项目目录缺失，可直接选择自动创建
 - 如果源会话来自 `custom` provider，而当前机器使用账号登录会话，导入时会优先按目标 Desktop 当前 provider 改写 rollout，避免导入后仍挂在旧 provider 上
+
+### 4. 在两台设备之间同步 Skills
+
+- 在源机器进入 `Skills / Transfer`
+- 选择 `导出全部自定义 Skills`
+- 把生成的 `codex_bundles/<machine>/skills/all/<timestamp>/` 目录带到目标机器同名位置
+- 在目标机器进入 `Skills / Transfer`
+- 选择 `导入单个 Skills Bundle` 或 `批量导入 Skills Bundle`
+- 已存在且内容一致的 Skill 会直接复用；内容冲突默认跳过，不覆盖本机版本
 
 ### Repair / Maintenance
 
@@ -148,11 +172,12 @@ Windows：
 
 在交互终端里无参数启动，会进入统一 TUI。
 
-主菜单分为 3 个功能域：
+主菜单分为 4 个功能域：
 
 1. `Session / Browse`
 2. `Bundle / Transfer`
-3. `Repair / Maintenance`
+3. `Skills / Transfer`
+4. `Repair / Maintenance`
 
 当前交互方式以两级结构为主：
 
@@ -190,6 +215,9 @@ Windows：
 - `m`：按导出机器切换 Bundle 搜索范围
 - `l`：切换“显示全部历史 Bundle / 仅显示最新 Bundle”
 - `i / v`：导入当前 Bundle 为会话 / 导入并自动创建缺失目录
+- `g`：在 Skills 列表切换是否显示系统/运行时 Skills
+- `r`：在 Skills 列表删除选中的自定义 Skill
+- `x`：在 Skills 列表导出全部自定义 Skills
 
 ## CLI 用法
 
@@ -217,6 +245,16 @@ codex-session-toolkit import <session_id> --desktop-visible
 codex-session-toolkit import-desktop-all --machine Work-Laptop --export-group active
 codex-session-toolkit import-desktop-all --machine Work-Laptop --project project-a --target-project-path /Users/example/project-a --desktop-visible
 
+# Skills
+codex-session-toolkit list-skills
+codex-session-toolkit export-skills
+codex-session-toolkit export-skills my-skill
+codex-session-toolkit list-skill-bundles
+codex-session-toolkit import-skill-bundle <skill_bundle_dir_or_skill_name>
+codex-session-toolkit import-skill-bundles --machine Work-Laptop
+codex-session-toolkit delete-skill my-skill --source-root agents --dry-run
+codex-session-toolkit delete-skill my-skill --source-root agents
+
 # 修复 Desktop 可见性
 codex-session-toolkit repair-desktop
 codex-session-toolkit repair-desktop --dry-run
@@ -242,7 +280,7 @@ codex-session-toolkit repair-desktop --include-archived
 
 ## Bundle 目录策略
 
-所有 Bundle 相关动作都只允许在当前目录下的 `./codex_sessions/` 中进行。
+所有新版 Bundle 相关动作都只允许在当前目录下的 `./codex_bundles/` 中进行。
 
 这包括：
 
@@ -253,20 +291,22 @@ codex-session-toolkit repair-desktop --include-archived
 
 不再提供用户可自定义的 `--bundle-root`。
 
-如果你手动传入一个 Bundle 目录，这个目录也必须位于 `./codex_sessions/` 下面，否则工具会拒绝执行。
+如果你手动传入一个 Bundle 目录，这个目录也必须位于 `./codex_bundles/` 或旧版兼容目录 `./codex_sessions/` 下面，否则工具会拒绝执行。
 
 默认目录：
 
 - Codex 数据目录：`~/.codex/`
-- Bundle 根目录：`./codex_sessions/`
+- Bundle 根目录：`./codex_bundles/`
 
 默认归档结构：
 
-- `./codex_sessions/<machine>/single/<timestamp>/<session_id>/`
-- `./codex_sessions/<machine>/desktop/<timestamp>/<session_id>/`
-- `./codex_sessions/<machine>/active/<timestamp>/<session_id>/`
-- `./codex_sessions/<machine>/cli/<timestamp>/<session_id>/`
-- `./codex_sessions/<machine>/project/<project>/<timestamp>/<session_id>/`
+- `./codex_bundles/<machine>/sessions/single/<timestamp>/<session_id>/`
+- `./codex_bundles/<machine>/sessions/desktop/<timestamp>/<session_id>/`
+- `./codex_bundles/<machine>/sessions/active/<timestamp>/<session_id>/`
+- `./codex_bundles/<machine>/sessions/cli/<timestamp>/<session_id>/`
+- `./codex_bundles/<machine>/sessions/project/<project>/<timestamp>/<session_id>/`
+- `./codex_bundles/<machine>/skills/single/<timestamp>/`
+- `./codex_bundles/<machine>/skills/all/<timestamp>/`
 
 其中 `<machine>` 默认来自当前电脑主机名；如需手动指定，可以在导出前设置环境变量 `CST_MACHINE_LABEL`。
 
@@ -280,30 +320,39 @@ codex-session-toolkit repair-desktop --include-archived
 
 兼容旧布局：
 
-- 工具仍会继续识别 `./codex_sessions/bundles/` 与 `./codex_sessions/desktop_bundles/` 下的旧导出
-- 但新的导出默认都会写入统一的 `./codex_sessions/<machine>/<category>/...` 结构
+- 工具仍会继续识别 `./codex_sessions/`、`./codex_sessions/bundles/` 与 `./codex_sessions/desktop_bundles/` 下的旧导出
+- 但新的导出默认都会写入统一的 `./codex_bundles/<machine>/sessions/...` 或 `./codex_bundles/<machine>/skills/...` 结构
 
-Bundle 内默认包含：
+会话 Bundle 内默认包含：
 
 - `codex/<relative rollout path>.jsonl`
 - `history.jsonl`
 - `manifest.env`
 - `skills_manifest.json`（可选，记录会话中使用的 Skill 信息）
-- `skills/`（可选，包含打包的自定义 Skill 文件）
+- `skills/`（可选，只包含本会话实际依赖的自定义 Skill 文件）
+
+standalone Skills Bundle 内默认包含：
+
+- `manifest.env`
+- `skills_manifest.json`
+- `skills/`
 
 ### Skill 搬运
 
-导出时工具会自动扫描会话中的 `<skills_instructions>` 块，识别该会话使用了哪些 Skill：
+会话导出时，工具会自动扫描会话中的 `<skills_instructions>` 块，区分“上下文可用”和“本会话实际使用”：
 
-- **自定义 Skill**（`~/.agents/skills/` 和 `~/.codex/skills/` 下非 `.system`、非 `codex-primary-runtime` 的目录）会被完整打包到 `skills/` 目录
+- **实际使用过的自定义 Skill**（`~/.agents/skills/` 和 `~/.codex/skills/` 下非 `.system`、非 `codex-primary-runtime` 的目录）会被完整打包到 `skills/` 目录
+- **仅在上下文中可用但没有使用过的 Skill** 只记录元数据，不打包文件，也不会在导入时报 missing
 - **系统 Skill**（`.system/`）和 **运行时 Skill**（`codex-primary-runtime/`）只记录元数据，不打包文件
+
+如果你想把一台设备上的 Skills 全量同步到另一台设备，请使用 `Skills / Transfer` 或 CLI 的 `export-skills` / `import-skill-bundle`，不要依赖会话导出顺手携带。
 
 导入时自动恢复：
 
 - 本机已存在且内容一致 → `already_present`，直接复用
 - 本机不存在 → `restored`，从 Bundle 复制
 - 本机已存在但内容不同 → 默认跳过（`conflict_skipped`），不覆盖
-- Bundle 中未打包 → `missing`，记录到缺失报告
+- 会话实际依赖但 Bundle 中未打包 → `missing`，记录到缺失报告
 
 `--skills-mode` 参数控制导入行为：
 
@@ -316,7 +365,7 @@ Bundle 内默认包含：
 
 批量导入时，工具还会额外生成一份 Skill 恢复报告：
 
-- 位置通常在当前 `codex_sessions/` 根目录下，文件名形如 `_skills_restore_report.<timestamp>.<id>.json`
+- 位置通常在当前 `codex_bundles/` 根目录下，文件名形如 `_skills_restore_report.<timestamp>.<id>.json`
 - 报告会按 session 记录 `restored / already_present / conflict_skipped / missing / failed`
 - CLI 汇总输出也会显示总计数，方便导入后快速判断还需要手工补哪些 Skill
 

@@ -39,11 +39,35 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
         app._open_bundle_browser(mode="view")
         return None, None
 
+    if menu_action.action_id == "list_skills":
+        app._open_local_skill_browser(mode="view")
+        return None, None
+
+    if menu_action.action_id == "browse_skill_bundles":
+        app._open_skill_bundle_browser(mode="view")
+        return None, None
+
     if menu_action.action_id == "export_one":
         summary = app._open_session_browser(mode="select")
         if not summary:
             return None, None
         return f"导出会话 {summary.session_id} 为 Bundle", ["export", summary.session_id]
+
+    if menu_action.action_id == "export_skills_all":
+        return "导出全部自定义 Skills", ["export-skills"]
+
+    if menu_action.action_id == "export_skill_one":
+        selected = app._open_local_skill_browser(mode="select")
+        if not selected:
+            return None, None
+        if selected.location_kind != "custom":
+            app._show_detail_panel(
+                "导出 Skill",
+                ["系统/运行时 Skills 只记录元数据，不作为 standalone Skills Bundle 导出。"],
+                border_codes=(Ansi.DIM, Ansi.YELLOW),
+            )
+            return None, None
+        return f"导出 Skill {selected.relative_dir}", ["export-skills", selected.relative_dir]
 
     if menu_action.action_id == "import_one":
         bundle = app._open_bundle_browser(mode="select")
@@ -63,6 +87,30 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
         action_name = f"导入 Bundle {bundle.session_id} 为会话"
         if desktop_visible:
             action_name += "（自动创建目录）"
+        return action_name, args
+
+    if menu_action.action_id == "import_skill_bundle":
+        bundle = app._open_skill_bundle_browser(mode="select")
+        if not bundle:
+            return None, None
+        return f"导入 Skills Bundle {bundle.bundle_dir.name}", ["import-skill-bundle", str(bundle.bundle_dir)]
+
+    if menu_action.action_id == "import_skill_bundles":
+        machine_filter = app._prompt_value(
+            title="批量导入 Skills Bundle",
+            prompt_label="来源机器过滤",
+            help_lines=[
+                "留空表示导入全部 standalone Skills Bundle。",
+                "也可以输入来源机器 key 或 label，只导入这一台设备导出的 Skills Bundle。",
+            ],
+            allow_empty=True,
+        )
+        args = ["import-skill-bundles"]
+        if machine_filter:
+            args.extend(["--machine", machine_filter])
+        action_name = "批量导入 Skills Bundle"
+        if machine_filter:
+            action_name += f"（{machine_filter}）"
         return action_name, args
 
     if menu_action.action_id == "import_desktop_all":
@@ -194,6 +242,26 @@ def execute_menu_action(app: "ToolkitTuiApp", chosen_action: "TuiMenuAction") ->
                 target_provider=app.context.target_provider,
                 dry_run=dry_run,
             ),
+            danger=True,
+        )
+        return
+
+    if choice_id == "delete_skill":
+        selected = app._open_local_skill_browser(mode="select")
+        if not selected:
+            return
+        cli_args = ["delete-skill", selected.relative_dir, "--source-root", selected.source_root]
+        if not app._confirm_dangerous_action(
+            cli_args,
+            warning=f"将删除本机 Skill：{selected.source_root}/{selected.relative_dir}。",
+            impact=str(selected.skill_dir),
+        ):
+            return
+        app._run_action(
+            f"删除本机 Skill {selected.relative_dir}",
+            cli_args,
+            dry_run=False,
+            runner=lambda args=cli_args: app._run_toolkit(args),
             danger=True,
         )
         return

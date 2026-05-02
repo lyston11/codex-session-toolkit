@@ -76,15 +76,19 @@ def build_machine_bundle_root(bundle_root: Path, machine_key: Optional[str] = No
 
 
 def build_single_export_root(bundle_root: Path, machine_key: Optional[str] = None) -> Path:
-    return build_machine_bundle_root(bundle_root, machine_key) / "single" / export_batch_slug()
+    return build_machine_bundle_root(bundle_root, machine_key) / "sessions" / "single" / export_batch_slug()
 
 
 def build_batch_export_root(bundle_root: Path, archive_group: str, machine_key: Optional[str] = None) -> Path:
-    return build_machine_bundle_root(bundle_root, machine_key) / archive_group / export_batch_slug()
+    return build_machine_bundle_root(bundle_root, machine_key) / "sessions" / archive_group / export_batch_slug()
 
 
 def build_project_export_root(bundle_root: Path, project_key: str, machine_key: Optional[str] = None) -> Path:
-    return build_machine_bundle_root(bundle_root, machine_key) / "project" / project_key / export_batch_slug()
+    return build_machine_bundle_root(bundle_root, machine_key) / "sessions" / "project" / project_key / export_batch_slug()
+
+
+def build_skills_export_root(bundle_root: Path, export_group: str, machine_key: Optional[str] = None) -> Path:
+    return build_machine_bundle_root(bundle_root, machine_key) / "skills" / export_group / export_batch_slug()
 
 
 def classify_session_kind(source_name: str, originator_name: str) -> str:
@@ -114,10 +118,19 @@ def ensure_path_within_dir(target_path: Path, base_dir: Path, label: str) -> Non
 
 
 def restrict_to_local_bundle_workspace(paths: CodexPaths, target_path: Path, label: str) -> Path:
-    workspace = paths.local_bundle_workspace.expanduser()
     target_path = Path(target_path).expanduser()
-    ensure_path_within_dir(target_path, workspace, label)
-    return target_path
+    workspaces = (
+        paths.local_bundle_workspace.expanduser(),
+        paths.legacy_session_bundle_workspace.expanduser(),
+    )
+    for workspace in workspaces:
+        try:
+            ensure_path_within_dir(target_path, workspace, label)
+            return target_path
+        except ToolkitError:
+            continue
+    allowed = ", ".join(str(path) for path in workspaces)
+    raise ToolkitError(f"{label} must be under one of: {allowed}")
 
 
 def normalize_bundle_root(

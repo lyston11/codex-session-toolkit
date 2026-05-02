@@ -179,6 +179,7 @@ def collect_known_bundle_summaries(
 
     summaries: List[BundleSummary] = []
     roots: List[Tuple[str, Path, str]] = [("primary", paths.default_bundle_root, source_group)]
+    roots.append(("legacy-sessions", paths.legacy_session_bundle_root, source_group))
     if source_group in {"all", "bundle"}:
         roots.append(("legacy-bundle", paths.legacy_bundle_root, "bundle"))
     if source_group in {"all", "desktop"}:
@@ -239,6 +240,7 @@ def iter_known_bundle_directories(
         raise ToolkitError(f"Unsupported source_group: {source_group}")
 
     roots: List[Tuple[str, Path, str]] = [("primary", paths.default_bundle_root, source_group)]
+    roots.append(("legacy-sessions", paths.legacy_session_bundle_root, source_group))
     if source_group in {"all", "bundle"}:
         roots.append(("legacy-bundle", paths.legacy_bundle_root, "bundle"))
     if source_group in {"all", "desktop"}:

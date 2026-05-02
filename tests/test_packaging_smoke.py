@@ -61,7 +61,7 @@ class PackagingSmokeTests(unittest.TestCase):
 
     def test_tui_main_sections_are_grouped_by_domain(self) -> None:
         section_ids = [section.section_id for section in build_tui_menu_sections()]
-        self.assertEqual(section_ids, ["session", "bundle", "repair"])
+        self.assertEqual(section_ids, ["session", "bundle", "skills", "repair"])
 
         actions_by_section = {}
         labels_by_action = {}
@@ -90,10 +90,25 @@ class PackagingSmokeTests(unittest.TestCase):
                 "clean_legacy",
             },
         )
+        self.assertEqual(
+            actions_by_section["skills"],
+            {
+                "list_skills",
+                "export_skill_one",
+                "export_skills_all",
+                "browse_skill_bundles",
+                "import_skill_bundle",
+                "import_skill_bundles",
+                "delete_skill",
+            },
+        )
         self.assertEqual(labels_by_action["provider_migration"], "迁移到当前 Provider")
         self.assertEqual(labels_by_action["desktop_repair"], "修复会话在 Desktop 中显示")
         self.assertEqual(labels_by_action["clean_legacy"], "清理旧版无标记副本")
         self.assertEqual(labels_by_action["project_sessions"], "按项目路径查看并导出会话")
+        self.assertEqual(labels_by_action["list_skills"], "浏览本机 Skills")
+        self.assertEqual(labels_by_action["export_skill_one"], "导出单个 Skill")
+        self.assertEqual(labels_by_action["delete_skill"], "删除本机 Skill")
 
     def test_tui_desktop_repair_passes_target_provider_explicitly(self) -> None:
         self.assertEqual(

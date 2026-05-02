@@ -13,9 +13,14 @@ from ..models import (
     CloneRunResult,
     ExportResult,
     ImportResult,
+    LocalSkillSummary,
     OperationWarning,
     RepairResult,
     SessionSummary,
+    SkillBundleSummary,
+    SkillDeleteResult,
+    SkillExportResult,
+    SkillImportResult,
     ValidationReport,
 )
 
@@ -44,6 +49,34 @@ def print_bundle_rows(rows: list[BundleSummary]) -> int:
         print(
             f"{bundle.session_id} | {bundle.export_group_label or bundle.export_group or '-'} | {bundle.source_machine or '-'} | {bundle.session_kind or '-'} | "
             f"{updated} | {bundle.bundle_dir} | {title[:80]}"
+        )
+    return 0
+
+
+def print_local_skill_rows(rows: list[LocalSkillSummary]) -> int:
+    if not rows:
+        print("No matching Skills found.")
+        return 0
+    for skill in rows:
+        print(
+            f"{skill.name} | {skill.source_root} | {skill.location_kind} | "
+            f"{skill.relative_dir} | {skill.skill_dir}"
+        )
+    return 0
+
+
+def print_skill_bundle_rows(rows: list[SkillBundleSummary]) -> int:
+    if not rows:
+        print("No matching Skill bundles found.")
+        return 0
+    for bundle in rows:
+        names = ", ".join(bundle.skills[:5])
+        if len(bundle.skills) > 5:
+            names += f", ... +{len(bundle.skills) - 5}"
+        print(
+            f"{bundle.exported_at or '-'} | {bundle.source_machine or '-'} | "
+            f"{bundle.export_group or '-'} | {bundle.bundled_skill_count}/{bundle.skill_count} | "
+            f"{bundle.bundle_dir} | {names}"
         )
     return 0
 
@@ -175,6 +208,39 @@ def print_export_result(result: ExportResult) -> int:
         print(f"Skills bundled:   {result.skills_bundled_count}")
     if result.skills_manifest_path:
         print(f"Skills manifest:  {result.skills_manifest_path}")
+    return 0
+
+
+def print_skill_export_result(result: SkillExportResult) -> int:
+    for warning in result.warnings:
+        print(_format_operation_warning(warning), file=sys.stderr)
+    print(f"Exported Skills: {result.exported_count}")
+    print(f"Skipped Skills:  {result.skipped_count}")
+    print(f"Source machine:  {result.source_machine or result.source_machine_key}")
+    print(f"Bundle:          {result.bundle_dir}")
+    if result.manifest_file:
+        print(f"Manifest:        {result.manifest_file}")
+    return 0
+
+
+def print_skill_import_result(result: SkillImportResult) -> int:
+    for warning in result.warnings:
+        print(_format_operation_warning(warning), file=sys.stderr)
+    print(f"Skill bundle:             {result.bundle_dir}")
+    print(f"Skills restored:          {result.restored_count}")
+    print(f"Skills already present:   {result.already_present_count}")
+    print(f"Skills conflict skipped:  {result.conflict_skipped_count}")
+    print(f"Skills missing:           {result.missing_count}")
+    print(f"Skills failed:            {result.failed_count}")
+    return 0
+
+
+def print_skill_delete_result(result: SkillDeleteResult) -> int:
+    action = "Would delete Skill" if result.dry_run else "Deleted Skill"
+    print(f"{action}: {result.name}")
+    print(f"Source root: {result.source_root}")
+    print(f"Relative dir: {result.relative_dir}")
+    print(f"Path: {result.skill_dir}")
     return 0
 
 

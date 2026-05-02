@@ -48,6 +48,12 @@ CLI_SUBCOMMANDS = {
     "export-cli-all",
     "import",
     "import-desktop-all",
+    "list-skills",
+    "export-skills",
+    "list-skill-bundles",
+    "import-skill-bundle",
+    "import-skill-bundles",
+    "delete-skill",
     "repair-desktop",
 }
 
@@ -58,6 +64,8 @@ def build_app_context(paths: Optional[CodexPaths] = None) -> ToolkitAppContext:
         target_provider=resolve_target_model_provider(paths),
         active_sessions_dir=str(paths.sessions_dir),
         config_path=str(paths.config_file),
+        bundle_root_label=str(paths.default_bundle_root),
+        desktop_bundle_root_label=str(paths.default_desktop_bundle_root),
     )
 
 
@@ -81,6 +89,12 @@ def create_arg_parser() -> argparse.ArgumentParser:
             "  export-cli-all        Batch export all CLI sessions\n"
             "  import                Import one bundle\n"
             "  import-desktop-all    Batch import one machine/category or project folder\n"
+            "  list-skills           Browse local Skills\n"
+            "  export-skills         Export standalone Skills bundle\n"
+            "  list-skill-bundles    Browse standalone Skills bundles\n"
+            "  import-skill-bundle   Import one standalone Skills bundle\n"
+            "  import-skill-bundles  Batch import standalone Skills bundles\n"
+            "  delete-skill          Delete one local custom Skill\n"
             "  repair-desktop        Repair active Desktop visibility/index/provider\n\n"
             "Legacy flags still work:\n"
             "  --dry-run             Preview clone mode\n"
