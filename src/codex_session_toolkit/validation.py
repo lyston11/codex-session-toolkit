@@ -7,7 +7,7 @@ import re
 import shlex
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Mapping
 
 from .errors import ToolkitError
 from .support import ensure_path_within_dir, extract_iso_timestamp
@@ -62,6 +62,13 @@ def load_manifest(manifest_file: Path) -> Dict[str, str]:
     if not values.get("SESSION_ID") or not values.get("RELATIVE_PATH"):
         raise ToolkitError("Manifest is missing required fields.")
     return values
+
+
+def write_manifest(manifest_file: Path, values: Mapping[str, str]) -> None:
+    manifest_file.parent.mkdir(parents=True, exist_ok=True)
+    with manifest_file.open("w", encoding="utf-8") as fh:
+        for key, value in values.items():
+            fh.write(f"{key}={shlex.quote(str(value))}\n")
 
 
 def validate_jsonl_file(
@@ -149,4 +156,5 @@ __all__ = [
     "validate_jsonl_file",
     "validate_relative_path",
     "validate_session_id",
+    "write_manifest",
 ]

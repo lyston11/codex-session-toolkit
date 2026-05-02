@@ -1,7 +1,8 @@
 """Compatibility wrapper for the refactored TUI package.
 
 Prefer importing runtime behavior from ``codex_session_toolkit.tui.app`` and
-TUI-only dataclasses/menu metadata from ``codex_session_toolkit.tui.view_models``.
+TUI-only dataclasses from ``codex_session_toolkit.tui.view_models``. Menu
+metadata lives in ``codex_session_toolkit.tui.menu_catalog``.
 This wrapper is intentionally forwarding-only and should stay limited to
 legacy import compatibility until downstream callers migrate.
 """
@@ -20,11 +21,11 @@ _COMPAT_EXPORTS = {
     "ToolkitTuiApp": (".tui.app", "ToolkitTuiApp"),
     "TuiMenuAction": (".tui.view_models", "TuiMenuAction"),
     "TuiMenuSection": (".tui.view_models", "TuiMenuSection"),
-    "build_tui_menu_actions": (".tui.view_models", "build_tui_menu_actions"),
-    "build_tui_menu_sections": (".tui.view_models", "build_tui_menu_sections"),
+    "build_tui_menu_actions": (".tui.menu_catalog", "build_tui_menu_actions"),
+    "build_tui_menu_sections": (".tui.menu_catalog", "build_tui_menu_sections"),
     "format_bundle_source_label": (".tui.app", "format_bundle_source_label"),
-    "run_cleanup_mode": (".tui.app", "run_cleanup_mode"),
-    "run_clone_mode": (".tui.app", "run_clone_mode"),
+    "run_cleanup_mode": (".tui.maintenance_modes", "run_cleanup_mode"),
+    "run_clone_mode": (".tui.maintenance_modes", "run_clone_mode"),
     "run_tui": (".tui.app", "run_tui"),
 }
 

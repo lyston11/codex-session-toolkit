@@ -1,3 +1,4 @@
+import argparse
 import ast
 import os
 import subprocess
@@ -14,13 +15,22 @@ if str(SRC_DIR) not in sys.path:
 
 from codex_session_toolkit import APP_COMMAND, CodexPaths, ToolkitError, __version__, build_app_context, resolve_target_model_provider, run_cli  # noqa: E402
 from codex_session_toolkit import core as core_api  # noqa: E402
+from codex_session_toolkit.command_catalog import CLI_SUBCOMMANDS, COMMAND_CATALOG, command_domain, command_domains, commands_for_domain  # noqa: E402
+from codex_session_toolkit.application.command_handlers import COMMAND_HANDLERS  # noqa: E402
+from codex_session_toolkit.command_parser import create_parser as build_command_parser  # noqa: E402
+from codex_session_toolkit.commands import create_parser  # noqa: E402
+from codex_session_toolkit.stores import skills as skills_store  # noqa: E402
+from codex_session_toolkit.stores import skills_manifest as skills_manifest_store  # noqa: E402
 import codex_session_toolkit.terminal_ui as terminal_ui_compat  # noqa: E402
 import codex_session_toolkit.tui_app as tui_app_compat  # noqa: E402
 from codex_session_toolkit.cli import DEFAULT_MODEL_PROVIDER, create_arg_parser  # noqa: E402
+from codex_session_toolkit.tui.maintenance_modes import run_cleanup_mode, run_clone_mode  # noqa: E402
 from codex_session_toolkit.tui.action_flows import build_desktop_repair_cli_args  # noqa: E402
+from codex_session_toolkit.tui.menu_catalog import TUI_ACTION_SECTION_OVERRIDES, build_tui_menu_actions, build_tui_menu_sections, tui_action_section  # noqa: E402
 from codex_session_toolkit.tui.terminal import LOGO_FONT_BANNER  # noqa: E402
 from codex_session_toolkit.tui.terminal_io import read_key  # noqa: E402
-from codex_session_toolkit.tui.view_models import ToolkitAppContext, build_tui_menu_actions, build_tui_menu_sections  # noqa: E402
+from codex_session_toolkit.tui import view_models as tui_view_models  # noqa: E402
+from codex_session_toolkit.tui.view_models import ToolkitAppContext  # noqa: E402
 
 
 def _module_env() -> dict:
@@ -42,6 +52,47 @@ class PackagingSmokeTests(unittest.TestCase):
         parser = create_arg_parser()
         self.assertEqual(parser.prog, APP_COMMAND)
 
+    def test_canonical_cli_commands_have_registered_handlers(self) -> None:
+        parser = create_parser()
+        command_names = set()
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                command_names.update(action.choices)
+
+        self.assertEqual(set(CLI_SUBCOMMANDS), command_names)
+        self.assertEqual(set(COMMAND_HANDLERS), set(CLI_SUBCOMMANDS))
+        self.assertTrue(all(callable(handler) for handler in COMMAND_HANDLERS.values()))
+
+    def test_canonical_cli_command_catalog_is_grouped_by_domain(self) -> None:
+        self.assertEqual(command_domains(), ("session", "bundle", "skills", "repair"))
+        self.assertEqual(len({spec.name for spec in COMMAND_CATALOG}), len(COMMAND_CATALOG))
+        self.assertEqual({spec.domain for spec in COMMAND_CATALOG}, set(command_domains()))
+        self.assertTrue(all(commands_for_domain(domain) for domain in command_domains()))
+
+    def test_commands_module_reexports_parser_builder(self) -> None:
+        self.assertIs(create_parser, build_command_parser)
+
+    def test_cli_parser_module_stays_decoupled_from_service_layers(self) -> None:
+        forbidden_prefixes = (".presenters", ".services", ".support")
+
+        for path in (
+            ROOT_DIR / "src" / "codex_session_toolkit" / "commands.py",
+            ROOT_DIR / "src" / "codex_session_toolkit" / "command_parser.py",
+        ):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    module_name = "." * node.level + (node.module or "")
+                    self.assertFalse(
+                        module_name.startswith(forbidden_prefixes),
+                        f"{path.relative_to(ROOT_DIR)} should route execution through command_handlers, not {module_name}",
+                    )
+
+    def test_skills_store_reexports_manifest_models_for_compatibility(self) -> None:
+        self.assertIs(skills_store.SkillDescriptor, skills_manifest_store.SkillDescriptor)
+        self.assertIs(skills_store.SkillsManifest, skills_manifest_store.SkillsManifest)
+        self.assertIs(skills_store.read_skills_manifest, skills_manifest_store.read_skills_manifest)
+
     def test_tui_context_uses_packaged_command_name(self) -> None:
         context = ToolkitAppContext(
             target_provider="demo-provider",
@@ -54,20 +105,28 @@ class PackagingSmokeTests(unittest.TestCase):
         self.assertIn("ToolkitAppContext", tui_app_compat.__all__)
         self.assertIn("run_tui", tui_app_compat.__all__)
         self.assertIs(ToolkitAppContext, tui_app_compat.ToolkitAppContext)
+        self.assertIs(run_cleanup_mode, tui_app_compat.run_cleanup_mode)
+        self.assertIs(run_clone_mode, tui_app_compat.run_clone_mode)
         self.assertIs(build_tui_menu_actions, tui_app_compat.build_tui_menu_actions)
+        self.assertIs(build_tui_menu_actions, tui_view_models.build_tui_menu_actions)
         self.assertIn("render_box", terminal_ui_compat.__all__)
         self.assertIs(LOGO_FONT_BANNER, terminal_ui_compat.LOGO_FONT_BANNER)
         self.assertIs(read_key, terminal_ui_compat.read_key)
 
     def test_tui_main_sections_are_grouped_by_domain(self) -> None:
         section_ids = [section.section_id for section in build_tui_menu_sections()]
-        self.assertEqual(section_ids, ["session", "bundle", "skills", "repair"])
+        self.assertEqual(section_ids, list(command_domains()))
 
         actions_by_section = {}
         labels_by_action = {}
         for action in build_tui_menu_actions():
             actions_by_section.setdefault(action.section_id, set()).add(action.action_id)
             labels_by_action[action.action_id] = action.label
+            self.assertEqual(action.section_id, tui_action_section(action.action_id, action.cli_args))
+            if action.cli_args:
+                self.assertIn(action.cli_args[0], CLI_SUBCOMMANDS)
+                if action.action_id not in TUI_ACTION_SECTION_OVERRIDES:
+                    self.assertEqual(action.section_id, command_domain(action.cli_args[0]))
 
         self.assertEqual(actions_by_section["session"], {"list_sessions", "export_one", "project_sessions"})
         self.assertEqual(

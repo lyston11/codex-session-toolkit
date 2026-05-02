@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shlex
 import shutil
 import tempfile
 from collections import OrderedDict
@@ -13,38 +12,30 @@ from typing import Optional
 from ..errors import ToolkitError
 from ..models import BatchExportResult, ExportResult, OperationWarning
 from ..paths import CodexPaths
+from ..services.export_planning import build_project_export_plan, build_session_kind_export_plan
 from ..stores.desktop_state import load_thread_metadata
+from ..stores.bundle_repository import write_batch_export_manifest
 from ..stores.history import collect_history_lines_for_session, first_history_text
 from ..stores.index import is_weak_thread_name
 from ..stores.session_files import (
     build_session_preview,
-    collect_session_ids_for_project,
-    collect_session_ids_for_kind,
     extract_last_timestamp,
     extract_session_field_from_file,
     find_session_file,
 )
 from ..stores.session_parser import parse_session_summary_file
 from ..support import (
-    build_batch_export_root,
-    build_machine_bundle_root,
-    build_project_export_root,
     build_single_export_root,
     classify_session_kind,
     detect_machine_key,
     detect_machine_label,
     normalize_bundle_root,
-    normalize_project_path,
-    project_label_from_path,
-    project_label_to_key,
 )
-from ..validation import normalize_relative_path, validate_jsonl_file, validate_session_id
+from ..validation import normalize_relative_path, validate_jsonl_file, validate_session_id, write_manifest
+from ..stores.skills_manifest import SKILLS_DIR_NAME, SKILLS_MANIFEST_FILENAME, write_skills_manifest
 from ..stores.skills import (
-    SKILLS_DIR_NAME,
-    SKILLS_MANIFEST_FILENAME,
     bundle_skills,
     parse_skills_from_session,
-    write_skills_manifest,
 )
 
 
@@ -171,9 +162,7 @@ def export_session(
             EXPORT_MACHINE=machine_label,
             EXPORT_MACHINE_KEY=machine_key,
         )
-        with manifest_file.open("w", encoding="utf-8") as fh:
-            for key, value in manifest_data.items():
-                fh.write(f"{key}={shlex.quote(value)}\n")
+        write_manifest(manifest_file, manifest_data)
 
         if final_bundle_dir.exists():
             old_bundle_backup = bundle_root / f".{session_id}.bak.{int(datetime.now().timestamp())}"
@@ -222,87 +211,45 @@ def export_sessions_for_kind(
     archive_group: str,
     skills_mode: str = "best-effort",
 ) -> BatchExportResult:
-    session_ids = collect_session_ids_for_kind(paths, session_kind=session_kind, active_only=active_only)
-    machine_key = detect_machine_key()
-    machine_label = detect_machine_label()
-    machine_root = build_machine_bundle_root(bundle_root, machine_key)
-    export_root = build_batch_export_root(bundle_root, archive_group, machine_key)
+    plan = build_session_kind_export_plan(
+        paths,
+        session_kind=session_kind,
+        bundle_root=bundle_root,
+        dry_run=dry_run,
+        active_only=active_only,
+        manifest_stem=manifest_stem,
+        summary_label=summary_label,
+        archive_group=archive_group,
+    )
 
-    if dry_run:
-        return BatchExportResult(
-            summary_label=summary_label,
-            bundle_root=bundle_root,
-            export_root=export_root,
-            machine_root=machine_root,
-            source_machine=machine_label,
-            source_machine_key=machine_key,
-            dry_run=True,
-            active_only=active_only,
-            session_kind=session_kind,
-            session_ids=session_ids,
-            success_ids=[],
-            failed_exports=[],
-            manifest_file=None,
-            export_group=archive_group,
-        )
+    if plan.dry_run or not plan.session_ids:
+        return plan.result()
 
-    if not session_ids:
-        return BatchExportResult(
-            summary_label=summary_label,
-            bundle_root=bundle_root,
-            export_root=export_root,
-            machine_root=machine_root,
-            source_machine=machine_label,
-            source_machine_key=machine_key,
-            dry_run=False,
-            active_only=active_only,
-            session_kind=session_kind,
-            session_ids=[],
-            success_ids=[],
-            failed_exports=[],
-            manifest_file=None,
-            export_group=archive_group,
-        )
-
-    export_root.mkdir(parents=True, exist_ok=True)
+    plan.export_root.mkdir(parents=True, exist_ok=True)
     success_ids: list[str] = []
     failed_exports: list[tuple[str, str]] = []
     total_skills_bundled = 0
     warnings: list[OperationWarning] = []
 
-    for session_id in session_ids:
+    for session_id in plan.session_ids:
         try:
-            result = export_session(paths, session_id, bundle_root=export_root, skills_mode=skills_mode)
+            result = export_session(paths, session_id, bundle_root=plan.export_root, skills_mode=skills_mode)
             success_ids.append(session_id)
             total_skills_bundled += result.skills_bundled_count
             warnings.extend(result.warnings)
         except (ToolkitError, OSError) as exc:
             failed_exports.append((session_id, str(exc)))
 
-    manifest_file = export_root / f"_{manifest_stem}_export_manifest.txt"
-    with manifest_file.open("w", encoding="utf-8") as fh:
-        fh.write(f"# exported_at={datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n")
-        fh.write(f"# session_kind={session_kind}\n")
-        fh.write(f"# active_only={1 if active_only else 0}\n")
-        fh.write(f"# count={len(success_ids)}\n")
-        for session_id in success_ids:
-            fh.write(session_id + "\n")
+    manifest_file = write_batch_export_manifest(
+        plan.manifest_file,
+        plan.manifest_metadata_for_successes(len(success_ids)),
+        success_ids,
+    )
 
-    return BatchExportResult(
-        summary_label=summary_label,
-        bundle_root=bundle_root,
-        export_root=export_root,
-        machine_root=machine_root,
-        source_machine=machine_label,
-        source_machine_key=machine_key,
-        dry_run=False,
-        active_only=active_only,
-        session_kind=session_kind,
-        session_ids=session_ids,
+    return plan.result(
         success_ids=success_ids,
         failed_exports=failed_exports,
         manifest_file=manifest_file,
-        export_group=archive_group,
         total_skills_bundled=total_skills_bundled,
         warnings=warnings,
     )
@@ -368,106 +315,42 @@ def export_project_sessions(
     active_only: bool = False,
     skills_mode: str = "best-effort",
 ) -> BatchExportResult:
-    normalized_project_path = normalize_project_path(project_path)
-    if not normalized_project_path:
-        raise ToolkitError("Project path cannot be empty.")
-
-    project_label = project_label_from_path(normalized_project_path) or "root"
-    project_key = project_label_to_key(project_label)
-    resolved_bundle_root = normalize_bundle_root(paths, bundle_root, paths.default_bundle_root)
-    session_ids = collect_session_ids_for_project(
+    plan = build_project_export_plan(
         paths,
-        project_path=normalized_project_path,
+        project_path,
+        bundle_root=bundle_root,
+        dry_run=dry_run,
         active_only=active_only,
     )
-    machine_key = detect_machine_key()
-    machine_label = detect_machine_label()
-    machine_root = build_machine_bundle_root(resolved_bundle_root, machine_key)
-    export_root = build_project_export_root(resolved_bundle_root, project_key, machine_key)
-    summary_label = f"项目 {project_label}"
 
-    if dry_run:
-        return BatchExportResult(
-            summary_label=summary_label,
-            bundle_root=resolved_bundle_root,
-            export_root=export_root,
-            machine_root=machine_root,
-            source_machine=machine_label,
-            source_machine_key=machine_key,
-            dry_run=True,
-            active_only=active_only,
-            session_kind="project",
-            session_ids=session_ids,
-            success_ids=[],
-            failed_exports=[],
-            manifest_file=None,
-            selection_label=project_label,
-            selection_path=normalized_project_path,
-            export_group="project",
-        )
+    if plan.dry_run or not plan.session_ids:
+        return plan.result()
 
-    if not session_ids:
-        return BatchExportResult(
-            summary_label=summary_label,
-            bundle_root=resolved_bundle_root,
-            export_root=export_root,
-            machine_root=machine_root,
-            source_machine=machine_label,
-            source_machine_key=machine_key,
-            dry_run=False,
-            active_only=active_only,
-            session_kind="project",
-            session_ids=[],
-            success_ids=[],
-            failed_exports=[],
-            manifest_file=None,
-            selection_label=project_label,
-            selection_path=normalized_project_path,
-            export_group="project",
-        )
-
-    export_root.mkdir(parents=True, exist_ok=True)
+    plan.export_root.mkdir(parents=True, exist_ok=True)
     success_ids: list[str] = []
     failed_exports: list[tuple[str, str]] = []
     total_skills_bundled = 0
     warnings: list[OperationWarning] = []
 
-    for session_id in session_ids:
+    for session_id in plan.session_ids:
         try:
-            result = export_session(paths, session_id, bundle_root=export_root, skills_mode=skills_mode)
+            result = export_session(paths, session_id, bundle_root=plan.export_root, skills_mode=skills_mode)
             success_ids.append(session_id)
             total_skills_bundled += result.skills_bundled_count
             warnings.extend(result.warnings)
         except (ToolkitError, OSError) as exc:
             failed_exports.append((session_id, str(exc)))
 
-    manifest_file = export_root / "_project_export_manifest.txt"
-    with manifest_file.open("w", encoding="utf-8") as fh:
-        fh.write(f"# exported_at={datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n")
-        fh.write(f"# project_label={project_label}\n")
-        fh.write(f"# project_path={normalized_project_path}\n")
-        fh.write(f"# active_only={1 if active_only else 0}\n")
-        fh.write(f"# count={len(success_ids)}\n")
-        for session_id in success_ids:
-            fh.write(session_id + "\n")
+    manifest_file = write_batch_export_manifest(
+        plan.manifest_file,
+        plan.manifest_metadata_for_successes(len(success_ids)),
+        success_ids,
+    )
 
-    return BatchExportResult(
-        summary_label=summary_label,
-        bundle_root=resolved_bundle_root,
-        export_root=export_root,
-        machine_root=machine_root,
-        source_machine=machine_label,
-        source_machine_key=machine_key,
-        dry_run=False,
-        active_only=active_only,
-        session_kind="project",
-        session_ids=session_ids,
+    return plan.result(
         success_ids=success_ids,
         failed_exports=failed_exports,
         manifest_file=manifest_file,
-        selection_label=project_label,
-        selection_path=normalized_project_path,
-        export_group="project",
         total_skills_bundled=total_skills_bundled,
         warnings=warnings,
     )

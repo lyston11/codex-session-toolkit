@@ -19,7 +19,7 @@ from .bundle_layout import (
     infer_bundle_project_metadata,
     source_group_allows_export_group,
 )
-from .skills import SKILLS_MANIFEST_FILENAME, read_skills_manifest
+from .skills_manifest import SKILLS_MANIFEST_FILENAME, read_skills_manifest
 
 
 def iter_bundle_directories_under_root(bundle_root: Path) -> List[Path]:
