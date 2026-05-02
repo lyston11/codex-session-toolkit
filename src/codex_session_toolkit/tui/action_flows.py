@@ -47,6 +47,10 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
         app._open_skill_bundle_browser(mode="view")
         return None, None
 
+    if menu_action.action_id == "browse_backups":
+        app._open_session_backup_browser(mode="view")
+        return None, None
+
     if menu_action.action_id == "export_one":
         summary = app._open_session_browser(mode="select")
         if not summary:

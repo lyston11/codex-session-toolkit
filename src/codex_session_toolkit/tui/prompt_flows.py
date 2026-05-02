@@ -261,10 +261,12 @@ def confirm_dangerous_action(
     app: "ToolkitTuiApp",
     cli_args: Sequence[str],
     *,
+    title: str = "危险操作确认",
+    subtitle: str = "该操作会删除文件，且无法恢复。",
     warning: str = "Clean 会删除旧版无标记副本文件。",
     impact: str = "旧版无标记 clone 文件",
 ) -> bool:
-    box_width = app._print_branded_header("危险操作确认", "该操作会删除文件，且无法恢复。")
+    box_width = app._print_branded_header(title, subtitle)
     info_lines = [
         style_text("【危险】", Ansi.BOLD, Ansi.RED) + warning,
         f"{style_text('执行方式', Ansi.DIM)} : 直接在 TUI 中执行",

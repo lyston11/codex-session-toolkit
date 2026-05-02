@@ -54,6 +54,8 @@ CLI_SUBCOMMANDS = {
     "import-skill-bundle",
     "import-skill-bundles",
     "delete-skill",
+    "list-backups",
+    "restore-backup",
     "repair-desktop",
 }
 
@@ -95,6 +97,8 @@ def create_arg_parser() -> argparse.ArgumentParser:
             "  import-skill-bundle   Import one standalone Skills bundle\n"
             "  import-skill-bundles  Batch import standalone Skills bundles\n"
             "  delete-skill          Delete one local custom Skill\n"
+            "  list-backups          Browse session overwrite backups\n"
+            "  restore-backup        Restore one session overwrite backup\n"
             "  repair-desktop        Repair active Desktop visibility/index/provider\n\n"
             "Legacy flags still work:\n"
             "  --dry-run             Preview clone mode\n"

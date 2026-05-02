@@ -11,7 +11,9 @@ from ..models import SessionSummary
 from ..paths import CodexPaths
 from ..support import project_path_matches
 from ..validation import validate_session_id
+from .desktop_state import load_thread_metadata
 from .history import first_history_messages
+from .index import is_weak_thread_name, load_existing_index
 from .session_parser import (
     looks_like_session_meta_text,
     normalize_session_text,
@@ -128,19 +130,28 @@ def collect_session_summaries(
 ) -> List[SessionSummary]:
     summaries: List[SessionSummary] = []
     session_files = sorted(iter_session_files(paths, active_only=active_only), reverse=True)
+    session_ids_by_path = {
+        session_file: session_id_from_filename(session_file) or session_file.stem
+        for session_file in session_files
+    }
+    relevant_session_ids = set(session_ids_by_path.values())
+    thread_metadata = load_thread_metadata(paths.latest_state_db(), session_ids=relevant_session_ids)
+    existing_index = load_existing_index(paths.index_file)
     history_session_ids = None
     if limit is not None and not pattern and not project_path and not desktop_only:
-        history_session_ids = {
-            session_id_from_filename(session_file) or session_file.stem
-            for session_file in session_files[: max(1, limit)]
-        }
+        history_session_ids = {session_ids_by_path[session_file] for session_file in session_files[: max(1, limit)]}
     history_preview = first_history_messages(paths.history_file, session_ids=history_session_ids)
 
     for session_file in session_files:
-        session_id = session_id_from_filename(session_file) or session_file.stem
+        session_id = session_ids_by_path[session_file]
         session_scope = "archived" if str(session_file).startswith(str(paths.archived_sessions_dir)) else "active"
         history_text = history_preview.get(session_id, "")
-        include_first_user_prompt = not history_text or looks_like_session_meta_text(history_text)
+        thread_name = _session_thread_name(
+            session_id,
+            desktop_title=str(thread_metadata.get(session_id, {}).get("title") or ""),
+            index_thread_name=str(existing_index.get(session_id, {}).get("thread_name") or ""),
+        )
+        include_first_user_prompt = not thread_name and (not history_text or looks_like_session_meta_text(history_text))
         try:
             parsed_session = parse_session_summary_file(
                 session_file,
@@ -171,6 +182,7 @@ def collect_session_summaries(
             kind=session_kind,
             cwd=cwd,
             model_provider=model_provider,
+            thread_name=thread_name,
         )
 
         if pattern:
@@ -180,6 +192,7 @@ def collect_session_summaries(
                     summary.scope,
                     summary.kind,
                     summary.model_provider,
+                    summary.thread_name,
                     summary.cwd,
                     summary.preview,
                     str(summary.path),
@@ -193,6 +206,14 @@ def collect_session_summaries(
             break
 
     return summaries
+
+
+def _session_thread_name(session_id: str, *, desktop_title: str, index_thread_name: str) -> str:
+    for candidate in (desktop_title, index_thread_name):
+        value = normalize_session_text(candidate)
+        if value and not is_weak_thread_name(value, session_id):
+            return value
+    return ""
 
 
 def collect_session_ids_for_kind(

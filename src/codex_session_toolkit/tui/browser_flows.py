@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from ..errors import ToolkitError
+from ..services.backups import list_session_backups
 from ..services.browse import get_project_session_summaries, get_session_summaries
 from ..services.skills_transfer import list_local_skills, list_skill_bundles
 from ..support import detect_machine_key, project_label_from_path, project_label_to_key
@@ -20,7 +21,7 @@ from .terminal import Ansi, align_line, app_logo_lines, ellipsize_middle, glyphs
 from .terminal_io import read_key
 
 if TYPE_CHECKING:
-    from ..models import BundleSummary, LocalSkillSummary, SessionSummary, SkillBundleSummary
+    from ..models import BundleSummary, LocalSkillSummary, SessionBackupSummary, SessionSummary, SkillBundleSummary
     from .app import ToolkitTuiApp
 
 
@@ -111,7 +112,7 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
             start, end = selection_window(len(entries), selected_index, 10)
             for idx in range(start, end):
                 summary = entries[idx]
-                preview = summary.preview or summary.path.name
+                preview = summary.thread_name or summary.preview or summary.path.name
                 line = (
                     f"{pointer if idx == selected_index else ' '} "
                     f"{summary.session_id} | {summary.kind}/{summary.scope} | {preview}"
@@ -256,7 +257,7 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
             start, end = selection_window(len(entries), selected_index, 10)
             for idx in range(start, end):
                 summary = entries[idx]
-                preview = summary.preview or summary.path.name
+                preview = summary.thread_name or summary.preview or summary.path.name
                 line = (
                     f"{pointer if idx == selected_index else ' '} "
                     f"{summary.session_id} | {summary.kind}/{summary.scope} | {preview}"
@@ -336,6 +337,137 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
                 runner=lambda sid=selected.session_id: app._run_toolkit(["export", sid]),
                 danger=False,
             )
+            continue
+
+
+def open_session_backup_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["SessionBackupSummary"]:
+    filter_text = ""
+    selected_index = 0
+    pointer = glyphs().get("pointer", ">")
+    entries: list["SessionBackupSummary"] = []
+    needs_reload = True
+
+    while True:
+        if needs_reload:
+            try:
+                entries = list_session_backups(app.paths, pattern=filter_text, limit=200)
+            except ToolkitError as exc:
+                app._show_detail_panel("读取会话备份失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+                return None
+            needs_reload = False
+
+        selected_index = clamp_selected_index(selected_index, len(entries))
+        box_width, center = app._screen_layout()
+        subtitle = (
+            "↑/↓ 选择 · Enter 查看详情 · / 搜索 · r 恢复选中备份 · d 查看详情 · q 返回"
+            if mode == "view"
+            else "↑/↓ 选择 · Enter 确认 · / 搜索 · d 查看详情 · q 返回"
+        )
+        title = "浏览/恢复会话备份" if mode == "view" else "选择会话备份"
+        info_lines = [
+            f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
+            f"{style_text('匹配数量', Ansi.DIM)} : {len(entries)}",
+            f"{style_text('备份来源', Ansi.DIM)} : 覆盖前保存的本地会话，以及恢复前自动生成的安全备份",
+        ]
+
+        list_lines: list[str] = []
+        if not entries:
+            list_lines.append("没有匹配会话备份。按 / 修改搜索词，或按 q 返回。")
+        else:
+            start, end = selection_window(len(entries), selected_index, 10)
+            for idx in range(start, end):
+                backup = entries[idx]
+                line = (
+                    f"{pointer if idx == selected_index else ' '} "
+                    f"{backup.session_id} | {backup.scope} | {backup.preview or backup.backup_path.name}"
+                )
+                if idx == selected_index:
+                    list_lines.append(style_text(line, Ansi.BOLD, Ansi.CYAN))
+                    target_state = "当前文件存在" if backup.target_exists else "当前文件缺失"
+                    detail_line = (
+                        f"{backup.backup_time_label} | {target_state} | "
+                        f"{backup.kind or '-'} | {backup.model_provider or '-'} | {_format_size(backup.size_bytes)}"
+                    )
+                    list_lines.append("  " + style_text(ellipsize_middle(detail_line, max(10, box_width - 10)), Ansi.DIM))
+                else:
+                    list_lines.append(line)
+
+        render_browser_frame(
+            app,
+            title=title,
+            subtitle=subtitle,
+            info_lines=info_lines,
+            list_lines=list_lines,
+            list_border_codes=(Ansi.DIM, Ansi.GREEN),
+            box_width=box_width,
+            center=center,
+        )
+
+        key = read_key()
+        if key is None:
+            raw_prompt = "命令 [Enter/\\/r/d/q]：" if mode == "view" else "命令 [Enter/\\/d/q]："
+            raw = input(raw_prompt).strip()
+            key = raw if raw else "ENTER"
+
+        transition = apply_list_key(key, selected_index=selected_index, item_count=len(entries))
+        selected_index = transition.selected_index
+        if transition.confirm_selected:
+            if not entries:
+                continue
+            selected = entries[selected_index]
+            if mode == "view":
+                app._show_detail_panel(
+                    "会话备份详情",
+                    app._session_backup_detail_lines(selected),
+                    border_codes=(Ansi.DIM, Ansi.GREEN),
+                )
+                continue
+            return selected
+        if transition.exit_requested:
+            return None
+        if transition.show_detail and entries:
+            app._show_detail_panel(
+                "会话备份详情",
+                app._session_backup_detail_lines(entries[selected_index]),
+                border_codes=(Ansi.DIM, Ansi.GREEN),
+            )
+            continue
+
+        key_str = transition.matched_hotkey
+        if key_str in {"/", "f"}:
+            new_filter = app._prompt_value(
+                title=title,
+                prompt_label="输入搜索词",
+                help_lines=[
+                    "可按 session_id / provider / cwd / 预览 / 备份路径 / 目标路径搜索。",
+                    "留空表示不搜索。",
+                ],
+                allow_empty=True,
+            )
+            filter_text = new_filter or ""
+            selected_index = 0
+            needs_reload = True
+            continue
+        if key_str == "r" and entries and mode == "view":
+            selected = entries[selected_index]
+            cli_args = ["restore-backup", str(selected.backup_path)]
+            if not app._confirm_dangerous_action(
+                cli_args,
+                title="恢复会话备份确认",
+                subtitle="该操作会用备份覆盖当前会话文件；覆盖前会再备份当前文件。",
+                warning=f"将恢复会话 {selected.session_id} 的备份。",
+                impact=f"{selected.backup_path} -> {selected.target_path}",
+            ):
+                continue
+            app._run_action(
+                f"恢复会话备份 {selected.session_id}",
+                cli_args,
+                dry_run=False,
+                runner=lambda args=cli_args: app._run_toolkit(args),
+                danger=False,
+            )
+            selected_index = 0
+            needs_reload = True
             continue
 
 
@@ -485,6 +617,14 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
                 danger=False,
             )
             continue
+
+
+def _format_size(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / 1024 / 1024:.1f} MB"
 
 
 def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["LocalSkillSummary"]:
