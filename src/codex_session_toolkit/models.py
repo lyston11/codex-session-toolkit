@@ -16,6 +16,24 @@ class SessionSummary:
     kind: str
     cwd: str
     model_provider: str
+    thread_name: str = ""
+
+
+@dataclass(frozen=True)
+class SessionBackupSummary:
+    session_id: str
+    scope: str
+    backup_path: Path
+    target_path: Path
+    backup_kind: str
+    backup_epoch: int
+    backup_time_label: str
+    size_bytes: int
+    target_exists: bool
+    preview: str
+    kind: str
+    cwd: str
+    model_provider: str
 
 
 @dataclass(frozen=True)
@@ -169,6 +187,16 @@ class SkillDeleteResult:
     skill_dir: Path
     dry_run: bool
     deleted: bool = False
+
+
+@dataclass(frozen=True)
+class SessionBackupRestoreResult:
+    session_id: str
+    backup_path: Path
+    target_path: Path
+    dry_run: bool
+    restored: bool = False
+    current_backup_path: Optional[Path] = None
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,8 @@ from ..models import (
     LocalSkillSummary,
     OperationWarning,
     RepairResult,
+    SessionBackupRestoreResult,
+    SessionBackupSummary,
     SessionSummary,
     SkillBundleSummary,
     SkillDeleteResult,
@@ -31,9 +33,24 @@ def print_session_rows(rows: list[SessionSummary]) -> int:
         return 0
 
     for summary in rows:
+        display_name = summary.thread_name or summary.preview
         print(
             f"{summary.session_id} | {summary.kind} | {summary.scope} | "
-            f"{summary.model_provider or '-'} | {summary.path} | {summary.preview[:80]}"
+            f"{summary.model_provider or '-'} | {summary.path} | {display_name[:80]}"
+        )
+    return 0
+
+
+def print_session_backup_rows(rows: list[SessionBackupSummary]) -> int:
+    if not rows:
+        print("No matching session backups found.")
+        return 0
+
+    for backup in rows:
+        target_state = "target-exists" if backup.target_exists else "target-missing"
+        print(
+            f"{backup.session_id} | {backup.scope} | {backup.backup_kind} | "
+            f"{backup.backup_time_label} | {target_state} | {backup.backup_path} | {backup.preview[:80]}"
         )
     return 0
 
@@ -241,6 +258,16 @@ def print_skill_delete_result(result: SkillDeleteResult) -> int:
     print(f"Source root: {result.source_root}")
     print(f"Relative dir: {result.relative_dir}")
     print(f"Path: {result.skill_dir}")
+    return 0
+
+
+def print_session_backup_restore_result(result: SessionBackupRestoreResult) -> int:
+    action = "Would restore session backup" if result.dry_run else "Restored session backup"
+    print(f"{action}: {result.session_id}")
+    print(f"Backup: {result.backup_path}")
+    print(f"Target: {result.target_path}")
+    if result.current_backup_path is not None:
+        print(f"Current target backed up to: {result.current_backup_path}")
     return 0
 
 

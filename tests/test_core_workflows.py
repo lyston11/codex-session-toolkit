@@ -17,8 +17,10 @@ if str(SRC_DIR) not in os.sys.path:
     os.sys.path.insert(0, str(SRC_DIR))
 
 from codex_session_toolkit.paths import CodexPaths  # noqa: E402
+from codex_session_toolkit.errors import ToolkitError  # noqa: E402
 from codex_session_toolkit.models import BundleSummary  # noqa: E402
 from codex_session_toolkit.presenters.reports import print_batch_import_result  # noqa: E402
+from codex_session_toolkit.services.backups import list_session_backups, restore_session_backup  # noqa: E402
 from codex_session_toolkit.services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles  # noqa: E402
 from codex_session_toolkit.services.clone import clone_to_provider  # noqa: E402
 from codex_session_toolkit.services.exporting import export_active_desktop_all, export_project_sessions, export_session  # noqa: E402
@@ -400,6 +402,40 @@ class CoreWorkflowTests(unittest.TestCase):
                 summaries[0].preview,
                 "https://github.com/xiaotian2333/newapi-checkin.git 把这个醒目拉下来看看",
             )
+
+    def test_session_summaries_expose_desktop_thread_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            write_config(home, "source-provider")
+            db_path = create_threads_db(home)
+
+            session_id = "12121212-1212-1212-1212-121212121212"
+            write_session(
+                home,
+                session_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=Path("/Users/example/project-title"),
+                user_message="Long first user prompt that should only be the fallback preview",
+            )
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "insert into threads (id, title, first_user_message) values (?, ?, ?)",
+                (
+                    session_id,
+                    "Desktop short title",
+                    "Long first user prompt that should only be the fallback preview",
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            summaries = get_session_summaries(CodexPaths(home=home))
+
+            self.assertEqual(len(summaries), 1)
+            self.assertEqual(summaries[0].thread_name, "Desktop short title")
+            self.assertNotEqual(summaries[0].thread_name, summaries[0].preview)
 
     def test_session_summaries_do_not_full_parse_rollouts_for_list_view(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -979,6 +1015,79 @@ class CoreWorkflowTests(unittest.TestCase):
             row = conn.execute("select source, model_provider, cwd from threads where id = ?", (session_id,)).fetchone()
             conn.close()
             self.assertEqual(row, ("vscode", "target-provider", str(missing_cwd)))
+
+    def test_list_session_backups_finds_import_overwrite_backups(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            session_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            target = write_session(
+                home,
+                session_id,
+                provider="target-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                user_message="Backup prompt",
+            )
+            backup = target.with_name(target.name + ".bak.1770000000")
+            shutil.copy2(target, backup)
+
+            summaries = list_session_backups(CodexPaths(home=home))
+
+            self.assertEqual(len(summaries), 1)
+            self.assertEqual(summaries[0].session_id, session_id)
+            self.assertEqual(summaries[0].scope, "active")
+            self.assertEqual(summaries[0].backup_kind, "import-overwrite")
+            self.assertEqual(summaries[0].target_path, target)
+            self.assertTrue(summaries[0].target_exists)
+            self.assertIn("Backup prompt", summaries[0].preview)
+
+    def test_restore_session_backup_replaces_target_and_saves_current_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            session_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+            target = write_session(
+                home,
+                session_id,
+                provider="target-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                user_message="Backup version",
+            )
+            backup = target.with_name(target.name + ".bak.1770000001")
+            shutil.copy2(target, backup)
+            write_session(
+                home,
+                session_id,
+                provider="target-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                user_message="Current version",
+            )
+
+            result = restore_session_backup(CodexPaths(home=home), str(backup))
+
+            self.assertTrue(result.restored)
+            self.assertEqual(result.target_path, target)
+            self.assertIsNotNone(result.current_backup_path)
+            self.assertTrue(result.current_backup_path.is_file())
+            self.assertIn("Backup version", target.read_text(encoding="utf-8"))
+            self.assertIn("Current version", result.current_backup_path.read_text(encoding="utf-8"))
+
+    def test_restore_session_backup_rejects_paths_outside_session_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            outside = Path(tmpdir) / "rollout-2026-04-10T10-00-00-cccccccc-cccc-cccc-cccc-cccccccccccc.jsonl.bak.1770000002"
+            outside.write_text("{}", encoding="utf-8")
+
+            with self.assertRaises(ToolkitError):
+                restore_session_backup(CodexPaths(home=home), str(outside))
 
     def test_export_session_uses_rollout_prompt_when_history_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

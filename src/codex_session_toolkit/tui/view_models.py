@@ -123,6 +123,10 @@ TUI_ACTION_NOTES = {
     "desktop_repair": [
         "修复会话在 Desktop 中的显示、索引和登记信息。",
     ],
+    "browse_backups": [
+        "浏览导入覆盖前自动保留的会话备份。",
+        "可在 TUI 中二次确认后一键恢复；恢复前会再备份当前文件。",
+    ],
     "exit": ["退出工具箱。"],
 }
 
@@ -168,7 +172,8 @@ def build_tui_menu_actions() -> List[TuiMenuAction]:
         TuiMenuAction("delete_skill", "d", "删除本机 Skill", "skills", ("delete-skill", "<skill_name>"), is_dangerous=True),
         TuiMenuAction("provider_migration", "1", "迁移到当前 Provider", "repair", tuple()),
         TuiMenuAction("desktop_repair", "2", "修复会话在 Desktop 中显示", "repair", tuple()),
-        TuiMenuAction("clean_legacy", "3", "清理旧版无标记副本", "repair", ("clean-clones",), is_dangerous=True),
+        TuiMenuAction("browse_backups", "3", "浏览/恢复会话备份", "repair", ("list-backups",)),
+        TuiMenuAction("clean_legacy", "4", "清理旧版无标记副本", "repair", ("clean-clones",), is_dangerous=True),
         TuiMenuAction("exit", "0", "退出", "system", tuple()),
     ]
 

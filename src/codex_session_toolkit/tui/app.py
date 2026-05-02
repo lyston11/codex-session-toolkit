@@ -14,7 +14,7 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 from ..commands import run_cli as run_toolkit_cli
 from ..errors import ToolkitError
-from ..models import BundleSummary, LocalSkillSummary, SessionSummary, SkillBundleSummary
+from ..models import BundleSummary, LocalSkillSummary, SessionBackupSummary, SessionSummary, SkillBundleSummary
 from ..paths import CodexPaths
 from ..presenters.reports import (
     print_cleanup_result,
@@ -35,6 +35,7 @@ from .bundle_flows import select_project_bundle_import_scope as _select_project_
 from .browser_flows import open_bundle_browser as _open_bundle_browser_flow
 from .browser_flows import open_local_skill_browser as _open_local_skill_browser_flow
 from .browser_flows import open_project_session_browser as _open_project_session_browser_flow
+from .browser_flows import open_session_backup_browser as _open_session_backup_browser_flow
 from .browser_flows import open_session_browser as _open_session_browser_flow
 from .browser_flows import open_skill_bundle_browser as _open_skill_bundle_browser_flow
 from .navigation_state import apply_home_key, apply_section_key, clamp_selected_index
@@ -214,10 +215,28 @@ class ToolkitTuiApp:
             f"{style_text('Session ID', Ansi.DIM)} : {summary.session_id}",
             f"{style_text('类型', Ansi.DIM)}      : {summary.kind}",
             f"{style_text('范围', Ansi.DIM)}      : {summary.scope}",
+            f"{style_text('会话名称', Ansi.DIM)}  : {summary.thread_name or '（无，使用预览兜底）'}",
             f"{style_text('Provider', Ansi.DIM)}  : {summary.model_provider or '-'}",
             f"{style_text('路径', Ansi.DIM)}      : {summary.path}",
             f"{style_text('工作目录', Ansi.DIM)}  : {summary.cwd or '（空）'}",
-            f"{style_text('预览', Ansi.DIM)}      : {summary.preview or '（无）'}",
+            f"{style_text('兜底预览', Ansi.DIM)}  : {summary.preview or '（无）'}",
+        ]
+
+    def _session_backup_detail_lines(self, backup: SessionBackupSummary) -> List[str]:
+        target_state = "存在" if backup.target_exists else "缺失"
+        kind_label = "恢复前安全备份" if backup.backup_kind == "restore-safety" else "覆盖前本地备份"
+        return [
+            f"{style_text('Session ID', Ansi.DIM)} : {backup.session_id}",
+            f"{style_text('范围', Ansi.DIM)}      : {backup.scope}",
+            f"{style_text('备份类型', Ansi.DIM)}  : {kind_label}",
+            f"{style_text('备份时间', Ansi.DIM)}  : {backup.backup_time_label}",
+            f"{style_text('当前文件', Ansi.DIM)}  : {target_state}",
+            f"{style_text('Provider', Ansi.DIM)}  : {backup.model_provider or '-'}",
+            f"{style_text('类型', Ansi.DIM)}      : {backup.kind}",
+            f"{style_text('备份路径', Ansi.DIM)}  : {backup.backup_path}",
+            f"{style_text('恢复目标', Ansi.DIM)}  : {backup.target_path}",
+            f"{style_text('工作目录', Ansi.DIM)}  : {backup.cwd or '（空）'}",
+            f"{style_text('预览', Ansi.DIM)}      : {backup.preview or '（无）'}",
         ]
 
     def _prompt_project_path(self, *, default: str = "") -> Optional[str]:
@@ -421,6 +440,9 @@ class ToolkitTuiApp:
     def _open_session_browser(self, *, mode: str) -> Optional[SessionSummary]:
         return _open_session_browser_flow(self, mode=mode)
 
+    def _open_session_backup_browser(self, *, mode: str) -> Optional[SessionBackupSummary]:
+        return _open_session_backup_browser_flow(self, mode=mode)
+
     def _open_bundle_browser(self, *, mode: str, source_group: str = "all") -> Optional[BundleSummary]:
         return _open_bundle_browser_flow(self, mode=mode, source_group=source_group)
 
@@ -472,10 +494,19 @@ class ToolkitTuiApp:
         self,
         cli_args: Sequence[str],
         *,
+        title: str = "危险操作确认",
+        subtitle: str = "该操作会删除文件，且无法恢复。",
         warning: str = "Clean 会删除旧版无标记副本文件。",
         impact: str = "旧版无标记 clone 文件",
     ) -> bool:
-        return _confirm_dangerous_action_flow(self, cli_args, warning=warning, impact=impact)
+        return _confirm_dangerous_action_flow(
+            self,
+            cli_args,
+            title=title,
+            subtitle=subtitle,
+            warning=warning,
+            impact=impact,
+        )
 
     def run(self) -> int:
         selected_section = 0
