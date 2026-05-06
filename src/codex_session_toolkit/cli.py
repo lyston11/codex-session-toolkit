@@ -8,7 +8,7 @@ import sys
 from typing import Optional, Sequence
 
 from . import APP_COMMAND, APP_DISPLAY_NAME, __version__
-from .command_catalog import CLI_SUBCOMMANDS, COMMAND_CATALOG, COMMAND_DOMAIN_LABELS, command_domains, commands_for_domain
+from .command_catalog import CLI_SUBCOMMANDS
 from .commands import run_cli as run_toolkit_cli
 from .errors import ToolkitError
 from .paths import CodexPaths
@@ -74,34 +74,29 @@ def _tui_first_help() -> str:
         "  Repair / Maintenance   Repair Desktop visibility and manage backups",
         "  GitHub / Sync          Sync ./codex_bundles with a dedicated Bundle repo",
         "",
-        "Automation and legacy CLI commands are still supported, but are not the primary UI.",
-        f"Use `{APP_COMMAND} --advanced-help` to list them.",
+        "Only a small stable automation surface is documented.",
+        f"Use `{APP_COMMAND} --advanced-help` for those entries; use the TUI for normal work.",
     ])
 
 
 def _canonical_commands_help() -> str:
-    command_width = max(len(spec.name) for spec in COMMAND_CATALOG)
     lines = [
-        f"{APP_DISPLAY_NAME} automation / compatibility CLI",
+        f"{APP_DISPLAY_NAME} stable automation CLI",
         "",
-        "The product workflow is TUI-first. These commands remain available for scripts, tests,",
-        "advanced automation, and legacy compatibility.",
+        "The product workflow is TUI-first. This help intentionally documents only the",
+        "small script-friendly surface. Older subcommands remain callable for compatibility,",
+        "but are not presented as user workflows.",
         "",
-        "Commands:",
+        "Stable entries:",
+        f"  {APP_COMMAND}                        Open the TUI",
+        f"  {APP_COMMAND} --version              Show version",
+        f"  {APP_COMMAND} validate-bundles       Validate bundle workspace health",
+        f"  {APP_COMMAND} list-bundles           Read-only bundle inventory",
+        f"  {APP_COMMAND} sync-github --dry-run   Preview Bundle GitHub sync",
+        f"  {APP_COMMAND} sync-github            Push local Bundle updates after repo is connected",
+        "",
+        "For export, import, Skills transfer, repair, pull, and conflict handling, use the TUI.",
     ]
-    for domain in command_domains():
-        domain_commands = commands_for_domain(domain)
-        if not domain_commands:
-            continue
-        lines.append(f"  {COMMAND_DOMAIN_LABELS[domain]}:")
-        for spec in domain_commands:
-            lines.append(f"    {spec.name:<{command_width}}  {spec.summary}")
-    lines.extend([
-        "",
-        "Legacy top-level flags still work:",
-        "  --no-tui --dry-run    Preview legacy clone mode",
-        "  --no-tui --clean      Cleanup legacy clone files",
-    ])
     return "\n".join(lines)
 
 

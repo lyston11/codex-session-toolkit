@@ -932,7 +932,7 @@ class PackagingSmokeTests(unittest.TestCase):
         self.assertIn("Session / Browse", result.stdout)
         self.assertNotIn("clone-provider", result.stdout)
 
-    def test_module_advanced_help_lists_compatibility_commands(self) -> None:
+    def test_module_advanced_help_lists_only_stable_automation_entries(self) -> None:
         result = subprocess.run(
             [sys.executable, "-m", "codex_session_toolkit", "--advanced-help"],
             cwd=ROOT_DIR,
@@ -943,9 +943,13 @@ class PackagingSmokeTests(unittest.TestCase):
             check=True,
         )
         self.assertIn(f"usage: {APP_COMMAND}", result.stdout)
-        self.assertIn("automation / compatibility CLI", result.stdout)
-        self.assertIn("clone-provider", result.stdout)
+        self.assertIn("stable automation CLI", result.stdout)
+        self.assertIn("validate-bundles", result.stdout)
+        self.assertIn("list-bundles", result.stdout)
         self.assertIn("sync-github", result.stdout)
+        self.assertNotIn("clone-provider", result.stdout)
+        self.assertNotIn("import-skill-bundle", result.stdout)
+        self.assertNotIn("repair-desktop", result.stdout)
 
     def test_module_version_matches_package_version(self) -> None:
         result = subprocess.run(

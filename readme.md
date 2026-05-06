@@ -140,7 +140,7 @@ codex-session-toolkit
 - 可选把未登记 CLI 会话纳入 Desktop
 - 支持 Dry-run 预演
 
-`repair-desktop` 默认只修复 active 会话。需要 archived 会话时，CLI 可加 `--include-archived`。
+Desktop 修复默认只处理 active 会话；需要 archived 会话时，从 Repair / Maintenance 的修复入口中选择对应范围。
 
 ### GitHub / Sync
 
@@ -160,9 +160,9 @@ codex-session-toolkit
 
 同步方式：
 
-- `connect-github`：连接一个独立 Bundle 仓库，可选择连接后首次推送。
-- `pull-github`：从已连接仓库拉取远端 Bundle 更新。
-- `sync-github`：提交本机 Bundle 变更，检查远端更新，必要时合并，再推送。
+- 连接：连接一个独立 Bundle 仓库，可选择连接后首次推送。
+- 拉取：从已连接仓库拉取远端 Bundle 更新。
+- 推送：提交本机 Bundle 变更，检查远端更新，必要时合并，再推送。
 
 ## GitHub 同步规则
 
@@ -375,7 +375,7 @@ project 分类额外记录：
 - 导入时优先使用 `THREAD_NAME`
 - 旧 Bundle 没有标题时，才从现有 Desktop 标题、`session_index.jsonl` 或 rollout 首条用户消息恢复
 - 账号登录模式下，如果 `~/.codex/config.toml` 没有 `model_provider`，会从 Desktop `threads` 表和最新 rollout 中推断
-- `repair-desktop` 会保留已有 Desktop 短标题，只修复 provider、索引、workspace roots 和 `threads` 登记
+- Desktop 修复会保留已有 Desktop 短标题，只修复 provider、索引、workspace roots 和 `threads` 登记
 
 Provider 识别顺序：
 
@@ -427,88 +427,22 @@ Provider 识别顺序：
 
 本项目的主产品界面是 TUI。普通迁移、导入、导出、修复、Skills 管理和 GitHub 同步都应优先从 TUI 完成，不要求用户记忆命令。
 
-CLI 命令仍然保留，用于脚本、测试、批处理、兼容旧用法和少数高级场景。默认帮助只展示 TUI 入口；完整命令列表通过高级帮助查看：
+CLI 只公开少量稳定入口，用于版本检查、只读检查、Bundle 健康检查和已连接仓库后的同步脚本。旧命令仍保留兼容，但不再作为用户工作流文档化；导出、导入、Skills、修复、拉取和冲突处理都走 TUI。
 
 ```bash
 codex-session-toolkit --advanced-help
 ```
 
-下面命令是高级/自动化入口，不是普通用户主流程。
-
-### 启动和只读浏览
+### 稳定入口
 
 ```bash
 codex-session-toolkit
 codex-session-toolkit --version
 codex-session-toolkit --advanced-help
-codex-session-toolkit list
-codex-session-toolkit list <session_id_or_keyword>
-codex-session-toolkit list-project-sessions /Users/example/project-a
 codex-session-toolkit list-bundles
 codex-session-toolkit validate-bundles
-```
-
-### 导出会话
-
-```bash
-codex-session-toolkit export <session_id>
-codex-session-toolkit export-project /Users/example/project-a --dry-run
-codex-session-toolkit export-project /Users/example/project-a
-codex-session-toolkit export-active-desktop-all
-codex-session-toolkit export-desktop-all
-codex-session-toolkit export-cli-all
-```
-
-### 导入会话
-
-```bash
-codex-session-toolkit import <session_id_or_bundle_dir>
-codex-session-toolkit import <session_id_or_bundle_dir> --desktop-visible
-codex-session-toolkit import-desktop-all --machine Work-Laptop --export-group active
-codex-session-toolkit import-desktop-all --machine Work-Laptop --export-group project --project project-a --target-project-path /Users/example/project-a --desktop-visible
-```
-
-### Skills
-
-```bash
-codex-session-toolkit list-skills
-codex-session-toolkit list-skills --include-system
-codex-session-toolkit export-skills
-codex-session-toolkit export-skills my-skill
-codex-session-toolkit list-skill-bundles
-codex-session-toolkit import-skill-bundle <skill_bundle_dir_or_skill_name>
-codex-session-toolkit import-skill-bundles --machine Work-Laptop
-codex-session-toolkit delete-skill my-skill --source-root agents --dry-run
-codex-session-toolkit delete-skill my-skill --source-root agents
-```
-
-### GitHub 同步
-
-```bash
-codex-session-toolkit connect-github git@github.com:you/codex-bundles.git --dry-run
-codex-session-toolkit connect-github git@github.com:you/codex-bundles.git
-codex-session-toolkit connect-github git@github.com:you/codex-bundles.git --push-after-connect
-codex-session-toolkit pull-github --dry-run
-codex-session-toolkit pull-github
 codex-session-toolkit sync-github --dry-run
-codex-session-toolkit sync-github --message "Sync laptop bundles"
-codex-session-toolkit sync-github --no-push
-```
-
-### 备份和修复
-
-```bash
-codex-session-toolkit list-backups
-codex-session-toolkit restore-backup <backup_path_or_session_id> --dry-run
-codex-session-toolkit restore-backup <backup_path_or_session_id>
-codex-session-toolkit delete-backup <backup_path_or_session_id> --dry-run
-codex-session-toolkit delete-backup <backup_path_or_session_id>
-codex-session-toolkit repair-desktop --dry-run
-codex-session-toolkit repair-desktop
-codex-session-toolkit repair-desktop --include-cli
-codex-session-toolkit repair-desktop --include-archived
-codex-session-toolkit clone-provider --dry-run
-codex-session-toolkit clean-clones --dry-run
+codex-session-toolkit sync-github
 ```
 
 ## 安全性说明
