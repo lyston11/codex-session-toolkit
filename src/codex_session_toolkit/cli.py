@@ -50,20 +50,45 @@ def build_app_context(paths: Optional[CodexPaths] = None) -> ToolkitAppContext:
 def create_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=APP_COMMAND,
-        description=f"{APP_DISPLAY_NAME}: clone, transfer, import and repair Codex sessions.",
+        description=f"{APP_DISPLAY_NAME}: TUI-first Codex session, Bundle, Skills, repair, and sync manager.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=_canonical_commands_help(),
+        epilog=_tui_first_help(),
     )
-    parser.add_argument("--dry-run", action="store_true", help="Preview changes without writing files")
-    parser.add_argument("--clean", action="store_true", help="Remove unmarked clones from previous runs")
-    parser.add_argument("--no-tui", action="store_true", help="Force CLI mode even in interactive terminal")
+    parser.add_argument("--advanced-help", action="store_true", help="Show automation/compatibility CLI commands")
+    parser.add_argument("--dry-run", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--clean", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--no-tui", action="store_true", help="Run legacy clone mode instead of opening the TUI")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
 
 
+def _tui_first_help() -> str:
+    return "\n".join([
+        "Primary workflow:",
+        f"  {APP_COMMAND}              Open the interactive TUI",
+        "",
+        "TUI sections:",
+        "  Session / Browse       Browse and export local Codex sessions",
+        "  Bundle / Transfer      Validate, import, and transfer session bundles",
+        "  Skills / Transfer      Export, import, and manage custom Skills",
+        "  Repair / Maintenance   Repair Desktop visibility and manage backups",
+        "  GitHub / Sync          Sync ./codex_bundles with a dedicated Bundle repo",
+        "",
+        "Automation and legacy CLI commands are still supported, but are not the primary UI.",
+        f"Use `{APP_COMMAND} --advanced-help` to list them.",
+    ])
+
+
 def _canonical_commands_help() -> str:
     command_width = max(len(spec.name) for spec in COMMAND_CATALOG)
-    lines = ["Canonical toolkit commands:"]
+    lines = [
+        f"{APP_DISPLAY_NAME} automation / compatibility CLI",
+        "",
+        "The product workflow is TUI-first. These commands remain available for scripts, tests,",
+        "advanced automation, and legacy compatibility.",
+        "",
+        "Commands:",
+    ]
     for domain in command_domains():
         domain_commands = commands_for_domain(domain)
         if not domain_commands:
@@ -73,11 +98,17 @@ def _canonical_commands_help() -> str:
             lines.append(f"    {spec.name:<{command_width}}  {spec.summary}")
     lines.extend([
         "",
-        "Legacy flags still work:",
-        "  --dry-run             Preview clone mode",
-        "  --clean               Cleanup legacy clone files",
+        "Legacy top-level flags still work:",
+        "  --no-tui --dry-run    Preview legacy clone mode",
+        "  --no-tui --clean      Cleanup legacy clone files",
     ])
     return "\n".join(lines)
+
+
+def _print_advanced_help(parser: argparse.ArgumentParser) -> None:
+    print(f"usage: {parser.prog} [--version] [--advanced-help] [--no-tui]")
+    print()
+    print(_canonical_commands_help())
 
 
 def print_header(context: ToolkitAppContext, dry_run: bool) -> None:
@@ -118,6 +149,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 130
 
     args = parser.parse_args(argv)
+    if args.advanced_help:
+        _print_advanced_help(parser)
+        return 0
     print_header(context, dry_run=bool(args.dry_run))
 
     if args.clean:

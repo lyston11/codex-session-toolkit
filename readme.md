@@ -60,9 +60,15 @@ macOS 可双击：
 ./codex-session-toolkit --version
 ```
 
+查看脚本和兼容 CLI 命令：
+
+```bash
+./codex-session-toolkit --advanced-help
+```
+
 ## TUI 主菜单
 
-无参数启动进入 TUI：
+无参数启动进入 TUI。这是项目的主入口：
 
 ```bash
 codex-session-toolkit
@@ -417,13 +423,24 @@ Provider 识别顺序：
 | `g` | 在 Skills 列表切换是否显示系统/运行时 Skills |
 | `r` | 在 Skills 列表删除自定义 Skill；在备份列表恢复备份 |
 
-## CLI 速查
+## 自动化与兼容 CLI
 
-### 启动和浏览
+本项目的主产品界面是 TUI。普通迁移、导入、导出、修复、Skills 管理和 GitHub 同步都应优先从 TUI 完成，不要求用户记忆命令。
+
+CLI 命令仍然保留，用于脚本、测试、批处理、兼容旧用法和少数高级场景。默认帮助只展示 TUI 入口；完整命令列表通过高级帮助查看：
+
+```bash
+codex-session-toolkit --advanced-help
+```
+
+下面命令是高级/自动化入口，不是普通用户主流程。
+
+### 启动和只读浏览
 
 ```bash
 codex-session-toolkit
 codex-session-toolkit --version
+codex-session-toolkit --advanced-help
 codex-session-toolkit list
 codex-session-toolkit list <session_id_or_keyword>
 codex-session-toolkit list-project-sessions /Users/example/project-a

@@ -927,7 +927,25 @@ class PackagingSmokeTests(unittest.TestCase):
             check=True,
         )
         self.assertIn(f"usage: {APP_COMMAND}", result.stdout)
+        self.assertIn("Open the interactive TUI", result.stdout)
+        self.assertIn("--advanced-help", result.stdout)
+        self.assertIn("Session / Browse", result.stdout)
+        self.assertNotIn("clone-provider", result.stdout)
+
+    def test_module_advanced_help_lists_compatibility_commands(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "codex_session_toolkit", "--advanced-help"],
+            cwd=ROOT_DIR,
+            env=_module_env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=True,
+        )
+        self.assertIn(f"usage: {APP_COMMAND}", result.stdout)
+        self.assertIn("automation / compatibility CLI", result.stdout)
         self.assertIn("clone-provider", result.stdout)
+        self.assertIn("sync-github", result.stdout)
 
     def test_module_version_matches_package_version(self) -> None:
         result = subprocess.run(
