@@ -81,8 +81,10 @@ def import_session(
         raise ToolkitError(f"Manifest session id does not match requested session id: {session_id}")
 
     relative_path_obj = Path(*relative_path.split("/"))
+    target_relative_path = _target_relative_path_for_import(relative_path, desktop_visible=desktop_visible)
+    target_relative_path_obj = Path(*target_relative_path.split("/"))
     source_session = bundle_dir / "codex" / relative_path_obj
-    target_session = paths.code_dir / relative_path_obj
+    target_session = paths.code_dir / target_relative_path_obj
 
     validate_jsonl_file(source_session, "Bundled session file", "session", session_id)
     if bundle_history.exists():
@@ -276,7 +278,7 @@ def import_session(
         return ImportResult(
             session_id=session_id,
             bundle_dir=bundle_dir,
-            relative_path=relative_path,
+            relative_path=target_relative_path,
             import_mode=import_mode,
             rollout_action=rollout_action,
             session_kind=session_kind,
@@ -370,6 +372,12 @@ def _resolve_import_bundle_dir(
         ),
         True,
     )
+
+
+def _target_relative_path_for_import(relative_path: str, *, desktop_visible: bool) -> str:
+    if desktop_visible and relative_path.startswith("archived_sessions/"):
+        return "sessions/" + relative_path[len("archived_sessions/") :]
+    return relative_path
 
 
 def import_desktop_all(

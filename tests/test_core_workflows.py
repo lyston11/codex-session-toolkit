@@ -25,7 +25,7 @@ from codex_session_toolkit.presenters.reports import print_batch_import_result  
 from codex_session_toolkit.services.backups import delete_session_backup, list_session_backups, restore_session_backup  # noqa: E402
 from codex_session_toolkit.services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles  # noqa: E402
 from codex_session_toolkit.services.clone import clone_to_provider  # noqa: E402
-from codex_session_toolkit.services.exporting import export_active_desktop_all, export_project_sessions, export_session  # noqa: E402
+from codex_session_toolkit.services.exporting import export_active_desktop_all, export_desktop_all, export_project_sessions, export_session  # noqa: E402
 from codex_session_toolkit.services.github_sync import (  # noqa: E402
     _conflict_paths,
     _git_proxy_env,
@@ -2869,6 +2869,80 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertFalse(
                 (dst_home / ".codex" / "sessions" / "2026" / "04" / "10" / f"rollout-2026-04-10T10-00-00-{other_session_id}.jsonl").exists()
             )
+
+    def test_import_desktop_all_makes_archived_bundle_visible_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_config(src_home, "source-provider")
+            write_config(dst_home, "target-provider")
+            write_state_file(dst_home)
+            db_path = create_threads_db(dst_home)
+
+            session_id = "99999999-aaaa-4bbb-8ccc-dddddddddddd"
+            project = workspace / "archived-project"
+            project.mkdir()
+            write_session(
+                src_home,
+                session_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=project,
+                archived=True,
+                user_message="archived import should become visible",
+            )
+            write_history(src_home, session_id, "archived visible import")
+
+            src_paths = CodexPaths(home=src_home)
+            dst_paths = CodexPaths(home=dst_home)
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "Archive-Mac"):
+                export_desktop_all(src_paths)
+
+            with pushd(workspace):
+                result = import_desktop_all(
+                    dst_paths,
+                    machine_filter=machine_label_to_key("Archive-Mac"),
+                    export_group_filter="desktop",
+                    desktop_visible=True,
+                )
+
+            active_target = (
+                dst_home
+                / ".codex"
+                / "sessions"
+                / "2026"
+                / "04"
+                / "10"
+                / f"rollout-2026-04-10T10-00-00-{session_id}.jsonl"
+            )
+            archived_target = (
+                dst_home
+                / ".codex"
+                / "archived_sessions"
+                / "2026"
+                / "04"
+                / "10"
+                / f"rollout-2026-04-10T10-00-00-{session_id}.jsonl"
+            )
+            self.assertEqual(len(result.success_dirs), 1)
+            self.assertTrue(active_target.is_file())
+            self.assertFalse(archived_target.exists())
+
+            index_lines = (dst_home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual([json.loads(raw)["id"] for raw in index_lines], [session_id])
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                "select rollout_path, archived, title from threads where id = ?",
+                (session_id,),
+            ).fetchone()
+            conn.close()
+            self.assertEqual(row[0], str(active_target))
+            self.assertEqual(row[1], 0)
+            self.assertTrue(row[2])
 
     def test_import_desktop_all_matches_browse_and_validate_visible_bundle_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

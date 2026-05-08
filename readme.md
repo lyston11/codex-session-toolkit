@@ -114,6 +114,7 @@ codex-session-toolkit
 - 按 `设备 -> 分类 -> 项目` 批量导入
 - 导入 project 分类时，把源机器 cwd 映射到当前机器项目目录
 - 导入时维护 `session_index.jsonl`、Desktop `threads` 表和 workspace roots
+- 选择显示到 Desktop 时，归档来源的 Bundle 会导入为 active 会话，避免只在 TUI 可见而不出现在 Desktop 主线程栏
 
 导入如果会覆盖本地 rollout，会先生成 `.bak.<timestamp>` 备份。
 
