@@ -15,7 +15,9 @@ Codex 的会话数据、Desktop 索引、CLI rollout、history、项目路径、
 - **项目级会话迁移容易混乱**：支持按项目路径筛选和批量导出，导入时可以把源机器 cwd 映射到当前机器的项目路径。
 - **会话和 Skills 的关系需要可控**：会话 Bundle 只携带实际依赖的自定义 Skills；全量自定义 Skills 通过 standalone Skills Bundle 独立迁移。
 - **多设备 Bundle 需要同步机制**：`./codex_bundles/` 可以连接到一个独立 GitHub Bundle 仓库，支持状态检查、Pull、Push、远端更新时间检测和冲突保护。
+- **GitHub 网络慢需要可控代理**：同步中心可以连接或断开本机代理接口，让状态检查、Pull 和 Push 走代理线路。
 - **导入后 Desktop 状态需要修复**：导入和修复流程会维护 `session_index.jsonl`、Desktop `threads` 表、workspace roots、provider 和线程标题。
+- **归档会话过多会拖慢搬运**：可以在 TUI 中预览、勾选并删除归档会话；删除时会保护同 ID 的 active 会话索引和 Desktop 线程记录。
 - **写入操作需要可预演、可回退**：导出、导入、修复、清理、GitHub 同步等关键动作支持 Dry-run；导入覆盖前会备份，备份可在 TUI 中恢复。
 
 ## 项目定位
@@ -135,12 +137,22 @@ codex-session-toolkit
 
 - 迁移到当前 Provider
 - 修复会话在 Codex Desktop 中显示
+- 删除归档会话
 - 管理会话备份
 - 清理旧版无标记副本
 - 可选把未登记 CLI 会话纳入 Desktop
 - 支持 Dry-run 预演
 
 Desktop 修复默认只处理 active 会话；需要 archived 会话时，从 Repair / Maintenance 的修复入口中选择对应范围。
+
+删除归档会话会先进入列表页：
+
+- `Enter` / `d` 预览当前归档会话
+- `Space` 勾选或取消勾选
+- `x` 删除选中项；未勾选时删除当前项
+- `a` 删除全部归档会话
+
+删除只针对 `~/.codex/archived_sessions/` 下的归档 rollout。若同一个 session id 同时还有 active rollout，工具会保留 `session_index.jsonl` 中的 active 索引，并把 Desktop `threads` 记录指回 active 文件，避免误删后左侧线程栏丢失。
 
 ### GitHub / Sync
 
@@ -149,9 +161,10 @@ Desktop 修复默认只处理 active 会话；需要 archived 会话时，从 Re
 菜单顺序：
 
 1. `连接独立 GitHub 仓库`
-2. `查看 GitHub 同步状态`
-3. `从 GitHub 拉取更新`
-4. `推送本机更新到 GitHub`
+2. `连接/断开代理`
+3. `查看 GitHub 同步状态`
+4. `从 GitHub 拉取更新`
+5. `推送本机更新到 GitHub`
 
 同步内容：
 
@@ -161,6 +174,7 @@ Desktop 修复默认只处理 active 会话；需要 archived 会话时，从 Re
 同步方式：
 
 - 连接：连接一个独立 Bundle 仓库，可选择连接后首次推送。
+- 代理：配置本机代理接口；状态检查、拉取、推送都会使用它。
 - 拉取：从已连接仓库拉取远端 Bundle 更新。
 - 推送：提交本机 Bundle 变更，检查远端更新，必要时合并，再推送。
 
@@ -188,6 +202,18 @@ git@github.com:you/codex-bundles.git
 - 显示本地待同步文件数量
 
 普通首页、Bundle 页面、Skills 页面只读本地缓存状态，不会自动联网检查远端。
+
+### 代理
+
+`连接/断开代理` 用于 GitHub 同步链路。常见输入：
+
+```text
+http://127.0.0.1:7890
+socks5://127.0.0.1:7890
+127.0.0.1:7890
+```
+
+未写协议时默认按 `http://` 处理。配置后，状态检查、拉取和推送都会在执行 git 操作时注入代理环境；断开后停止注入。代理配置只保存在 `./codex_bundles/` 自己的 git 配置里，不会修改本项目源码仓库的 git remote，也不会写全局 git 配置。
 
 ### 拉取
 
@@ -275,6 +301,16 @@ git@github.com:you/codex-bundles.git
 7. 输入 `DELETE` 二次确认。
 
 恢复前如果当前 rollout 仍存在，工具会再生成一份 `rollout-xxx.jsonl.bak.restore.<timestamp>`。
+
+### 清理归档会话
+
+1. 进入 `Repair / Maintenance`。
+2. 选择 `删除归档会话`。
+3. 按 `Enter` 或 `d` 预览当前会话。
+4. 按 `Space` 勾选多条，或直接停在某条上按 `x` 删除当前条。
+5. 需要清空归档时按 `a`，确认后删除全部归档会话。
+
+这个功能用来减轻跨设备同步和搬运负担。它只删除归档 rollout；如果本机还有同 ID 的 active rollout，会保留 active 索引和 Desktop 可见性。
 
 ## Bundle 目录策略
 
@@ -416,6 +452,8 @@ Provider 识别顺序：
 | `e` | 在会话列表中导出当前会话 |
 | `p` | 在项目会话浏览器中重新输入项目路径 |
 | `x` | 在项目会话浏览器导出当前项目全部会话；在 Skills 列表导出全部自定义 Skills；在备份列表删除备份 |
+| `Space` | 在归档会话删除列表中勾选或取消勾选 |
+| `a` | 在归档会话删除列表中删除全部归档会话 |
 | `s` | 切换 Bundle 导出方式 |
 | `m` | 按导出机器切换 Bundle 搜索范围 |
 | `l` | 切换显示全部历史 Bundle / 仅显示最新 Bundle |
@@ -451,10 +489,13 @@ codex-session-toolkit sync-github
 - 不会悄悄覆盖原始 session
 - 导入覆盖前会自动备份旧 rollout
 - 清理操作只针对旧版无标记 clone
+- 删除归档会话只处理 `~/.codex/archived_sessions/`
+- 删除归档会话时，如果同 ID active 会话仍存在，会保留 active 索引和 Desktop 线程记录
 - 删除 Skill 和删除备份都需要确认
 - 导入前会校验 manifest、路径和 JSONL
 - GitHub 同步只处理 `./codex_bundles/`
 - 父项目源码仓库通过 `.gitignore` 忽略 `codex_bundles/`
+- GitHub 代理只作用于 Bundle 同步链路，不写全局 git 配置
 - 建议写入型动作第一次都先 Dry-run
 
 ## 运行环境
