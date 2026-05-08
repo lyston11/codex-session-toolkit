@@ -30,7 +30,7 @@ import codex_session_toolkit.terminal_ui as terminal_ui_compat  # noqa: E402
 import codex_session_toolkit.tui_app as tui_app_compat  # noqa: E402
 from codex_session_toolkit.cli import DEFAULT_MODEL_PROVIDER, create_arg_parser  # noqa: E402
 from codex_session_toolkit.tui.maintenance_modes import run_cleanup_mode, run_clone_mode  # noqa: E402
-from codex_session_toolkit.tui.action_flows import build_desktop_repair_cli_args, execute_menu_action, resolve_menu_action_request, run_action  # noqa: E402
+from codex_session_toolkit.tui.action_flows import build_delete_archived_sessions_cli_args, build_desktop_repair_cli_args, execute_menu_action, resolve_menu_action_request, run_action  # noqa: E402
 from codex_session_toolkit.tui.browser_flows import open_project_session_browser  # noqa: E402
 from codex_session_toolkit.tui.github_flows import show_github_sync_status  # noqa: E402
 from codex_session_toolkit.tui.menu_catalog import TUI_ACTION_SECTION_OVERRIDES, build_tui_menu_actions, build_tui_menu_sections, tui_action_section  # noqa: E402
@@ -315,6 +315,120 @@ class PackagingSmokeTests(unittest.TestCase):
                 runner=lambda: 0,
                 danger=False,
             )
+
+    def test_tui_single_bundle_import_registers_desktop_without_creating_workspace_by_default(self) -> None:
+        test_case = self
+
+        class ImportApp:
+            def _open_bundle_browser(self, *, mode):
+                test_case.assertEqual(mode, "select")
+                return SimpleNamespace(
+                    session_id="demo-session",
+                    bundle_dir=Path("/tmp/codex_bundles/machine/sessions/single/demo-session"),
+                )
+
+            def _confirm_toggle(self, **kwargs):
+                test_case.assertIn("Desktop 左侧线程栏", kwargs["question"])
+                return False
+
+        action_name, cli_args = resolve_menu_action_request(
+            ImportApp(),
+            SimpleNamespace(action_id="import_one", label="导入单个 Bundle 为会话", cli_args=("import",)),
+        )
+
+        self.assertEqual(action_name, "导入 Bundle demo-session 为会话（显示到 Desktop）")
+        self.assertEqual(
+            cli_args,
+            [
+                "import",
+                "--desktop-visible",
+                "--no-create-workspace",
+                "/tmp/codex_bundles/machine/sessions/single/demo-session",
+            ],
+        )
+
+    def test_tui_batch_import_registers_desktop_and_keeps_workspace_creation_optional(self) -> None:
+        test_case = self
+
+        class ImportApp:
+            def _select_batch_bundle_import_scope(self):
+                return SimpleNamespace(
+                    entries=[object(), object()],
+                    machine_filter="studio-mac",
+                    machine_label="Studio Mac",
+                    export_group_filter="desktop",
+                    export_group_label="Desktop",
+                    project_filter="",
+                    project_label="",
+                    target_project_path="",
+                )
+
+            def _confirm_toggle(self, **kwargs):
+                test_case.assertIn("Desktop 左侧线程栏", kwargs["question"])
+                return False
+
+        action_name, cli_args = resolve_menu_action_request(
+            ImportApp(),
+            SimpleNamespace(action_id="import_desktop_all", label="批量导入 Bundle 为会话", cli_args=("import-desktop-all",)),
+        )
+
+        self.assertEqual(action_name, "批量导入 Studio Mac/Desktop（2 个 Bundle）（显示到 Desktop）")
+        self.assertEqual(
+            cli_args,
+            [
+                "import-desktop-all",
+                "--desktop-visible",
+                "--no-create-workspace",
+                "--machine",
+                "studio-mac",
+                "--export-group",
+                "desktop",
+            ],
+        )
+
+    def test_tui_batch_import_can_create_missing_project_workspace(self) -> None:
+        test_case = self
+
+        class ImportApp:
+            def _select_batch_bundle_import_scope(self):
+                return SimpleNamespace(
+                    entries=[object()],
+                    machine_filter="work-laptop",
+                    machine_label="Work Laptop",
+                    export_group_filter="project",
+                    export_group_label="Project",
+                    project_filter="demo-project",
+                    project_label="demo-project",
+                    target_project_path="/tmp/local-demo-project",
+                )
+
+            def _confirm_toggle(self, **kwargs):
+                test_case.assertTrue(kwargs["default_yes"])
+                test_case.assertIn("目标项目路径不存在", kwargs["question"])
+                return True
+
+        with patch("codex_session_toolkit.tui.action_flows.Path.exists", return_value=False):
+            action_name, cli_args = resolve_menu_action_request(
+                ImportApp(),
+                SimpleNamespace(action_id="import_desktop_all", label="批量导入 Bundle 为会话", cli_args=("import-desktop-all",)),
+            )
+
+        self.assertEqual(action_name, "批量导入 Work Laptop/Project/demo-project（1 个 Bundle）（显示到 Desktop）（自动创建目录）")
+        self.assertEqual(
+            cli_args,
+            [
+                "import-desktop-all",
+                "--desktop-visible",
+                "--machine",
+                "work-laptop",
+                "--export-group",
+                "project",
+                "--project",
+                "demo-project",
+                "--target-project-path",
+                "/tmp/local-demo-project",
+            ],
+        )
 
     def test_tui_github_push_uses_single_choice_flow(self) -> None:
         test_case = self
@@ -664,6 +778,28 @@ class PackagingSmokeTests(unittest.TestCase):
         self.assertEqual(cli_args, ["repair-desktop", "demo-provider", "--dry-run"])
         self.assertTrue(kwargs["dry_run"])
 
+    def test_tui_delete_archived_sessions_opens_browser(self) -> None:
+        class DeleteArchivedApp:
+            def __init__(self) -> None:
+                self.open_calls = 0
+
+            def _open_archived_session_browser(self):
+                self.open_calls += 1
+
+            def _confirm_dangerous_action(self, *args, **kwargs):
+                raise AssertionError("main menu should open the archived browser before destructive confirmation")
+
+            def _run_action(self, action_name, cli_args, **kwargs):
+                raise AssertionError("main menu should not delete archived sessions directly")
+
+            def _prompt_execution_mode(self, **kwargs):
+                raise AssertionError("main menu should not ask execution mode before showing archived sessions")
+
+        app = DeleteArchivedApp()
+        execute_menu_action(app, SimpleNamespace(action_id="delete_archived_sessions", label="删除归档会话"))
+
+        self.assertEqual(app.open_calls, 1)
+
     def test_project_export_dry_run_returns_to_execution_mode(self) -> None:
         class ProjectExportApp:
             context = SimpleNamespace(bundle_root_label="./codex_bundles")
@@ -813,6 +949,7 @@ class PackagingSmokeTests(unittest.TestCase):
                 "provider_migration",
                 "desktop_repair",
                 "browse_backups",
+                "delete_archived_sessions",
                 "clean_legacy",
             },
         )
@@ -831,6 +968,7 @@ class PackagingSmokeTests(unittest.TestCase):
         self.assertEqual(labels_by_action["provider_migration"], "迁移到当前 Provider")
         self.assertEqual(labels_by_action["desktop_repair"], "修复会话在 Desktop 中显示")
         self.assertEqual(labels_by_action["browse_backups"], "管理会话备份")
+        self.assertEqual(labels_by_action["delete_archived_sessions"], "删除归档会话")
         self.assertEqual(labels_by_action["clean_legacy"], "清理旧版无标记副本")
         self.assertEqual(labels_by_action["project_sessions"], "按项目路径查看并导出会话")
         self.assertEqual(labels_by_action["list_skills"], "浏览本机 Skills")
@@ -845,6 +983,12 @@ class PackagingSmokeTests(unittest.TestCase):
         self.assertEqual(
             build_desktop_repair_cli_args("account-provider", include_cli=True, dry_run=True),
             ["repair-desktop", "account-provider", "--include-cli", "--dry-run"],
+        )
+
+    def test_tui_delete_archived_sessions_passes_dry_run_explicitly(self) -> None:
+        self.assertEqual(
+            build_delete_archived_sessions_cli_args(dry_run=True),
+            ["delete-archived-sessions", "--dry-run"],
         )
 
     def test_logo_font_covers_toolkit_wordmark(self) -> None:

@@ -43,6 +43,7 @@ COMMAND_CATALOG: tuple[CommandSpec, ...] = (
     CommandSpec("list-backups", "repair", "List session rollout backups", "Browse session overwrite backups"),
     CommandSpec("restore-backup", "repair", "Restore one session rollout backup", "Restore one session overwrite backup"),
     CommandSpec("delete-backup", "repair", "Delete one session rollout backup", "Delete one session overwrite backup"),
+    CommandSpec("delete-archived-sessions", "repair", "Delete all archived session rollouts", "Delete archived sessions"),
     CommandSpec("clean-clones", "repair", "Delete legacy unmarked clone files", "Remove legacy unmarked clone files"),
 )
 

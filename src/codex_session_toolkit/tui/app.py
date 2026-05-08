@@ -28,6 +28,7 @@ from .bundle_flows import default_target_project_path as _default_target_project
 from .bundle_flows import select_batch_bundle_import_scope as _select_batch_bundle_import_scope_flow
 from .bundle_flows import select_project_bundle_import_scope as _select_project_bundle_import_scope_flow
 from .browser_flows import open_bundle_browser as _open_bundle_browser_flow
+from .browser_flows import open_archived_session_browser as _open_archived_session_browser_flow
 from .browser_flows import open_local_skill_browser as _open_local_skill_browser_flow
 from .browser_flows import open_project_session_browser as _open_project_session_browser_flow
 from .browser_flows import open_session_backup_browser as _open_session_backup_browser_flow
@@ -431,6 +432,9 @@ class ToolkitTuiApp:
 
     def _open_session_backup_browser(self, *, mode: str) -> Optional[SessionBackupSummary]:
         return _open_session_backup_browser_flow(self, mode=mode)
+
+    def _open_archived_session_browser(self) -> None:
+        return _open_archived_session_browser_flow(self)
 
     def _open_bundle_browser(self, *, mode: str, source_group: str = "all") -> Optional[BundleSummary]:
         return _open_bundle_browser_flow(self, mode=mode, source_group=source_group)

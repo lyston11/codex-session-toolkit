@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 
 from ..models import (
+    ArchivedSessionDeleteResult,
     BatchExportResult,
     BatchImportResult,
     BundleSummary,
@@ -281,6 +282,28 @@ def print_session_backup_delete_result(result: SessionBackupDeleteResult) -> int
     print(f"Backup: {result.backup_path}")
     print(f"Target: {result.target_path}")
     return 0
+
+
+def print_archived_session_delete_result(result: ArchivedSessionDeleteResult) -> int:
+    action = "Would delete archived sessions" if result.dry_run else "Deleted archived sessions"
+    print(action)
+    print(f"Archive root: {result.archive_root}")
+    print(f"Session files: {len(result.files_to_delete)}")
+    print(f"Unique sessions: {len(result.session_ids)}")
+    print(f"Bytes: {result.bytes_to_delete}")
+    print(f"Threads table rows removed: {result.thread_rows_removed}")
+    print(f"Session index entries removed: {result.index_entries_removed}")
+    if not result.dry_run:
+        print(f"Deleted files: {len(result.deleted_files)}")
+        print(f"Empty directories removed: {result.empty_dirs_removed}")
+    for target_path, reason in result.errors:
+        print(f"[Error] Deleting {target_path}: {reason}", file=sys.stderr)
+    if result.dry_run:
+        for target_path in result.files_to_delete[:20]:
+            print(f"[DRY-RUN] Would delete: {target_path}")
+        if len(result.files_to_delete) > 20:
+            print(f"[DRY-RUN] ... +{len(result.files_to_delete) - 20} more")
+    return 1 if result.errors else 0
 
 
 def print_github_connect_result(result: GitHubConnectResult) -> int:

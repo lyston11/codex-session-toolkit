@@ -20,8 +20,19 @@ def get_session_summaries(
     pattern: str = "",
     limit: Optional[int] = None,
     project_path: str = "",
+    active_only: bool = False,
+    archived_only: bool = False,
 ) -> list[SessionSummary]:
-    return collect_session_summaries(paths, pattern=pattern, limit=limit, project_path=project_path)
+    summaries = collect_session_summaries(
+        paths,
+        pattern=pattern,
+        limit=limit,
+        project_path=project_path,
+        active_only=active_only,
+    )
+    if archived_only:
+        return [summary for summary in summaries if summary.scope == "archived"]
+    return summaries
 
 
 def get_project_session_summaries(

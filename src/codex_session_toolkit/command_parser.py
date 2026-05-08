@@ -102,6 +102,7 @@ def create_parser() -> argparse.ArgumentParser:
     import_parser = subparsers.add_parser("import", help=command_help("import"))
     import_parser.add_argument("input_value", help="Session id or bundle directory")
     import_parser.add_argument("--desktop-visible", action="store_true")
+    import_parser.add_argument("--no-create-workspace", action="store_true", help="Do not create a missing cwd when making the import Desktop-visible")
     _add_bundle_source(import_parser, help_text="Which bundle categories to scan when importing by session id")
     import_parser.add_argument("--machine", default="", help="Only search bundles from this machine key")
     import_parser.add_argument("--export-group", default="", help="Only search bundles from this export folder (desktop/active/cli/project/single)")
@@ -109,6 +110,7 @@ def create_parser() -> argparse.ArgumentParser:
 
     import_all_parser = subparsers.add_parser("import-desktop-all", help=command_help("import-desktop-all"))
     import_all_parser.add_argument("--desktop-visible", action="store_true")
+    import_all_parser.add_argument("--no-create-workspace", action="store_true", help="Do not create missing cwd directories when making imports Desktop-visible")
     import_all_parser.add_argument("--machine", default="", help="Only import bundles from this machine key")
     import_all_parser.add_argument("--export-group", default="", help="Only import bundles from this export folder (desktop/active/cli/project/single)")
     import_all_parser.add_argument("--project", default="", help="Only import one project folder under project exports")
@@ -172,6 +174,13 @@ def create_parser() -> argparse.ArgumentParser:
     delete_backup_parser = subparsers.add_parser("delete-backup", help=command_help("delete-backup"))
     delete_backup_parser.add_argument("input_value", help="Backup path, backup filename, or session id")
     delete_backup_parser.add_argument("--dry-run", action="store_true", help="Preview the backup that would be deleted")
+
+    delete_archived_parser = subparsers.add_parser(
+        "delete-archived-sessions",
+        help=command_help("delete-archived-sessions"),
+    )
+    delete_archived_parser.add_argument("session_ids", nargs="*", help="Optional archived session ids to delete")
+    delete_archived_parser.add_argument("--dry-run", action="store_true", help="Preview archived sessions that would be deleted")
 
     repair_parser = subparsers.add_parser("repair-desktop", help=command_help("repair-desktop"))
     repair_parser.add_argument("target_provider", nargs="?", default="", help="Optional provider override")

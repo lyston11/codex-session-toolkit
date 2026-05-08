@@ -5,6 +5,7 @@ from __future__ import annotations
 from .commands import create_parser, main, run_cli
 from .errors import ToolkitError
 from .models import (
+    ArchivedSessionDeleteResult,
     BatchExportResult,
     BatchImportResult,
     BundleSummary,
@@ -27,6 +28,7 @@ from .models import (
 )
 from .paths import CodexPaths
 from .presenters.reports import (
+    print_archived_session_delete_result,
     print_batch_export_result,
     print_batch_import_result,
     print_bundle_rows,
@@ -45,6 +47,7 @@ from .presenters.reports import (
     print_session_rows,
     print_validation_report,
 )
+from .services.archived_sessions import delete_archived_sessions
 from .services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles
 from .services.backups import delete_session_backup, list_session_backups, restore_session_backup
 from .services.clone import cleanup_clones, clone_to_provider
@@ -94,6 +97,7 @@ def list_project_sessions(
 
 
 __all__ = [
+    "ArchivedSessionDeleteResult",
     "BatchExportResult",
     "BatchImportResult",
     "BundleSummary",
@@ -118,6 +122,7 @@ __all__ = [
     "cleanup_clones",
     "clone_to_provider",
     "create_parser",
+    "delete_archived_sessions",
     "delete_session_backup",
     "detect_provider",
     "export_active_desktop_all",
@@ -135,6 +140,7 @@ __all__ = [
     "list_session_backups",
     "list_sessions",
     "main",
+    "print_archived_session_delete_result",
     "print_batch_export_result",
     "print_batch_import_result",
     "print_bundle_rows",

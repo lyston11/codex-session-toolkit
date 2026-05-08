@@ -54,6 +54,7 @@ def import_session(
     machine_filter: str = "",
     export_group_filter: str = "",
     desktop_visible: bool = False,
+    create_missing_workspace: Optional[bool] = None,
     session_cwd_override: str = "",
     skills_mode: str = "best-effort",
     skills_restore_report_path: Optional[Path] = None,
@@ -94,6 +95,9 @@ def import_session(
     updated_at = normalize_updated_at(manifest.get("UPDATED_AT", ""), source_session, extract_last_timestamp(source_session))
     thread_name = manifest.get("THREAD_NAME", "")
     manifest_first_user_message = manifest.get("FIRST_USER_MESSAGE", "")
+
+    if create_missing_workspace is None:
+        create_missing_workspace = desktop_visible
 
     state_db = paths.latest_state_db()
     desktop_env = paths.state_file.exists() or state_db is not None
@@ -166,7 +170,7 @@ def import_session(
         )
 
         if session_cwd and not Path(session_cwd).is_dir():
-            if desktop_visible:
+            if create_missing_workspace:
                 Path(session_cwd).mkdir(parents=True, exist_ok=True)
                 created_workspace_dir = True
             else:
@@ -378,6 +382,7 @@ def import_desktop_all(
     target_project_path: str = "",
     latest_only: bool = False,
     desktop_visible: bool = False,
+    create_missing_workspace: Optional[bool] = None,
     skills_mode: str = "best-effort",
 ) -> BatchImportResult:
     plan = build_batch_import_plan(
@@ -391,7 +396,10 @@ def import_desktop_all(
         skills_mode=skills_mode,
     )
 
-    if plan.target_project_path and desktop_visible and not Path(plan.target_project_path).is_dir():
+    if create_missing_workspace is None:
+        create_missing_workspace = desktop_visible
+
+    if plan.target_project_path and create_missing_workspace and not Path(plan.target_project_path).is_dir():
         Path(plan.target_project_path).mkdir(parents=True, exist_ok=True)
 
     success_dirs: list[Path] = []
@@ -410,6 +418,7 @@ def import_desktop_all(
                 str(summary.bundle_dir),
                 bundle_root=plan.bundle_root,
                 desktop_visible=desktop_visible,
+                create_missing_workspace=create_missing_workspace,
                 session_cwd_override=plan.session_cwd_override_for(summary),
                 skills_mode=skills_mode,
                 skills_restore_report_path=plan.skills_restore_report_candidate_path,

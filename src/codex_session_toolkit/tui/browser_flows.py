@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from ..errors import ToolkitError
+from ..services.archived_sessions import delete_archived_sessions
 from ..services.backups import list_session_backups
 from ..services.browse import get_project_session_summaries, get_session_summaries
 from ..services.skills_transfer import list_local_skills, list_skill_bundles
@@ -341,6 +342,214 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
                 danger=False,
             )
             continue
+
+
+def open_archived_session_browser(app: "ToolkitTuiApp") -> None:
+    filter_text = ""
+    selected_index = 0
+    selected_session_ids: set[str] = set()
+    pointer = glyphs().get("pointer", ">")
+    entries: list["SessionSummary"] = []
+    needs_reload = True
+
+    while True:
+        if needs_reload:
+            try:
+                entries = get_session_summaries(
+                    app.paths,
+                    pattern=filter_text,
+                    limit=None,
+                    archived_only=True,
+                )
+            except ToolkitError as exc:
+                app._show_detail_panel("读取归档会话失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+                return
+            selected_session_ids.intersection_update({entry.session_id for entry in entries})
+            needs_reload = False
+
+        selected_index = clamp_selected_index(selected_index, len(entries))
+        box_width, center = app._screen_layout()
+        subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 预览 · / 搜索 · x 删除选中/当前 · a 删除全部 · q 返回"
+        info_lines = [
+            f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
+            f"{style_text('归档数量', Ansi.DIM)} : {len(entries)}",
+            f"{style_text('已勾选', Ansi.DIM)}   : {len(selected_session_ids)}",
+            f"{style_text('目录', Ansi.DIM)}     : {app.paths.archived_sessions_dir}",
+        ]
+
+        list_lines: list[str] = []
+        if not entries:
+            list_lines.append("没有匹配归档会话。按 / 修改搜索词，或按 q 返回。")
+        else:
+            start, end = selection_window(len(entries), selected_index, 10)
+            for idx in range(start, end):
+                summary = entries[idx]
+                title = summary.thread_name or "（未命名）"
+                marker = "[x]" if summary.session_id in selected_session_ids else "[ ]"
+                line = (
+                    f"{pointer if idx == selected_index else ' '} {marker} "
+                    f"{summary.session_id} | {summary.kind} | {title}"
+                )
+                if idx == selected_index:
+                    list_lines.append(style_text(line, Ansi.BOLD, Ansi.CYAN))
+                    extra_parts: list[str] = []
+                    if summary.preview and summary.preview != title:
+                        extra_parts.append(f"预览：{summary.preview}")
+                    if summary.cwd:
+                        extra_parts.append(f"目录：{summary.cwd}")
+                    if summary.model_provider:
+                        extra_parts.append(summary.model_provider)
+                    extra_parts.append(str(summary.path))
+                    list_lines.append(
+                        "  "
+                        + style_text(
+                            ellipsize_middle(" · ".join(extra_parts), max(10, box_width - 10)),
+                            Ansi.DIM,
+                        )
+                    )
+                else:
+                    list_lines.append(line)
+
+        render_browser_frame(
+            app,
+            title="删除归档会话",
+            subtitle=subtitle,
+            info_lines=info_lines,
+            list_lines=list_lines,
+            list_border_codes=(Ansi.DIM, Ansi.GREEN),
+            box_width=box_width,
+            center=center,
+        )
+
+        key = read_key()
+        if key is None:
+            raw = input("命令 [Enter/空格/\\/x/a/d/q]：").strip()
+            key = raw if raw else "ENTER"
+
+        if key == " " and entries:
+            selected = entries[selected_index]
+            if selected.session_id in selected_session_ids:
+                selected_session_ids.remove(selected.session_id)
+            else:
+                selected_session_ids.add(selected.session_id)
+            continue
+
+        transition = apply_list_key(key, selected_index=selected_index, item_count=len(entries), detail_keys=("d",))
+        selected_index = transition.selected_index
+        if transition.confirm_selected:
+            if entries:
+                app._show_detail_panel(
+                    "归档会话预览",
+                    _archived_session_preview_lines(entries[selected_index]),
+                    border_codes=(Ansi.DIM, Ansi.GREEN),
+                )
+            continue
+        if transition.exit_requested:
+            return
+        if transition.show_detail and entries:
+            app._show_detail_panel(
+                "归档会话预览",
+                _archived_session_preview_lines(entries[selected_index]),
+                border_codes=(Ansi.DIM, Ansi.GREEN),
+            )
+            continue
+
+        key_str = transition.matched_hotkey
+        if key_str in {"/", "f"}:
+            new_filter = app._prompt_value(
+                title="删除归档会话",
+                prompt_label="输入搜索词",
+                help_lines=[
+                    "只在归档会话中搜索。",
+                    "可按 session_id / 标题 / provider / cwd / 路径搜索。",
+                    "留空表示不搜索。",
+                ],
+                allow_empty=True,
+            )
+            filter_text = new_filter or ""
+            selected_index = 0
+            selected_session_ids.clear()
+            needs_reload = True
+            continue
+        if key_str in {" ", "m"} and entries:
+            selected = entries[selected_index]
+            if selected.session_id in selected_session_ids:
+                selected_session_ids.remove(selected.session_id)
+            else:
+                selected_session_ids.add(selected.session_id)
+            continue
+        if key_str == "x" and entries:
+            selected_ids = [entry.session_id for entry in entries if entry.session_id in selected_session_ids]
+            if not selected_ids:
+                selected_ids = [entries[selected_index].session_id]
+            cli_args = ["delete-archived-sessions", *selected_ids]
+            count = len(selected_ids)
+            selected_paths = [str(entry.path) for entry in entries if entry.session_id in set(selected_ids)]
+            warning = (
+                f"将删除归档会话 {selected_ids[0]}。"
+                if count == 1
+                else f"将删除已勾选的 {count} 个归档会话。"
+            )
+            impact = selected_paths[0] if count == 1 and selected_paths else f"{count} 个归档会话"
+            if not app._confirm_dangerous_action(
+                cli_args,
+                title="删除归档会话确认",
+                subtitle="该操作会删除选中的归档会话文件。",
+                warning=warning,
+                impact=impact,
+            ):
+                continue
+            app._run_action(
+                f"删除归档会话 {selected_ids[0]}" if count == 1 else f"删除 {count} 个归档会话",
+                cli_args,
+                dry_run=False,
+                runner=lambda args=cli_args: app._run_toolkit(args),
+                danger=True,
+            )
+            selected_index = 0
+            selected_session_ids.clear()
+            needs_reload = True
+            continue
+        if key_str == "a":
+            if not entries:
+                app._show_detail_panel(
+                    "删除归档会话",
+                    ["当前没有匹配归档会话。"],
+                    border_codes=(Ansi.DIM, Ansi.YELLOW),
+                )
+                continue
+            result = delete_archived_sessions(app.paths, dry_run=True)
+            if not app._confirm_dangerous_action(
+                ["delete-archived-sessions"],
+                title="删除全部归档会话确认",
+                subtitle="该操作会删除本机 archived_sessions 下的全部归档会话文件。",
+                warning=f"将删除 {len(result.files_to_delete)} 个归档会话文件，并同步清理 Desktop 线程记录。",
+                impact=str(app.paths.archived_sessions_dir),
+            ):
+                continue
+            app._run_action(
+                "删除全部归档会话",
+                ["delete-archived-sessions"],
+                dry_run=False,
+                runner=lambda: app._run_toolkit(["delete-archived-sessions"]),
+                danger=True,
+            )
+            selected_index = 0
+            selected_session_ids.clear()
+            needs_reload = True
+            continue
+
+
+def _archived_session_preview_lines(summary: "SessionSummary") -> list[str]:
+    return [
+        f"{style_text('会话名称', Ansi.DIM)} : {summary.thread_name or '（未命名）'}",
+        f"{style_text('会话预览', Ansi.DIM)} : {summary.preview or '（无）'}",
+        f"{style_text('Session ID', Ansi.DIM)} : {summary.session_id}",
+        f"{style_text('类型', Ansi.DIM)}     : {summary.kind}",
+        f"{style_text('Provider', Ansi.DIM)} : {summary.model_provider or '-'}",
+        f"{style_text('工作目录', Ansi.DIM)} : {summary.cwd or '（空）'}",
+        f"{style_text('归档文件', Ansi.DIM)} : {summary.path}",
+    ]
 
 
 def open_session_backup_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["SessionBackupSummary"]:

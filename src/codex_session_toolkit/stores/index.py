@@ -160,3 +160,23 @@ def write_session_index_entries(
             f"Warning: discarded {discarded_invalid_lines} unrecoverable malformed session_index.jsonl line(s).",
             file=sys.stderr,
         )
+
+
+def remove_session_index_entries(index_file: Path, session_ids: set[str], *, dry_run: bool = False) -> int:
+    if not session_ids or not index_file.exists():
+        return 0
+
+    entries = load_existing_index(index_file)
+    kept_entries = [
+        SessionIndexEntry(
+            session_id=session_id,
+            thread_name=str(entry.get("thread_name") or session_id),
+            updated_at=str(entry.get("updated_at") or ""),
+        )
+        for session_id, entry in entries.items()
+        if session_id not in session_ids
+    ]
+    removed = len(entries) - len(kept_entries)
+    if removed and not dry_run:
+        write_session_index_entries(index_file, kept_entries)
+    return removed

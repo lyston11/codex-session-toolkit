@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+
+STATE_DB_RE = re.compile(r"^state_(\d+)\.sqlite$")
 
 
 @dataclass(frozen=True)
@@ -80,5 +84,15 @@ class CodexPaths:
         return self.code_dir / "skills"
 
     def latest_state_db(self) -> Optional[Path]:
-        matches = sorted(self.code_dir.glob("state_*.sqlite"))
+        matches = sorted(self.code_dir.glob("state_*.sqlite"), key=_state_db_sort_key)
         return matches[-1] if matches else None
+
+
+def _state_db_sort_key(path: Path) -> tuple[int, int, str]:
+    match = STATE_DB_RE.match(path.name)
+    version = int(match.group(1)) if match else -1
+    try:
+        modified_ns = path.stat().st_mtime_ns
+    except OSError:
+        modified_ns = 0
+    return version, modified_ns, path.name

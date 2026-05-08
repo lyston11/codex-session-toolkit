@@ -36,11 +36,12 @@ from codex_session_toolkit.services.github_sync import (  # noqa: E402
     pull_bundles_from_github,
     sync_bundles_to_github,
 )
+from codex_session_toolkit.services.archived_sessions import delete_archived_sessions  # noqa: E402
 from codex_session_toolkit.services.importing import import_desktop_all, import_session  # noqa: E402
 from codex_session_toolkit.services.provider import detect_provider  # noqa: E402
 from codex_session_toolkit.services.repair import repair_desktop  # noqa: E402
 from codex_session_toolkit.services.skills_transfer import delete_local_skill, export_skills, import_skill_bundle, list_skill_bundles, list_local_skills  # noqa: E402
-from codex_session_toolkit.support import default_local_project_target, machine_label_to_key  # noqa: E402
+from codex_session_toolkit.support import default_local_project_target, iso_to_epoch_ms, machine_label_to_key  # noqa: E402
 from codex_session_toolkit.stores import bundles as legacy_bundles  # noqa: E402
 from codex_session_toolkit.stores.bundle_scanner import collect_known_bundle_summaries, latest_distinct_bundle_summaries  # noqa: E402
 from codex_session_toolkit.stores.session_files import iter_session_files, read_session_payload  # noqa: E402
@@ -94,7 +95,14 @@ def write_state_file(home: Path) -> None:
 
 
 def create_threads_db(home: Path) -> Path:
-    db_path = home / ".codex" / "state_0001.sqlite"
+    return create_threads_db_file(home / ".codex" / "state_0001.sqlite")
+
+
+def create_numbered_threads_db(home: Path, version: int) -> Path:
+    return create_threads_db_file(home / ".codex" / f"state_{version}.sqlite")
+
+
+def create_threads_db_file(db_path: Path) -> Path:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute(
@@ -118,7 +126,9 @@ def create_threads_db(home: Path) -> Path:
             first_user_message text,
             memory_mode text,
             model text,
-            reasoning_effort text
+            reasoning_effort text,
+            created_at_ms integer,
+            updated_at_ms integer
         )
         """
     )
@@ -448,6 +458,21 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertEqual(len(summaries), 1)
             self.assertEqual(summaries[0].thread_name, "Desktop short title")
             self.assertNotEqual(summaries[0].thread_name, summaries[0].preview)
+
+    def test_latest_state_db_uses_numeric_desktop_schema_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            older_db = create_numbered_threads_db(home, 9)
+            latest_db = create_numbered_threads_db(home, 10)
+
+            self.assertEqual(CodexPaths(home=home).latest_state_db(), latest_db)
+            self.assertLess(latest_db.name, older_db.name)
+
+    def test_iso_to_epoch_ms_preserves_desktop_millisecond_precision(self) -> None:
+        self.assertEqual(
+            iso_to_epoch_ms("2026-04-10T10:00:00.468Z"),
+            1775815200468,
+        )
 
     def test_session_summaries_do_not_full_parse_rollouts_for_list_view(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1410,6 +1435,9 @@ class CoreWorkflowTests(unittest.TestCase):
 
             conn = sqlite3.connect(dst_home / ".codex" / "state_0001.sqlite")
             rows = conn.execute("select id, cwd from threads order by id").fetchall()
+            time_rows = conn.execute(
+                "select id, created_at_ms, updated_at_ms from threads order by id"
+            ).fetchall()
             conn.close()
             self.assertEqual(
                 rows,
@@ -1418,6 +1446,9 @@ class CoreWorkflowTests(unittest.TestCase):
                     (source_nested_session, str(target_project / "packages" / "ui")),
                 ],
             )
+            self.assertEqual([row[0] for row in time_rows], [source_root_session, source_nested_session])
+            self.assertTrue(all(isinstance(row[1], int) and row[1] > 0 for row in time_rows))
+            self.assertTrue(all(isinstance(row[2], int) and row[2] >= row[1] for row in time_rows))
 
     def test_export_validate_and_import_roundtrip_updates_desktop_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1930,6 +1961,145 @@ class CoreWorkflowTests(unittest.TestCase):
                     (cli_id, "repaired-provider", "cli"),
                 ],
             )
+
+    def test_delete_archived_sessions_removes_rollouts_index_and_desktop_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "provider")
+            write_state_file(home)
+            db_path = create_threads_db(home)
+
+            active_id = "11111111-2222-4333-8444-555555555555"
+            archived_id = "22222222-3333-4444-8555-666666666666"
+            other_archived_id = "33333333-4444-4555-8666-777777777777"
+            active_file = write_session(
+                home,
+                active_id,
+                provider="provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace / "active-project",
+            )
+            archived_file = write_session(
+                home,
+                archived_id,
+                provider="provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace / "archived-project",
+                archived=True,
+            )
+            other_archived_file = write_session(
+                home,
+                other_archived_id,
+                provider="provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace / "other-archived-project",
+                archived=True,
+                timestamp="2026-04-10T10:10:00Z",
+            )
+            (home / ".codex" / "session_index.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "id": active_id,
+                                "thread_name": "active title",
+                                "updated_at": "2026-04-10T10:06:00Z",
+                            },
+                            separators=(",", ":"),
+                        ),
+                        json.dumps(
+                            {
+                                "id": archived_id,
+                                "thread_name": "archived title",
+                                "updated_at": "2026-04-10T10:06:00Z",
+                            },
+                            separators=(",", ":"),
+                        ),
+                        json.dumps(
+                            {
+                                "id": other_archived_id,
+                                "thread_name": "other archived title",
+                                "updated_at": "2026-04-10T10:10:00Z",
+                            },
+                            separators=(",", ":"),
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            conn = sqlite3.connect(db_path)
+            for session_id, rollout_path, archived in [
+                (active_id, active_file, 0),
+                (archived_id, archived_file, 1),
+                (other_archived_id, other_archived_file, 1),
+            ]:
+                conn.execute(
+                    """
+                    insert into threads (
+                        id, rollout_path, created_at, updated_at, source, model_provider, cwd, title,
+                        sandbox_policy, approval_mode, tokens_used, has_user_event, archived, cli_version,
+                        first_user_message, memory_mode
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        session_id,
+                        str(rollout_path),
+                        0,
+                        0,
+                        "vscode",
+                        "provider",
+                        str(workspace),
+                        session_id,
+                        "{}",
+                        "on-request",
+                        0,
+                        1,
+                        archived,
+                        "0.1.0",
+                        session_id,
+                        "enabled",
+                    ),
+                )
+            conn.commit()
+            conn.close()
+
+            paths = CodexPaths(home=home)
+            dry_run = delete_archived_sessions(paths, session_ids={archived_id}, dry_run=True)
+            self.assertEqual(dry_run.files_to_delete, [archived_file])
+            self.assertEqual(dry_run.session_ids, [archived_id])
+            self.assertEqual(dry_run.thread_rows_removed, 1)
+            self.assertEqual(dry_run.index_entries_removed, 1)
+            self.assertTrue(archived_file.exists())
+            self.assertTrue(other_archived_file.exists())
+
+            result = delete_archived_sessions(paths, session_ids={archived_id})
+
+            self.assertEqual(result.deleted_files, [archived_file])
+            self.assertEqual(result.session_ids, [archived_id])
+            self.assertEqual(result.thread_rows_removed, 1)
+            self.assertEqual(result.index_entries_removed, 1)
+            self.assertFalse(archived_file.exists())
+            self.assertTrue(other_archived_file.exists())
+            self.assertTrue(active_file.exists())
+
+            index_lines = (home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual([json.loads(raw)["id"] for raw in index_lines], [active_id, other_archived_id])
+
+            conn = sqlite3.connect(db_path)
+            rows = conn.execute("select id from threads order by id").fetchall()
+            conn.close()
+            self.assertEqual(rows, [(active_id,), (other_archived_id,)])
+
+            delete_all_result = delete_archived_sessions(paths)
+            self.assertEqual(delete_all_result.deleted_files, [other_archived_file])
+            self.assertFalse(other_archived_file.exists())
 
     def test_repair_desktop_repairs_desktop_registered_cli_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

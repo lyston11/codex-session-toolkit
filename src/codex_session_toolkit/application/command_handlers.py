@@ -7,6 +7,7 @@ from typing import Callable, Mapping
 
 from ..paths import CodexPaths
 from ..presenters.reports import (
+    print_archived_session_delete_result,
     print_batch_export_result,
     print_batch_import_result,
     print_bundle_rows,
@@ -29,6 +30,7 @@ from ..presenters.reports import (
     print_skill_import_result,
     print_validation_report,
 )
+from ..services.archived_sessions import delete_archived_sessions
 from ..services.backups import delete_session_backup, list_session_backups, restore_session_backup
 from ..services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles
 from ..services.clone import cleanup_clones, clone_to_provider
@@ -142,6 +144,7 @@ def _handle_import(args: argparse.Namespace, paths: CodexPaths) -> int:
             machine_filter=args.machine,
             export_group_filter=args.export_group,
             desktop_visible=args.desktop_visible,
+            create_missing_workspace=args.desktop_visible and not args.no_create_workspace,
             skills_mode=args.skills_mode,
         )
     )
@@ -157,6 +160,7 @@ def _handle_import_desktop_all(args: argparse.Namespace, paths: CodexPaths) -> i
             target_project_path=args.target_project_path,
             latest_only=args.latest_only,
             desktop_visible=args.desktop_visible,
+            create_missing_workspace=args.desktop_visible and not args.no_create_workspace,
             skills_mode=args.skills_mode,
         )
     )
@@ -309,6 +313,16 @@ def _handle_delete_backup(args: argparse.Namespace, paths: CodexPaths) -> int:
     )
 
 
+def _handle_delete_archived_sessions(args: argparse.Namespace, paths: CodexPaths) -> int:
+    return print_archived_session_delete_result(
+        delete_archived_sessions(
+            paths,
+            session_ids=set(args.session_ids),
+            dry_run=args.dry_run,
+        )
+    )
+
+
 def _handle_repair_desktop(args: argparse.Namespace, paths: CodexPaths) -> int:
     return print_repair_result(
         repair_desktop(
@@ -347,5 +361,6 @@ COMMAND_HANDLERS: Mapping[str, CommandHandler] = {
     "list-backups": _handle_list_backups,
     "restore-backup": _handle_restore_backup,
     "delete-backup": _handle_delete_backup,
+    "delete-archived-sessions": _handle_delete_archived_sessions,
     "repair-desktop": _handle_repair_desktop,
 }

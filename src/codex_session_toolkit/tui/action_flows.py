@@ -35,6 +35,13 @@ def build_desktop_repair_cli_args(target_provider: str, *, include_cli: bool, dr
     return cli_args
 
 
+def build_delete_archived_sessions_cli_args(*, dry_run: bool) -> list[str]:
+    cli_args = ["delete-archived-sessions"]
+    if dry_run:
+        cli_args.append("--dry-run")
+    return cli_args
+
+
 def _github_status_snapshot_with_progress(app: "ToolkitTuiApp", *, title: str):
     return run_callable_with_progress(
         app,
@@ -226,7 +233,7 @@ def _build_github_push_request(status, *, dry_run: bool) -> tuple[str, list[str]
 
 def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuAction") -> tuple[Optional[str], Optional[list[str]]]:
     action_name = menu_action.label
-    cli_args = list(menu_action.cli_args)
+    cli_args = list(getattr(menu_action, "cli_args", ()))
 
     if menu_action.action_id == "list_sessions":
         app._open_session_browser(mode="view")
@@ -250,6 +257,10 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
 
     if menu_action.action_id == "browse_backups":
         app._open_session_backup_browser(mode="view")
+        return None, None
+
+    if menu_action.action_id == "delete_archived_sessions":
+        app._open_archived_session_browser()
         return None, None
 
     if menu_action.action_id == "export_one":
@@ -278,19 +289,19 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
         bundle = app._open_bundle_browser(mode="select")
         if not bundle:
             return None, None
-        desktop_visible = app._confirm_toggle(
+        create_missing_workspace = app._confirm_toggle(
             title="导入单个 Bundle 为会话",
-            question="如果工作目录缺失，是否自动创建",
+            question="导入后会注册到 Desktop 左侧线程栏；如果工作目录缺失，是否自动创建",
             yes_label="y",
             no_label="n",
             default_yes=False,
         )
-        args = ["import"]
-        if desktop_visible:
-            args.append("--desktop-visible")
+        args = ["import", "--desktop-visible"]
+        if not create_missing_workspace:
+            args.append("--no-create-workspace")
         args.append(str(bundle.bundle_dir))
-        action_name = f"导入 Bundle {bundle.session_id} 为会话"
-        if desktop_visible:
+        action_name = f"导入 Bundle {bundle.session_id} 为会话（显示到 Desktop）"
+        if create_missing_workspace:
             action_name += "（自动创建目录）"
         return action_name, args
 
@@ -356,22 +367,24 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
         selection = app._select_batch_bundle_import_scope()
         if not selection:
             return None, None
-        create_question = "如果工作目录缺失，是否自动创建"
+        create_question = "导入后会注册到 Desktop 左侧线程栏；如果工作目录缺失，是否自动创建"
         default_yes = False
         if selection.target_project_path:
             if Path(selection.target_project_path).exists():
-                create_question = "如果目标项目路径或其子目录缺失，是否自动创建"
+                create_question = "导入后会注册到 Desktop 左侧线程栏；如果目标项目路径或其子目录缺失，是否自动创建"
             else:
-                create_question = "目标项目路径不存在，是否先创建后再导入"
+                create_question = "导入后会注册到 Desktop 左侧线程栏；目标项目路径不存在，是否先创建后再导入"
                 default_yes = True
-        desktop_visible = app._confirm_toggle(
+        create_missing_workspace = app._confirm_toggle(
             title="批量导入 Bundle 为会话",
             question=create_question,
             yes_label="y",
             no_label="n",
             default_yes=default_yes,
         )
-        args = ["import-desktop-all"]
+        args = ["import-desktop-all", "--desktop-visible"]
+        if not create_missing_workspace:
+            args.append("--no-create-workspace")
         if selection.machine_filter:
             args.extend(["--machine", selection.machine_filter])
         if selection.export_group_filter:
@@ -380,15 +393,14 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
             args.extend(["--project", selection.project_filter])
         if selection.target_project_path:
             args.extend(["--target-project-path", selection.target_project_path])
-        if desktop_visible:
-            args.append("--desktop-visible")
         action_name = f"批量导入 {selection.machine_label}/{selection.export_group_label}（{len(selection.entries)} 个 Bundle）"
         if selection.project_label:
             action_name = (
                 f"批量导入 {selection.machine_label}/{selection.export_group_label}/"
                 f"{selection.project_label}（{len(selection.entries)} 个 Bundle）"
             )
-        if desktop_visible:
+        action_name += "（显示到 Desktop）"
+        if create_missing_workspace:
             action_name += "（自动创建目录）"
         return action_name, args
 
@@ -578,16 +590,20 @@ def execute_menu_action(app: "ToolkitTuiApp", chosen_action: "TuiMenuAction") ->
         )
         return
 
-    action_name, cli_args = app._resolve_menu_action_request(chosen_action)
+    resolver = getattr(app, "_resolve_menu_action_request", None)
+    if resolver is None:
+        action_name, cli_args = resolve_menu_action_request(app, chosen_action)
+    else:
+        action_name, cli_args = resolver(chosen_action)
     if cli_args is not None:
-        dry_run = chosen_action.is_dry_run or "--dry-run" in cli_args
+        dry_run = getattr(chosen_action, "is_dry_run", False) or "--dry-run" in cli_args
         app._run_action(
             action_name or chosen_action.label,
             cli_args,
             dry_run=dry_run,
             runner=lambda args=cli_args: app._run_toolkit(args),
-            danger=chosen_action.is_dangerous,
-            use_progress=chosen_action.section_id == "github",
+            danger=getattr(chosen_action, "is_dangerous", False),
+            use_progress=getattr(chosen_action, "section_id", "") == "github",
         )
 
 

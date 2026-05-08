@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
 
-from ..support import classify_session_kind, iso_to_epoch
+from ..support import classify_session_kind, iso_to_epoch, iso_to_epoch_ms
 from .session_parser import ParsedSessionFile, parse_session_file
 
 
@@ -19,6 +19,8 @@ class DesktopThreadRow:
     rollout_path: str
     created_at: int
     updated_at: int
+    created_at_ms: int
+    updated_at_ms: int
     source: str
     model_provider: str
     cwd: str
@@ -203,6 +205,8 @@ def build_threads_row(
         rollout_path=str(target_rollout),
         created_at=iso_to_epoch(created_iso),
         updated_at=iso_to_epoch(updated_iso),
+        created_at_ms=iso_to_epoch_ms(created_iso),
+        updated_at_ms=iso_to_epoch_ms(updated_iso),
         source=source_name or ("vscode" if effective_kind == "desktop" else "cli" if effective_kind == "cli" else "unknown"),
         model_provider=model_provider,
         cwd=cwd,
@@ -245,6 +249,8 @@ def upsert_threads_rows(
                 "rollout_path": thread_row.rollout_path,
                 "created_at": thread_row.created_at,
                 "updated_at": thread_row.updated_at,
+                "created_at_ms": thread_row.created_at_ms,
+                "updated_at_ms": thread_row.updated_at_ms,
                 "source": thread_row.source,
                 "model_provider": thread_row.model_provider,
                 "cwd": thread_row.cwd,
@@ -348,6 +354,43 @@ def prune_threads_rows(
                 cur.execute("delete from threads where id = ?", (session_id,))
             conn.commit()
         return len(stale_ids)
+    finally:
+        conn.close()
+
+
+def delete_thread_rows_by_session_ids(
+    state_db: Path,
+    session_ids: set[str],
+    *,
+    managed_roots: Sequence[Path],
+    dry_run: bool = False,
+) -> int:
+    if not state_db or not state_db.is_file() or not session_ids:
+        return 0
+
+    conn = sqlite3.connect(state_db)
+    cur = conn.cursor()
+    try:
+        row = cur.execute("select name from sqlite_master where type='table' and name='threads'").fetchone()
+        if not row:
+            return 0
+
+        columns = [r[1] for r in cur.execute("pragma table_info(threads)").fetchall()]
+        if "id" not in columns or "rollout_path" not in columns:
+            return 0
+
+        removable_ids = []
+        for session_id, rollout_path in cur.execute("select id, rollout_path from threads").fetchall():
+            if not isinstance(session_id, str) or session_id not in session_ids:
+                continue
+            if isinstance(rollout_path, str) and _path_is_under_any_root(rollout_path, managed_roots):
+                removable_ids.append(session_id)
+
+        if not dry_run:
+            for session_id in removable_ids:
+                cur.execute("delete from threads where id = ?", (session_id,))
+            conn.commit()
+        return len(removable_ids)
     finally:
         conn.close()
 

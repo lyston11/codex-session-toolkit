@@ -44,6 +44,11 @@ TUI_ACTION_NOTES = {
     "clean_legacy": [
         "清理旧版本遗留的无标记副本文件。",
     ],
+    "delete_archived_sessions": [
+        "进入归档会话列表，先预览再删除。",
+        "支持勾选多条删除，也支持一键删除全部归档会话。",
+        "会同步移除 Desktop 线程栏和本工具索引里的归档记录。",
+    ],
     "list_sessions": ["内置会话浏览器，支持搜索、预览和详情查看。"],
     "project_sessions": [
         "粘贴项目路径后，只查看这个项目下的全部会话。",
@@ -173,7 +178,8 @@ def build_tui_menu_actions() -> List[TuiMenuAction]:
         _menu_action("provider_migration", "1", "迁移到当前 Provider"),
         _menu_action("desktop_repair", "2", "修复会话在 Desktop 中显示"),
         _menu_action("browse_backups", "3", "管理会话备份", ("list-backups",)),
-        _menu_action("clean_legacy", "4", "清理旧版无标记副本", ("clean-clones",), is_dangerous=True),
+        _menu_action("delete_archived_sessions", "4", "删除归档会话", ("delete-archived-sessions",), is_dangerous=True),
+        _menu_action("clean_legacy", "5", "清理旧版无标记副本", ("clean-clones",), is_dangerous=True),
         _menu_action("exit", "0", "退出"),
     ]
 

@@ -302,6 +302,20 @@ class SessionBackupDeleteResult:
 
 
 @dataclass(frozen=True)
+class ArchivedSessionDeleteResult:
+    archive_root: Path
+    dry_run: bool
+    files_to_delete: List[Path]
+    deleted_files: List[Path] = field(default_factory=list)
+    session_ids: List[str] = field(default_factory=list)
+    bytes_to_delete: int = 0
+    index_entries_removed: int = 0
+    thread_rows_removed: int = 0
+    empty_dirs_removed: int = 0
+    errors: List[Tuple[Path, str]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class BatchExportResult:
     summary_label: str
     bundle_root: Path

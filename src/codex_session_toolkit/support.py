@@ -40,6 +40,16 @@ def iso_to_epoch(raw_value: str) -> int:
         return 0
 
 
+def iso_to_epoch_ms(raw_value: str) -> int:
+    normalized = normalize_iso(raw_value)
+    if not normalized:
+        return 0
+    try:
+        return int(datetime.fromisoformat(normalized.replace("Z", "+00:00")).timestamp() * 1000)
+    except ValueError:
+        return 0
+
+
 def export_batch_slug() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
 
