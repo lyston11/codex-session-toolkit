@@ -151,6 +151,11 @@ def create_parser() -> argparse.ArgumentParser:
     connect_github_parser.add_argument("--push-after-connect", action="store_true", help="After connecting, commit and push local bundles")
     connect_github_parser.add_argument("--message", default="Sync Codex bundles", help="Initial push commit message")
 
+    github_proxy_parser = subparsers.add_parser("github-proxy", help=command_help("github-proxy"))
+    github_proxy_parser.add_argument("proxy_url", nargs="?", default="", help="Proxy URL, for example http://127.0.0.1:7890")
+    github_proxy_parser.add_argument("--disconnect", action="store_true", help="Disconnect the GitHub sync proxy")
+    github_proxy_parser.add_argument("--dry-run", action="store_true", help="Preview proxy configuration without writing")
+
     pull_github_parser = subparsers.add_parser("pull-github", help=command_help("pull-github"))
     pull_github_parser.add_argument("--branch", default="main", help="Remote branch to pull from")
     pull_github_parser.add_argument("--remote-name", default="origin", help="Git remote name")

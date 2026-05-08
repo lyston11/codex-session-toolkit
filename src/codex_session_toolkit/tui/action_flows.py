@@ -63,7 +63,7 @@ def _user_action_progress_lines(
     color: str,
 ) -> list[str]:
     command_name = cli_args[0] if cli_args else ""
-    if command_name in {"connect-github", "pull-github", "sync-github"}:
+    if command_name in {"connect-github", "github-proxy", "pull-github", "sync-github"}:
         mode = "预演，不会写入" if dry_run else "直接执行"
         bundle_root_label = getattr(app.context, "bundle_root_label", "./codex_bundles")
         return [
@@ -145,6 +145,50 @@ def _build_github_connect_request(selection: GitHubConnectSelection, *, dry_run:
     if dry_run:
         action_name += "（Dry-run）"
     return action_name, args
+
+
+def _collect_github_proxy_request(app: "ToolkitTuiApp") -> tuple[Optional[str], Optional[list[str]]]:
+    status = _github_status_snapshot_with_progress(app, title="连接/断开代理")
+    status_lines = app._github_sync_status_lines(status)
+    if status.proxy_enabled:
+        choice = app._prompt_choice(
+            title="连接/断开代理",
+            prompt_label="选择代理操作",
+            help_lines=status_lines + [
+                "",
+                f"{style_text('当前代理', Ansi.DIM)} : {status.proxy_url}",
+            ],
+            choices=[
+                ("u", "更新代理地址"),
+                ("d", "断开代理"),
+                ("q", "返回"),
+            ],
+            default="u",
+        )
+        if choice == "d":
+            return "断开 GitHub 同步代理", ["github-proxy", "--disconnect"]
+        if choice != "u":
+            return None, None
+        default_proxy = status.proxy_url
+    else:
+        default_proxy = ""
+
+    proxy_url = app._prompt_value(
+        title="连接/断开代理",
+        prompt_label="代理地址",
+        help_lines=status_lines + [
+            "",
+            "请输入本机代理接口地址。常见示例：",
+            "http://127.0.0.1:7890",
+            "socks5://127.0.0.1:7890",
+            "配置后 GitHub 拉取、推送和远端检查都会走这个代理。",
+        ],
+        default=default_proxy,
+        allow_empty=False,
+    )
+    if proxy_url is None:
+        return None, None
+    return "连接 GitHub 同步代理", ["github-proxy", proxy_url]
 
 
 def _github_connected_status_or_none(app: "ToolkitTuiApp", *, title: str):
@@ -345,6 +389,9 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
             return None, None
         return _build_github_connect_request(selection, dry_run=dry_run)
 
+    if menu_action.action_id == "github_proxy":
+        return _collect_github_proxy_request(app)
+
     if menu_action.action_id == "pull_github":
         status = _github_connected_status_or_none(app, title="从 GitHub 拉取更新")
         if status is None:
@@ -526,6 +573,20 @@ def execute_menu_action(app: "ToolkitTuiApp", chosen_action: "TuiMenuAction") ->
             )
             if not dry_run:
                 return
+        return
+
+    if choice_id == "github_proxy":
+        action_name, cli_args = _collect_github_proxy_request(app)
+        if cli_args is None:
+            return
+        app._run_action(
+            action_name or "连接/断开代理",
+            cli_args,
+            dry_run=False,
+            runner=lambda args=cli_args: app._run_toolkit(args),
+            danger=False,
+            use_progress=True,
+        )
         return
 
     if choice_id == "pull_github":

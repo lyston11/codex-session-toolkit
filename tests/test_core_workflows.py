@@ -28,9 +28,11 @@ from codex_session_toolkit.services.clone import clone_to_provider  # noqa: E402
 from codex_session_toolkit.services.exporting import export_active_desktop_all, export_project_sessions, export_session  # noqa: E402
 from codex_session_toolkit.services.github_sync import (  # noqa: E402
     _conflict_paths,
+    _git_proxy_env,
     _git_status_paths,
     _group_bundle_changes,
     _normalize_git_relative_path,
+    configure_github_proxy,
     connect_bundles_to_github,
     get_github_sync_status,
     pull_bundles_from_github,
@@ -539,6 +541,64 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertTrue(result.initialized_repo)
             self.assertTrue(result.configured_remote)
             self.assertEqual(result.remote_url, "git@github.com:example/codex-bundles.git")
+
+    def test_configure_github_proxy_connects_status_env_and_disconnects(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git executable is not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+
+            with pushd(workspace):
+                result = configure_github_proxy(CodexPaths(home=home), "127.0.0.1:7890")
+                status = get_github_sync_status(CodexPaths(home=home))
+                proxy_env = _git_proxy_env(workspace / "codex_bundles")
+                disconnect_result = configure_github_proxy(CodexPaths(home=home), disconnect=True)
+                disconnected_status = get_github_sync_status(CodexPaths(home=home))
+
+            self.assertTrue(result.initialized_repo)
+            self.assertTrue(result.configured_proxy)
+            self.assertEqual(result.proxy_url, "http://127.0.0.1:7890")
+            self.assertIn("127.0.0.1:7890", result.ssh_proxy_command)
+            self.assertTrue(status.proxy_enabled)
+            self.assertEqual(status.proxy_url, "http://127.0.0.1:7890")
+            self.assertEqual(proxy_env["https_proxy"], "http://127.0.0.1:7890")
+            self.assertIn("GIT_SSH_COMMAND", proxy_env)
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(workspace / "codex_bundles"), "config", "--local", "--get", "http.proxy"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                ).stdout.strip(),
+                "",
+            )
+            self.assertTrue(disconnect_result.disconnected)
+            self.assertTrue(disconnect_result.cleared_proxy)
+            self.assertFalse(disconnected_status.proxy_enabled)
+            self.assertEqual(disconnected_status.proxy_url, "")
+
+    def test_github_proxy_before_connect_keeps_target_branch(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git executable is not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            remote = Path(tmpdir) / "remote.git"
+            workspace.mkdir()
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            with pushd(workspace):
+                configure_github_proxy(CodexPaths(home=home), "socks5://127.0.0.1:7890")
+                connect_bundles_to_github(CodexPaths(home=home), str(remote), branch="bundle-main")
+                status = get_github_sync_status(CodexPaths(home=home))
+
+            self.assertEqual(status.branch, "bundle-main")
+            self.assertTrue(status.proxy_enabled)
 
     def test_github_sync_normalizes_windows_relative_paths(self) -> None:
         raw_status = "\n".join(
@@ -2100,6 +2160,107 @@ class CoreWorkflowTests(unittest.TestCase):
             delete_all_result = delete_archived_sessions(paths)
             self.assertEqual(delete_all_result.deleted_files, [other_archived_file])
             self.assertFalse(other_archived_file.exists())
+
+    def test_delete_archived_sessions_preserves_active_duplicate_session_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "provider")
+            write_state_file(home)
+            db_path = create_threads_db(home)
+
+            session_id = "44444444-5555-4666-8777-888888888888"
+            active_file = write_session(
+                home,
+                session_id,
+                provider="provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace / "active-project",
+                user_message="active session prompt",
+            )
+            archived_file = write_session(
+                home,
+                session_id,
+                provider="provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace / "archived-project",
+                archived=True,
+                user_message="archived session prompt",
+            )
+            (home / ".codex" / "session_index.jsonl").write_text(
+                json.dumps(
+                    {
+                        "id": session_id,
+                        "thread_name": "active title",
+                        "updated_at": "2026-04-10T10:06:00Z",
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                insert into threads (
+                    id, rollout_path, created_at, updated_at, source, model_provider, cwd, title,
+                    sandbox_policy, approval_mode, tokens_used, has_user_event, archived, archived_at,
+                    cli_version, first_user_message, memory_mode
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    str(archived_file),
+                    0,
+                    0,
+                    "vscode",
+                    "provider",
+                    str(workspace / "archived-project"),
+                    "active title",
+                    "{}",
+                    "on-request",
+                    0,
+                    1,
+                    1,
+                    123,
+                    "0.1.0",
+                    "active session prompt",
+                    "enabled",
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            paths = CodexPaths(home=home)
+            dry_run = delete_archived_sessions(paths, session_ids={session_id}, dry_run=True)
+            self.assertEqual(dry_run.files_to_delete, [archived_file])
+            self.assertEqual(dry_run.index_entries_removed, 0)
+            self.assertEqual(dry_run.thread_rows_removed, 0)
+            self.assertEqual(dry_run.thread_rows_restored, 1)
+
+            result = delete_archived_sessions(paths, session_ids={session_id})
+
+            self.assertEqual(result.deleted_files, [archived_file])
+            self.assertEqual(result.index_entries_removed, 0)
+            self.assertEqual(result.thread_rows_removed, 0)
+            self.assertEqual(result.thread_rows_restored, 1)
+            self.assertFalse(archived_file.exists())
+            self.assertTrue(active_file.exists())
+
+            index_lines = (home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual([json.loads(raw)["id"] for raw in index_lines], [session_id])
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                "select rollout_path, archived, archived_at from threads where id = ?",
+                (session_id,),
+            ).fetchone()
+            conn.close()
+            self.assertEqual(row, (str(active_file), 0, None))
 
     def test_repair_desktop_repairs_desktop_registered_cli_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

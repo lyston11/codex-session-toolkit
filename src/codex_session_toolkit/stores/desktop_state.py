@@ -395,6 +395,55 @@ def delete_thread_rows_by_session_ids(
         conn.close()
 
 
+def redirect_thread_rows_by_session_paths(
+    state_db: Path,
+    session_paths: dict[str, Path],
+    *,
+    managed_roots: Sequence[Path],
+    dry_run: bool = False,
+) -> int:
+    if not state_db or not state_db.is_file() or not session_paths:
+        return 0
+
+    conn = sqlite3.connect(state_db)
+    cur = conn.cursor()
+    try:
+        row = cur.execute("select name from sqlite_master where type='table' and name='threads'").fetchone()
+        if not row:
+            return 0
+
+        columns = [r[1] for r in cur.execute("pragma table_info(threads)").fetchall()]
+        if "id" not in columns or "rollout_path" not in columns:
+            return 0
+
+        updated = 0
+        for session_id, active_path in session_paths.items():
+            current = cur.execute("select rollout_path from threads where id = ?", (session_id,)).fetchone()
+            if not current:
+                continue
+            current_path = current[0]
+            if not isinstance(current_path, str) or not _path_is_under_any_root(current_path, managed_roots):
+                continue
+            if str(current_path or "") == str(active_path):
+                continue
+            if not dry_run:
+                update_parts = ["rollout_path = ?"]
+                values: list[object] = [str(active_path)]
+                if "archived" in columns:
+                    update_parts.append("archived = ?")
+                    values.append(0)
+                if "archived_at" in columns:
+                    update_parts.append("archived_at = null")
+                values.append(session_id)
+                cur.execute(f"update threads set {', '.join(update_parts)} where id = ?", values)
+            updated += 1
+        if not dry_run:
+            conn.commit()
+        return updated
+    finally:
+        conn.close()
+
+
 def _path_is_under_any_root(path_value: str, roots: Sequence[Path]) -> bool:
     normalized_path = _normalized_thread_path(path_value)
     if not normalized_path:

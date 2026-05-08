@@ -15,6 +15,7 @@ from .models import (
     CloneRunResult,
     ExportResult,
     GitHubConnectResult,
+    GitHubProxyResult,
     GitHubPullResult,
     GitHubSyncResult,
     GitHubSyncStatus,
@@ -37,6 +38,7 @@ from .presenters.reports import (
     print_clone_run_result,
     print_export_result,
     print_github_connect_result,
+    print_github_proxy_result,
     print_github_pull_result,
     print_github_sync_result,
     print_import_result,
@@ -53,7 +55,7 @@ from .services.backups import delete_session_backup, list_session_backups, resto
 from .services.clone import cleanup_clones, clone_to_provider
 from .services.exporting import export_active_desktop_all, export_cli_all, export_desktop_all, export_project_sessions, export_session
 from .services.importing import import_desktop_all, import_session
-from .services.github_sync import connect_bundles_to_github, get_github_sync_status, pull_bundles_from_github, sync_bundles_to_github
+from .services.github_sync import configure_github_proxy, connect_bundles_to_github, get_github_sync_status, pull_bundles_from_github, sync_bundles_to_github
 from .services.provider import detect_provider
 from .services.repair import repair_desktop
 
@@ -108,6 +110,7 @@ __all__ = [
     "CodexPaths",
     "ExportResult",
     "GitHubConnectResult",
+    "GitHubProxyResult",
     "GitHubPullResult",
     "GitHubSyncResult",
     "GitHubSyncStatus",
@@ -121,6 +124,7 @@ __all__ = [
     "ValidationReport",
     "cleanup_clones",
     "clone_to_provider",
+    "configure_github_proxy",
     "create_parser",
     "delete_archived_sessions",
     "delete_session_backup",
@@ -149,6 +153,7 @@ __all__ = [
     "print_clone_run_result",
     "print_export_result",
     "print_github_connect_result",
+    "print_github_proxy_result",
     "print_github_pull_result",
     "print_github_sync_result",
     "print_import_result",

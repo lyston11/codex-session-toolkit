@@ -15,6 +15,7 @@ from ..presenters.reports import (
     print_clone_run_result,
     print_export_result,
     print_github_connect_result,
+    print_github_proxy_result,
     print_github_pull_result,
     print_github_sync_result,
     print_import_result,
@@ -36,7 +37,7 @@ from ..services.browse import get_bundle_summaries, get_project_session_summarie
 from ..services.clone import cleanup_clones, clone_to_provider
 from ..services.exporting import export_active_desktop_all, export_cli_all, export_desktop_all, export_project_sessions, export_session
 from ..services.importing import import_desktop_all, import_session
-from ..services.github_sync import connect_bundles_to_github, pull_bundles_from_github, sync_bundles_to_github
+from ..services.github_sync import configure_github_proxy, connect_bundles_to_github, pull_bundles_from_github, sync_bundles_to_github
 from ..services.repair import repair_desktop
 from ..services.skills_transfer import (
     delete_local_skill,
@@ -259,6 +260,17 @@ def _handle_connect_github(args: argparse.Namespace, paths: CodexPaths) -> int:
     return exit_code or push_exit_code
 
 
+def _handle_github_proxy(args: argparse.Namespace, paths: CodexPaths) -> int:
+    return print_github_proxy_result(
+        configure_github_proxy(
+            paths,
+            args.proxy_url,
+            dry_run=args.dry_run,
+            disconnect=args.disconnect,
+        )
+    )
+
+
 def _handle_sync_github(args: argparse.Namespace, paths: CodexPaths) -> int:
     return print_github_sync_result(
         sync_bundles_to_github(
@@ -356,6 +368,7 @@ COMMAND_HANDLERS: Mapping[str, CommandHandler] = {
     "import-skill-bundles": _handle_import_skill_bundles,
     "delete-skill": _handle_delete_skill,
     "connect-github": _handle_connect_github,
+    "github-proxy": _handle_github_proxy,
     "pull-github": _handle_pull_github,
     "sync-github": _handle_sync_github,
     "list-backups": _handle_list_backups,

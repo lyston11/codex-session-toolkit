@@ -226,7 +226,23 @@ class GitHubSyncStatus:
     local_ahead_count: int = 0
     remote_ahead_count: int = 0
     remote_check_error: str = ""
+    proxy_enabled: bool = False
+    proxy_url: str = ""
     message: str = ""
+
+
+@dataclass(frozen=True)
+class GitHubProxyResult:
+    bundle_root: Path
+    proxy_url: str
+    dry_run: bool
+    enabled: bool
+    disconnected: bool = False
+    initialized_repo: bool = False
+    configured_proxy: bool = False
+    cleared_proxy: bool = False
+    ssh_proxy_command: str = ""
+    commands: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -311,6 +327,7 @@ class ArchivedSessionDeleteResult:
     bytes_to_delete: int = 0
     index_entries_removed: int = 0
     thread_rows_removed: int = 0
+    thread_rows_restored: int = 0
     empty_dirs_removed: int = 0
     errors: List[Tuple[Path, str]] = field(default_factory=list)
 

@@ -10,7 +10,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from ..errors import ToolkitError
-from ..models import GitHubConnectResult, GitHubPullResult, GitHubSyncResult, GitHubSyncStatus
+from ..models import GitHubConnectResult, GitHubProxyResult, GitHubPullResult, GitHubSyncResult, GitHubSyncStatus
 from ..paths import CodexPaths
 from ..support import normalize_bundle_root
 
@@ -18,6 +18,8 @@ from ..support import normalize_bundle_root
 DEFAULT_GITHUB_SYNC_BRANCH = "main"
 DEFAULT_GITHUB_SYNC_MESSAGE = "Sync Codex bundles"
 DEFAULT_GITHUB_REMOTE_NAME = "origin"
+PROXY_CONFIG_KEY = "codex-session-toolkit.proxy.url"
+SSH_PROXY_CONFIG_KEY = "codex-session-toolkit.proxy.sshCommand"
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,7 @@ def get_github_sync_status(
     effective_branch = current_branch or branch
     changed_files = _git_status_paths(resolved_root) if repo_exists else []
     change_groups = _group_bundle_changes(changed_files)
+    proxy_url = _get_git_config(resolved_root, PROXY_CONFIG_KEY) if repo_exists else ""
     has_head_commit = _has_head_commit(resolved_root) if repo_exists else False
     local_commit_hash = _commit_hash(resolved_root, "HEAD") if has_head_commit else ""
     local_updated_at = _commit_updated_at(resolved_root, "HEAD") if has_head_commit else ""
@@ -130,7 +133,95 @@ def get_github_sync_status(
         local_ahead_count=remote_snapshot.local_ahead_count,
         remote_ahead_count=remote_snapshot.remote_ahead_count,
         remote_check_error=remote_snapshot.remote_check_error,
+        proxy_enabled=bool(proxy_url),
+        proxy_url=proxy_url,
         message=message,
+    )
+
+
+def configure_github_proxy(
+    paths: CodexPaths,
+    proxy_url: str = "",
+    *,
+    bundle_root: Optional[Path] = None,
+    dry_run: bool = False,
+    disconnect: bool = False,
+) -> GitHubProxyResult:
+    resolved_root = normalize_bundle_root(paths, bundle_root, paths.default_bundle_root, label="GitHub sync bundle root")
+    normalized_proxy = "" if disconnect else _normalize_proxy_url(proxy_url)
+    if not disconnect and not normalized_proxy:
+        raise ToolkitError("Proxy URL is required. Example: http://127.0.0.1:7890 or socks5://127.0.0.1:7890")
+
+    repo_exists = _is_git_repo(resolved_root) if resolved_root.exists() else False
+    needs_init = not repo_exists and not disconnect
+    ssh_proxy_command = _ssh_proxy_command(normalized_proxy) if normalized_proxy else ""
+    commands = _planned_proxy_commands(
+        resolved_root,
+        proxy_url=normalized_proxy,
+        ssh_proxy_command=ssh_proxy_command,
+        needs_init=needs_init,
+        disconnect=disconnect,
+    )
+
+    if dry_run:
+        return GitHubProxyResult(
+            bundle_root=resolved_root,
+            proxy_url=normalized_proxy,
+            dry_run=True,
+            enabled=bool(normalized_proxy and not disconnect),
+            disconnected=disconnect,
+            initialized_repo=needs_init,
+            configured_proxy=bool(normalized_proxy and not disconnect),
+            cleared_proxy=disconnect,
+            ssh_proxy_command=ssh_proxy_command,
+            commands=commands,
+        )
+
+    if disconnect and not repo_exists:
+        return GitHubProxyResult(
+            bundle_root=resolved_root,
+            proxy_url="",
+            dry_run=False,
+            enabled=False,
+            disconnected=True,
+            cleared_proxy=False,
+            commands=[],
+        )
+
+    resolved_root.mkdir(parents=True, exist_ok=True)
+    executed_commands: list[str] = []
+    if needs_init:
+        _run_git(resolved_root, ["init"], executed_commands)
+
+    if disconnect:
+        for key in _proxy_config_keys():
+            _unset_git_config(resolved_root, key, executed_commands)
+        return GitHubProxyResult(
+            bundle_root=resolved_root,
+            proxy_url="",
+            dry_run=False,
+            enabled=False,
+            disconnected=True,
+            cleared_proxy=True,
+            commands=executed_commands,
+        )
+
+    _set_git_config(resolved_root, PROXY_CONFIG_KEY, normalized_proxy, executed_commands)
+    if ssh_proxy_command:
+        _set_git_config(resolved_root, SSH_PROXY_CONFIG_KEY, ssh_proxy_command, executed_commands)
+    else:
+        _unset_git_config(resolved_root, SSH_PROXY_CONFIG_KEY, executed_commands)
+
+    return GitHubProxyResult(
+        bundle_root=resolved_root,
+        proxy_url=normalized_proxy,
+        dry_run=False,
+        enabled=True,
+        disconnected=False,
+        initialized_repo=needs_init,
+        configured_proxy=True,
+        ssh_proxy_command=ssh_proxy_command,
+        commands=executed_commands,
     )
 
 
@@ -152,8 +243,10 @@ def connect_bundles_to_github(
     _reject_project_code_remote(resolved_root, remote_url)
 
     repo_exists = _is_git_repo(resolved_root) if resolved_root.exists() else False
+    has_head_commit = _has_head_commit(resolved_root) if repo_exists else False
     existing_remote_url = _get_remote_url(resolved_root, remote_name) if repo_exists else ""
     needs_init = not repo_exists
+    needs_branch_checkout = needs_init or (repo_exists and not has_head_commit)
     needs_remote_config = remote_url != existing_remote_url
     commands = _planned_connect_commands(
         resolved_root,
@@ -161,6 +254,7 @@ def connect_bundles_to_github(
         remote_url=remote_url,
         branch=branch,
         needs_init=needs_init,
+        needs_branch_checkout=needs_branch_checkout,
         needs_remote_config=needs_remote_config,
         existing_remote_url=existing_remote_url,
     )
@@ -181,6 +275,7 @@ def connect_bundles_to_github(
     executed_commands: list[str] = []
     if needs_init:
         _run_git(resolved_root, ["init"], executed_commands)
+    if needs_branch_checkout:
         _run_git(resolved_root, ["checkout", "-B", branch], executed_commands)
     if existing_remote_url:
         if existing_remote_url != remote_url:
@@ -697,6 +792,79 @@ def _remote_status_snapshot(
         return _RemoteStatusSnapshot(remote_checked=True, remote_check_error=str(exc))
 
 
+def _normalize_proxy_url(proxy_url: str) -> str:
+    raw = (proxy_url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if not parsed.scheme:
+        raw = "http://" + raw
+        parsed = urlparse(raw)
+    if parsed.scheme.lower() not in {"http", "https", "socks5", "socks5h"}:
+        raise ToolkitError("Proxy URL must use http, https, socks5, or socks5h.")
+    if not parsed.hostname or not parsed.port:
+        raise ToolkitError("Proxy URL must include host and port. Example: http://127.0.0.1:7890")
+    return raw
+
+
+def _ssh_proxy_command(proxy_url: str) -> str:
+    if not proxy_url:
+        return ""
+    parsed = urlparse(proxy_url)
+    host = parsed.hostname or ""
+    port = parsed.port
+    if not host or not port:
+        return ""
+    proxy_kind = parsed.scheme.lower()
+    if os.name == "nt":
+        proxy_flag = "-S" if proxy_kind in {"socks5", "socks5h"} else "-H"
+        return f"ssh -o ProxyCommand='connect.exe {proxy_flag} {host}:{port} %h %p'"
+    if proxy_kind in {"socks5", "socks5h"}:
+        return f"ssh -o ProxyCommand='nc -x {host}:{port} %h %p'"
+    return f"ssh -o ProxyCommand='nc -X connect -x {host}:{port} %h %p'"
+
+
+def _proxy_config_keys() -> tuple[str, ...]:
+    return (
+        PROXY_CONFIG_KEY,
+        SSH_PROXY_CONFIG_KEY,
+    )
+
+
+def _get_git_config(bundle_root: Path, key: str) -> str:
+    result = _git_process(bundle_root, ["config", "--local", "--get", key], check=False, apply_proxy=False)
+    return result.stdout.strip()
+
+
+def _set_git_config(bundle_root: Path, key: str, value: str, commands: list[str]) -> None:
+    _run_git(bundle_root, ["config", "--local", key, value], commands)
+
+
+def _unset_git_config(bundle_root: Path, key: str, commands: list[str]) -> None:
+    if not _get_git_config(bundle_root, key):
+        return
+    _run_git(bundle_root, ["config", "--local", "--unset-all", key], commands)
+
+
+def _git_proxy_env(bundle_root: Path) -> dict[str, str]:
+    proxy_url = _get_git_config(bundle_root, PROXY_CONFIG_KEY)
+    if not proxy_url:
+        return {}
+
+    env = {
+        "http_proxy": proxy_url,
+        "https_proxy": proxy_url,
+        "HTTP_PROXY": proxy_url,
+        "HTTPS_PROXY": proxy_url,
+        "ALL_PROXY": proxy_url,
+        "all_proxy": proxy_url,
+    }
+    ssh_command = _get_git_config(bundle_root, SSH_PROXY_CONFIG_KEY) or _ssh_proxy_command(proxy_url)
+    if ssh_command:
+        env["GIT_SSH_COMMAND"] = ssh_command
+    return env
+
+
 def _commit_hash(bundle_root: Path, ref: str) -> str:
     return _git_output(bundle_root, ["rev-parse", "--short", ref], check=False)
 
@@ -819,12 +987,20 @@ def _conflict_paths(bundle_root: Path) -> list[str]:
     return sorted(paths)
 
 
-def _git_process(bundle_root: Path, args: list[str], *, check: bool) -> subprocess.CompletedProcess[str]:
+def _git_process(
+    bundle_root: Path,
+    args: list[str],
+    *,
+    check: bool,
+    apply_proxy: bool = True,
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.setdefault("GIT_AUTHOR_NAME", "Codex Session Toolkit")
     env.setdefault("GIT_AUTHOR_EMAIL", "codex-session-toolkit@example.local")
     env.setdefault("GIT_COMMITTER_NAME", "Codex Session Toolkit")
     env.setdefault("GIT_COMMITTER_EMAIL", "codex-session-toolkit@example.local")
+    if apply_proxy:
+        env.update(_git_proxy_env(bundle_root))
     result = subprocess.run(
         ["git", "-C", str(bundle_root), *args],
         stdout=subprocess.PIPE,
@@ -879,16 +1055,40 @@ def _planned_connect_commands(
     remote_url: str,
     branch: str,
     needs_init: bool,
+    needs_branch_checkout: bool,
     needs_remote_config: bool,
     existing_remote_url: str,
 ) -> list[str]:
     commands = []
     if needs_init:
         commands.append(_format_git_command(bundle_root, ["init"]))
+    if needs_branch_checkout:
         commands.append(_format_git_command(bundle_root, ["checkout", "-B", branch]))
     if needs_remote_config:
         remote_command = "set-url" if existing_remote_url else "add"
         commands.append(_format_git_command(bundle_root, ["remote", remote_command, remote_name, remote_url]))
+    return commands
+
+
+def _planned_proxy_commands(
+    bundle_root: Path,
+    *,
+    proxy_url: str,
+    ssh_proxy_command: str,
+    needs_init: bool,
+    disconnect: bool,
+) -> list[str]:
+    commands = []
+    if needs_init:
+        commands.append(_format_git_command(bundle_root, ["init"]))
+    if disconnect:
+        for key in _proxy_config_keys():
+            commands.append(_format_git_command(bundle_root, ["config", "--local", "--unset-all", key]))
+        return commands
+
+    commands.append(_format_git_command(bundle_root, ["config", "--local", PROXY_CONFIG_KEY, proxy_url]))
+    if ssh_proxy_command:
+        commands.append(_format_git_command(bundle_root, ["config", "--local", SSH_PROXY_CONFIG_KEY, ssh_proxy_command]))
     return commands
 
 

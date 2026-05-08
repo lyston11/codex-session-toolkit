@@ -34,6 +34,7 @@ TUI_ACTION_SECTION_OVERRIDES = {
     "provider_migration": "repair",
     "desktop_repair": "repair",
     "github_status": "github",
+    "github_proxy": "github",
     "exit": "system",
 }
 
@@ -81,6 +82,10 @@ TUI_ACTION_NOTES = {
         "先在 GitHub 上创建一个独立仓库，然后把 ./codex_bundles 连接到这个仓库。",
         "TUI 会询问是否连接后立即首次推送本机 Bundle。",
         "工具会拒绝连接到当前项目源码仓库的 remote。",
+    ],
+    "github_proxy": [
+        "为 GitHub 同步配置本机代理接口。",
+        "配置后状态检查、拉取、推送都会走代理；也可以随时断开。",
     ],
     "sync_github": [
         "把 ./codex_bundles 中的会话 Bundle 和 Skills Bundle 推送到已连接的独立仓库。",
@@ -172,6 +177,7 @@ def build_tui_menu_actions() -> List[TuiMenuAction]:
         _menu_action("import_skill_bundles", "m", "批量导入 Skills Bundle", ("import-skill-bundles",)),
         _menu_action("delete_skill", "d", "删除本机 Skill", ("delete-skill", "<skill_name>"), is_dangerous=True),
         _menu_action("connect_github", "c", "连接独立 GitHub 仓库", ("connect-github", "<repo_url>")),
+        _menu_action("github_proxy", "x", "连接/断开代理", ("github-proxy", "<proxy_url>")),
         _menu_action("github_status", "s", "查看 GitHub 同步状态"),
         _menu_action("pull_github", "p", "从 GitHub 拉取更新", ("pull-github",)),
         _menu_action("sync_github", "g", "推送本机更新到 GitHub", ("sync-github",)),

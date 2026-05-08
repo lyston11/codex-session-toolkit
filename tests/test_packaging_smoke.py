@@ -82,11 +82,17 @@ class PackagingSmokeTests(unittest.TestCase):
     def test_github_sync_cli_connects_before_syncing(self) -> None:
         parser = build_command_parser()
         connect_args = parser.parse_args(["connect-github", "git@github.com:example/codex-bundles.git", "--push-after-connect"])
+        proxy_args = parser.parse_args(["github-proxy", "http://127.0.0.1:7890"])
+        proxy_disconnect_args = parser.parse_args(["github-proxy", "--disconnect"])
         pull_args = parser.parse_args(["pull-github"])
         sync_args = parser.parse_args(["sync-github"])
 
         self.assertEqual(connect_args.remote_url, "git@github.com:example/codex-bundles.git")
         self.assertTrue(connect_args.push_after_connect)
+        self.assertEqual(proxy_args.proxy_url, "http://127.0.0.1:7890")
+        self.assertFalse(proxy_args.disconnect)
+        self.assertEqual(proxy_disconnect_args.proxy_url, "")
+        self.assertTrue(proxy_disconnect_args.disconnect)
         self.assertFalse(hasattr(pull_args, "remote_url"))
         self.assertFalse(hasattr(sync_args, "remote_url"))
         with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
@@ -482,6 +488,69 @@ class PackagingSmokeTests(unittest.TestCase):
         self.assertEqual(action_name, "推送本机更新到 GitHub")
         self.assertEqual(cli_args, ["sync-github", "--branch", "main", "--message", "Sync Codex bundles"])
         self.assertEqual(app.prompt_calls, 1)
+
+    def test_tui_github_proxy_can_connect_or_disconnect(self) -> None:
+        class ProxyApp:
+            def __init__(self, status: GitHubSyncStatus, *, choice: str = "", proxy_value: str = "") -> None:
+                self.status = status
+                self.choice = choice
+                self.proxy_value = proxy_value
+                self.prompt_choice_calls = 0
+                self.prompt_value_calls = 0
+
+            def _github_sync_status(self):
+                return self.status
+
+            def _github_sync_status_lines(self, status):
+                return [f"代理状态 : {'已连接' if status.proxy_enabled else '未连接'}"]
+
+            def _prompt_choice(self, **kwargs):
+                self.prompt_choice_calls += 1
+                return self.choice
+
+            def _prompt_value(self, **kwargs):
+                self.prompt_value_calls += 1
+                return self.proxy_value
+
+        disconnected_app = ProxyApp(
+            GitHubSyncStatus(
+                bundle_root=Path("/tmp/codex_bundles"),
+                remote_name="origin",
+                bundle_root_exists=True,
+            ),
+            proxy_value="socks5://127.0.0.1:7890",
+        )
+        with patch("codex_session_toolkit.tui.action_flows.run_callable_with_progress", side_effect=lambda _app, task, **kwargs: task()):
+            action_name, cli_args = resolve_menu_action_request(
+                disconnected_app,
+                SimpleNamespace(action_id="github_proxy", label="连接/断开代理", cli_args=("github-proxy",)),
+            )
+
+        self.assertEqual(action_name, "连接 GitHub 同步代理")
+        self.assertEqual(cli_args, ["github-proxy", "socks5://127.0.0.1:7890"])
+        self.assertEqual(disconnected_app.prompt_choice_calls, 0)
+        self.assertEqual(disconnected_app.prompt_value_calls, 1)
+
+        connected_app = ProxyApp(
+            GitHubSyncStatus(
+                bundle_root=Path("/tmp/codex_bundles"),
+                remote_name="origin",
+                bundle_root_exists=True,
+                proxy_enabled=True,
+                proxy_url="http://127.0.0.1:7890",
+            ),
+            choice="d",
+        )
+        with patch("codex_session_toolkit.tui.action_flows.run_callable_with_progress", side_effect=lambda _app, task, **kwargs: task()):
+            action_name, cli_args = resolve_menu_action_request(
+                connected_app,
+                SimpleNamespace(action_id="github_proxy", label="连接/断开代理", cli_args=("github-proxy",)),
+            )
+
+        self.assertEqual(action_name, "断开 GitHub 同步代理")
+        self.assertEqual(cli_args, ["github-proxy", "--disconnect"])
+        self.assertEqual(connected_app.prompt_choice_calls, 1)
+        self.assertEqual(connected_app.prompt_value_calls, 0)
 
     def test_tui_github_pull_uses_single_choice_flow(self) -> None:
         test_case = self
@@ -935,13 +1004,14 @@ class PackagingSmokeTests(unittest.TestCase):
             {
                 "github_status",
                 "connect_github",
+                "github_proxy",
                 "pull_github",
                 "sync_github",
             },
         )
         self.assertEqual(
             [action.action_id for action in build_tui_menu_actions() if action.section_id == "github"],
-            ["connect_github", "github_status", "pull_github", "sync_github"],
+            ["connect_github", "github_proxy", "github_status", "pull_github", "sync_github"],
         )
         self.assertEqual(
             actions_by_section["repair"],
@@ -976,6 +1046,7 @@ class PackagingSmokeTests(unittest.TestCase):
         self.assertEqual(labels_by_action["delete_skill"], "删除本机 Skill")
         self.assertEqual(labels_by_action["github_status"], "查看 GitHub 同步状态")
         self.assertEqual(labels_by_action["connect_github"], "连接独立 GitHub 仓库")
+        self.assertEqual(labels_by_action["github_proxy"], "连接/断开代理")
         self.assertEqual(labels_by_action["pull_github"], "从 GitHub 拉取更新")
         self.assertEqual(labels_by_action["sync_github"], "推送本机更新到 GitHub")
 

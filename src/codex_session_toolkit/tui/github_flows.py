@@ -37,6 +37,8 @@ def github_sync_status_lines(
         f"{style_text('Git 仓库', Ansi.DIM)} : {'是，且为独立仓库' if status.is_git_repo else '否'}",
         f"{style_text('Remote', Ansi.DIM)} : {status.remote_name} {status.remote_url or '（未配置）'}",
         f"{style_text('目标分支', Ansi.DIM)} : {status.branch or 'main'}",
+        f"{style_text('代理状态', Ansi.DIM)} : {'已连接' if status.proxy_enabled else '未连接'}",
+        f"{style_text('代理地址', Ansi.DIM)} : {status.proxy_url or '（未配置）'}",
         f"{style_text('本地最新提交', Ansi.DIM)} : {status.local_commit_hash or '（无）'}",
         f"{style_text('本地更新时间', Ansi.DIM)} : {status.local_updated_at or '（无）'}",
         f"{style_text('远端检查', Ansi.DIM)} : {'已检查' if status.remote_checked else '未检查'}",
@@ -59,6 +61,7 @@ def github_sync_status_lines(
         lines.append("下一步：先在 GitHub 新建独立仓库，再选择“连接独立 GitHub 仓库”。")
     else:
         lines.append("同步范围：会话 Bundle 和 Skills Bundle 一起同步；不触碰 ~/.codex 原始会话目录。")
+        lines.append("代理：GitHub 拉取/推送较慢时，可在同步中心选择“连接/断开代理”。")
         lines.append("Pull：远端领先时先拉取；Push：本地领先或有工作区变更时再推送。")
         lines.append("冲突策略：拉取/推送前会检查远端更新时间；可自动合并则合并，文件冲突时停止并列出冲突文件。")
 
@@ -93,6 +96,7 @@ def _github_remote_status_with_progress(
         f"{style_text('Bundle 根目录', Ansi.DIM)} : {local_status.bundle_root}",
         f"{style_text('Remote', Ansi.DIM)} : {local_status.remote_name} {local_status.remote_url}",
         f"{style_text('目标分支', Ansi.DIM)} : {local_status.branch or 'main'}",
+        f"{style_text('代理状态', Ansi.DIM)} : {'已连接' if local_status.proxy_enabled else '未连接'}",
         f"{style_text('本地更新时间', Ansi.DIM)} : {local_status.local_updated_at or '（无）'}",
         f"{style_text('待同步变更', Ansi.DIM)} : {len(local_status.changed_files)}",
     ]

@@ -14,6 +14,7 @@ from ..models import (
     CloneRunResult,
     ExportResult,
     GitHubConnectResult,
+    GitHubProxyResult,
     GitHubPullResult,
     GitHubSyncResult,
     ImportResult,
@@ -292,6 +293,7 @@ def print_archived_session_delete_result(result: ArchivedSessionDeleteResult) ->
     print(f"Unique sessions: {len(result.session_ids)}")
     print(f"Bytes: {result.bytes_to_delete}")
     print(f"Threads table rows removed: {result.thread_rows_removed}")
+    print(f"Threads table rows kept active: {result.thread_rows_restored}")
     print(f"Session index entries removed: {result.index_entries_removed}")
     if not result.dry_run:
         print(f"Deleted files: {len(result.deleted_files)}")
@@ -315,6 +317,28 @@ def print_github_connect_result(result: GitHubConnectResult) -> int:
     print(f"Dry run: {'yes' if result.dry_run else 'no'}")
     print(f"Initialized repo: {'yes' if result.initialized_repo else 'no'}")
     print(f"Configured remote: {'yes' if result.configured_remote else 'no'}")
+    if result.commands:
+        print("Git commands:")
+        for command in result.commands:
+            print(command)
+    return 0
+
+
+def print_github_proxy_result(result: GitHubProxyResult) -> int:
+    if result.disconnected:
+        action = "Would disconnect GitHub sync proxy" if result.dry_run else "Disconnected GitHub sync proxy"
+    else:
+        action = "Would connect GitHub sync proxy" if result.dry_run else "Connected GitHub sync proxy"
+    print(action)
+    print(f"Bundle root: {result.bundle_root}")
+    print(f"Proxy: {result.proxy_url or '(not configured)'}")
+    print(f"Dry run: {'yes' if result.dry_run else 'no'}")
+    print(f"Proxy enabled: {'yes' if result.enabled else 'no'}")
+    print(f"Initialized repo: {'yes' if result.initialized_repo else 'no'}")
+    print(f"Configured proxy: {'yes' if result.configured_proxy else 'no'}")
+    print(f"Cleared proxy: {'yes' if result.cleared_proxy else 'no'}")
+    if result.ssh_proxy_command:
+        print(f"SSH proxy command: {result.ssh_proxy_command}")
     if result.commands:
         print("Git commands:")
         for command in result.commands:

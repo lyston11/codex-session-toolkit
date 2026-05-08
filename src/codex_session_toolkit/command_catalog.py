@@ -36,6 +36,7 @@ COMMAND_CATALOG: tuple[CommandSpec, ...] = (
     CommandSpec("import-skill-bundles", "skills", "Import all standalone Skills bundles", "Batch import standalone Skills bundles"),
     CommandSpec("delete-skill", "skills", "Delete one local custom Skill", "Delete one local custom Skill"),
     CommandSpec("connect-github", "github", "Connect local bundles to a dedicated GitHub repository", "Connect bundles to a dedicated repository, optionally push"),
+    CommandSpec("github-proxy", "github", "Connect or disconnect the GitHub sync proxy", "Configure proxy for GitHub sync"),
     CommandSpec("pull-github", "github", "Pull remote bundle updates from the connected GitHub repository", "Pull remote bundle updates into local codex_bundles"),
     CommandSpec("sync-github", "github", "Push local bundles to the connected GitHub repository", "Commit, merge remote updates, and push local bundles"),
     CommandSpec("clone-provider", "repair", "Clone active sessions to the target provider", "Clone active sessions to the current provider"),
