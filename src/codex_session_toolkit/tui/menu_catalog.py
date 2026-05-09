@@ -78,7 +78,10 @@ TUI_ACTION_NOTES = {
     "browse_skill_bundles": ["浏览 standalone Skills Bundle，和会话 Bundle 分开管理。"],
     "import_skill_bundle": ["选择一个 Skills Bundle 导入；同内容复用，冲突默认跳过。"],
     "import_skill_bundles": ["批量导入 standalone Skills Bundle，可按来源机器过滤。"],
-    "delete_skill": ["删除本机自定义 Skill。只允许删除 .agents/.codex 下的 custom Skill。"],
+    "delete_skill": [
+        "删除本机自定义 Skill。只允许删除 .agents/.codex 下的 custom Skill。",
+        "支持勾选多条删除，也支持一键删除全部自定义 Skills。",
+    ],
     "github_status": [
         "先快速读取本地连接状态，再检查 GitHub 远端更新时间。",
         "检测期间会显示进度，不让 TUI 空白卡住。",

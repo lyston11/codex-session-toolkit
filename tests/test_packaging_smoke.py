@@ -869,6 +869,25 @@ class PackagingSmokeTests(unittest.TestCase):
 
         self.assertEqual(app.open_calls, 1)
 
+    def test_tui_delete_skill_opens_delete_browser(self) -> None:
+        class DeleteSkillApp:
+            def __init__(self) -> None:
+                self.open_calls = []
+
+            def _open_local_skill_browser(self, *, mode: str):
+                self.open_calls.append(mode)
+
+            def _confirm_dangerous_action(self, *args, **kwargs):
+                raise AssertionError("main menu should open the Skill delete browser before destructive confirmation")
+
+            def _run_action(self, action_name, cli_args, **kwargs):
+                raise AssertionError("main menu should not delete Skills directly")
+
+        app = DeleteSkillApp()
+        execute_menu_action(app, SimpleNamespace(action_id="delete_skill", label="删除本机 Skill"))
+
+        self.assertEqual(app.open_calls, ["delete"])
+
     def test_project_export_dry_run_returns_to_execution_mode(self) -> None:
         class ProjectExportApp:
             context = SimpleNamespace(bundle_root_label="./codex_bundles")

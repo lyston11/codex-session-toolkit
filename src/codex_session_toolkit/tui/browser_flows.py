@@ -865,6 +865,7 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
     filter_text = ""
     selected_index = 0
     include_system = False
+    selected_skills: set[tuple[str, str]] = set()
     pointer = glyphs().get("pointer", ">")
 
     while True:
@@ -877,20 +878,36 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
         except ToolkitError as exc:
             app._show_detail_panel("读取本机 Skills 失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
             return None
+        visible_keys = {(entry.source_root, entry.relative_dir) for entry in entries}
+        selected_skills.intersection_update(visible_keys)
 
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
         subtitle = (
             "↑/↓ 选择 · Enter 查看详情 · / 搜索 · g 切换系统 Skills · e 导出选中 · r 删除选中 · x 导出全部 · q 返回"
             if mode == "view"
-            else "↑/↓ 选择 · Enter 确认 · / 搜索 · g 切换系统 Skills · d 查看详情 · q 返回"
+            else (
+                "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · x 删除选中/当前 · a 删除全部 · q 返回"
+                if mode == "delete"
+                else "↑/↓ 选择 · Enter 确认 · / 搜索 · g 切换系统 Skills · d 查看详情 · q 返回"
+            )
         )
-        title = "浏览本机 Skills" if mode == "view" else "选择要导出的 Skill"
+        title = (
+            "浏览本机 Skills"
+            if mode == "view"
+            else "删除本机 Skills"
+            if mode == "delete"
+            else "选择要导出的 Skill"
+        )
         info_lines = [
             f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
             f"{style_text('匹配数量', Ansi.DIM)} : {len(entries)}",
             f"{style_text('显示范围', Ansi.DIM)} : {'自定义 + 系统/运行时 Skills' if include_system else '仅自定义 Skills'}",
         ]
+        if mode == "delete":
+            custom_count = sum(1 for entry in entries if entry.location_kind == "custom")
+            info_lines.append(f"{style_text('自定义', Ansi.DIM)}   : {custom_count}")
+            info_lines.append(f"{style_text('已勾选', Ansi.DIM)}   : {len(selected_skills)}")
         info_lines.extend(app._github_sync_hint_lines())
 
         list_lines: list[str] = []
@@ -900,9 +917,13 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
             start, end = selection_window(len(entries), selected_index, 10)
             for idx in range(start, end):
                 skill = entries[idx]
+                marker = ""
+                if mode == "delete":
+                    skill_key = (skill.source_root, skill.relative_dir)
+                    marker = "[x] " if skill_key in selected_skills else "[ ] "
                 line = (
                     f"{pointer if idx == selected_index else ' '} "
-                    f"{skill.name} | {skill.source_root}/{skill.location_kind} | {skill.relative_dir}"
+                    f"{marker}{skill.name} | {skill.source_root}/{skill.location_kind} | {skill.relative_dir}"
                 )
                 if idx == selected_index:
                     list_lines.append(style_text(line, Ansi.BOLD, Ansi.BRIGHT_BLUE))
@@ -929,17 +950,36 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
 
         key = read_key()
         if key is None:
-            raw_prompt = "命令 [Enter/\\/g/e/r/x/d/q]：" if mode == "view" else "命令 [Enter/\\/g/d/q]："
+            raw_prompt = (
+                "命令 [Enter/\\/g/e/r/x/d/q]："
+                if mode == "view"
+                else "命令 [Enter/空格/\\/x/a/d/q]："
+                if mode == "delete"
+                else "命令 [Enter/\\/g/d/q]："
+            )
             raw = input(raw_prompt).strip()
             key = raw if raw else "ENTER"
 
-        transition = apply_list_key(key, selected_index=selected_index, item_count=len(entries))
+        if key == " " and mode == "delete" and entries:
+            selected = entries[selected_index]
+            if selected.location_kind != "custom":
+                app._show_detail_panel(
+                    "删除 Skill",
+                    ["系统/运行时 Skills 不能在这里删除。"],
+                    border_codes=(Ansi.DIM, Ansi.YELLOW),
+                )
+                continue
+            _toggle_selected_skill(selected_skills, selected)
+            continue
+
+        detail_keys = ("d",) if mode == "delete" else ()
+        transition = apply_list_key(key, selected_index=selected_index, item_count=len(entries), detail_keys=detail_keys)
         selected_index = transition.selected_index
         if transition.confirm_selected:
             if not entries:
                 continue
             selected = entries[selected_index]
-            if mode == "view":
+            if mode in {"view", "delete"}:
                 app._show_detail_panel(
                     "Skill 详情",
                     app._local_skill_detail_lines(selected),
@@ -970,10 +1010,23 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
             )
             filter_text = new_filter or ""
             selected_index = 0
+            selected_skills.clear()
             continue
         if key_str == "g":
             include_system = not include_system
             selected_index = 0
+            selected_skills.clear()
+            continue
+        if key_str in {" ", "m"} and entries and mode == "delete":
+            selected = entries[selected_index]
+            if selected.location_kind != "custom":
+                app._show_detail_panel(
+                    "删除 Skill",
+                    ["系统/运行时 Skills 不能在这里删除。"],
+                    border_codes=(Ansi.DIM, Ansi.YELLOW),
+                )
+                continue
+            _toggle_selected_skill(selected_skills, selected)
             continue
         if key_str == "e" and entries and mode == "view":
             selected = entries[selected_index]
@@ -1017,6 +1070,31 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
             )
             selected_index = 0
             continue
+        if key_str == "x" and entries and mode == "delete":
+            selected_entries = [
+                entry
+                for entry in entries
+                if (entry.source_root, entry.relative_dir) in selected_skills
+            ]
+            if not selected_entries:
+                selected = entries[selected_index]
+                if selected.location_kind != "custom":
+                    app._show_detail_panel(
+                        "删除 Skill",
+                        ["系统/运行时 Skills 不能在这里删除。"],
+                        border_codes=(Ansi.DIM, Ansi.YELLOW),
+                    )
+                    continue
+                selected_entries = [selected]
+            _confirm_and_delete_skills(app, selected_entries)
+            selected_index = 0
+            selected_skills.clear()
+            continue
+        if key_str == "a" and mode == "delete":
+            _confirm_and_delete_all_skills(app)
+            selected_index = 0
+            selected_skills.clear()
+            continue
         if key_str == "x" and mode == "view":
             app._run_action(
                 "导出全部自定义 Skills",
@@ -1026,6 +1104,80 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
                 danger=False,
             )
             continue
+
+
+def _toggle_selected_skill(selected_skills: set[tuple[str, str]], skill: "LocalSkillSummary") -> None:
+    key = (skill.source_root, skill.relative_dir)
+    if key in selected_skills:
+        selected_skills.remove(key)
+    else:
+        selected_skills.add(key)
+
+
+def _confirm_and_delete_skills(app: "ToolkitTuiApp", skills: list["LocalSkillSummary"]) -> None:
+    count = len(skills)
+    cli_args = ["delete-skill"]
+    for skill in skills:
+        cli_args.append(str(skill.skill_dir))
+    warning = (
+        f"将删除本机 Skill：{skills[0].source_root}/{skills[0].relative_dir}。"
+        if count == 1
+        else f"将删除已勾选的 {count} 个本机 Skills。"
+    )
+    impact = str(skills[0].skill_dir) if count == 1 else f"{count} 个自定义 Skills"
+    if not app._confirm_dangerous_action(
+        cli_args,
+        title="删除 Skill 确认",
+        subtitle="该操作会删除本机自定义 Skill 目录。",
+        warning=warning,
+        impact=impact,
+    ):
+        return
+    app._run_action(
+        f"删除本机 Skill {skills[0].relative_dir}" if count == 1 else f"删除 {count} 个本机 Skills",
+        cli_args,
+        dry_run=False,
+        runner=lambda args=cli_args: app._run_toolkit(args),
+        danger=True,
+    )
+
+
+def _confirm_and_delete_all_skills(
+    app: "ToolkitTuiApp",
+) -> None:
+    try:
+        skills = [
+            skill
+            for skill in list_local_skills(app.paths, include_system=False)
+            if skill.location_kind == "custom"
+        ]
+    except ToolkitError as exc:
+        app._show_detail_panel("删除 Skill", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+        return
+    if not skills:
+        app._show_detail_panel(
+            "删除 Skill",
+            ["当前没有本机自定义 Skills。"],
+            border_codes=(Ansi.DIM, Ansi.YELLOW),
+        )
+        return
+    cli_args = ["delete-skill", "--all"]
+    count = len(skills)
+    if not app._confirm_dangerous_action(
+        cli_args,
+        title="删除全部 Skills 确认",
+        subtitle="该操作会删除匹配范围内的全部本机自定义 Skills。",
+        warning=f"将删除 {count} 个本机自定义 Skills。",
+        impact="全部自定义 Skills",
+    ):
+        return
+    app._run_action(
+        "删除全部本机 Skills",
+        cli_args,
+        dry_run=False,
+        runner=lambda args=cli_args: app._run_toolkit(args),
+        danger=True,
+    )
 
 
 def open_skill_bundle_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["SkillBundleSummary"]:

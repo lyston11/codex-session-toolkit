@@ -42,7 +42,7 @@ from codex_session_toolkit.services.archived_sessions import delete_archived_ses
 from codex_session_toolkit.services.importing import import_desktop_all, import_session  # noqa: E402
 from codex_session_toolkit.services.provider import detect_provider  # noqa: E402
 from codex_session_toolkit.services.repair import repair_desktop  # noqa: E402
-from codex_session_toolkit.services.skills_transfer import delete_local_skill, export_skills, import_skill_bundle, list_skill_bundles, list_local_skills  # noqa: E402
+from codex_session_toolkit.services.skills_transfer import delete_local_skill, delete_local_skills, export_skills, import_skill_bundle, list_skill_bundles, list_local_skills  # noqa: E402
 from codex_session_toolkit.support import default_local_project_target, iso_to_epoch_ms, machine_label_to_key  # noqa: E402
 from codex_session_toolkit.stores import bundles as legacy_bundles  # noqa: E402
 from codex_session_toolkit.stores.bundle_scanner import collect_known_bundle_summaries, latest_distinct_bundle_summaries  # noqa: E402
@@ -4387,6 +4387,35 @@ class CoreWorkflowTests(unittest.TestCase):
             deleted = delete_local_skill(paths, "delete-me", source_root="agents")
             self.assertTrue(deleted.deleted)
             self.assertFalse(skill_dir.exists())
+
+    def test_delete_local_skills_supports_multiple_targets_and_all(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            agents_skills = home / ".agents" / "skills"
+            codex_skills = home / ".codex" / "skills"
+            first_dir = write_test_skill(agents_skills, "delete-first", "first")
+            second_dir = write_test_skill(codex_skills, "delete-second", "second")
+            keep_dir = write_test_skill(agents_skills, "keep-for-all", "keep")
+            paths = CodexPaths(home=home)
+
+            dry_run = delete_local_skills(
+                paths,
+                [str(first_dir), str(second_dir)],
+                dry_run=True,
+            )
+            self.assertEqual([result.relative_dir for result in dry_run], ["delete-first", "delete-second"])
+            self.assertTrue(first_dir.is_dir())
+            self.assertTrue(second_dir.is_dir())
+
+            deleted = delete_local_skills(paths, [str(first_dir), str(second_dir)])
+            self.assertEqual(len(deleted), 2)
+            self.assertFalse(first_dir.exists())
+            self.assertFalse(second_dir.exists())
+            self.assertTrue(keep_dir.is_dir())
+
+            delete_all = delete_local_skills(paths, all_skills=True)
+            self.assertEqual([result.relative_dir for result in delete_all], ["keep-for-all"])
+            self.assertFalse(keep_dir.exists())
 
     def test_delete_local_skill_refuses_ambiguous_cross_root_match(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

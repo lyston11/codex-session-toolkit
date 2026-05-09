@@ -8,7 +8,7 @@ import tempfile
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from ..errors import ToolkitError
 from ..models import (
@@ -250,7 +250,58 @@ def delete_local_skill(
         roots = ", ".join(sorted({match.source_root for match in matches}))
         raise ToolkitError(f"Multiple matching Skills found in {roots}; pass --source-root agents|codex")
 
-    target = matches[0]
+    return _delete_local_skill_summary(paths, matches[0], dry_run=dry_run)
+
+
+def delete_local_skills(
+    paths: CodexPaths,
+    input_values: Sequence[str] = (),
+    *,
+    source_root: str = "",
+    all_skills: bool = False,
+    dry_run: bool = False,
+) -> list[SkillDeleteResult]:
+    if all_skills and input_values:
+        raise ToolkitError("Pass either --all or specific Skills, not both.")
+
+    if all_skills:
+        targets = _collect_local_skill_delete_candidates(paths)
+        if source_root:
+            targets = [target for target in targets if target.source_root == source_root]
+        if not targets:
+            scope = f" in {source_root}" if source_root else ""
+            raise ToolkitError(f"No custom Skills found{scope}.")
+    else:
+        if not input_values:
+            raise ToolkitError("Skill name, relative directory, local Skill directory, or --all is required.")
+        targets = []
+        for input_value in input_values:
+            matches = _resolve_local_skill_delete_matches(paths, input_value, source_root=source_root)
+            if not matches:
+                scope = f" in {source_root}" if source_root else ""
+                raise ToolkitError(f"Custom Skill not found{scope}: {input_value}")
+            if len(matches) > 1:
+                roots = ", ".join(sorted({match.source_root for match in matches}))
+                raise ToolkitError(f"Multiple matching Skills found in {roots}; pass --source-root agents|codex")
+            targets.append(matches[0])
+
+    results: list[SkillDeleteResult] = []
+    seen: set[tuple[str, str]] = set()
+    for target in targets:
+        key = (target.source_root, target.relative_dir)
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append(_delete_local_skill_summary(paths, target, dry_run=dry_run))
+    return results
+
+
+def _delete_local_skill_summary(
+    paths: CodexPaths,
+    target: LocalSkillSummary,
+    *,
+    dry_run: bool = False,
+) -> SkillDeleteResult:
     root_dir = _skills_root_for_source(paths, target.source_root)
     ensure_path_within_dir(target.skill_dir, root_dir, "Skill directory")
     if target.location_kind != "custom":

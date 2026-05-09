@@ -139,8 +139,9 @@ def create_parser() -> argparse.ArgumentParser:
     _add_skills_mode(import_skill_bundles_parser, action="import")
 
     delete_skill_parser = subparsers.add_parser("delete-skill", help=command_help("delete-skill"))
-    delete_skill_parser.add_argument("input_value", help="Exact Skill name, relative directory, or local Skill directory")
+    delete_skill_parser.add_argument("input_values", nargs="*", help="Exact Skill names, relative directories, or local Skill directories")
     delete_skill_parser.add_argument("--source-root", choices=["agents", "codex"], default="", help="Limit deletion to one local Skills root")
+    delete_skill_parser.add_argument("--all", action="store_true", help="Delete all local custom Skills")
     delete_skill_parser.add_argument("--dry-run", action="store_true", help="Preview the Skill that would be deleted")
 
     connect_github_parser = subparsers.add_parser("connect-github", help=command_help("connect-github"))

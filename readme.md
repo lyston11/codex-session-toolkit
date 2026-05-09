@@ -131,6 +131,7 @@ codex-session-toolkit
 - 导入单个 Skills Bundle
 - 批量导入 Skills Bundle
 - 删除本机自定义 Skill，删除前确认
+- 删除 Skills 列表支持 `Space` 多选、`x` 删除选中/当前、`a` 删除全部自定义 Skills
 
 `.agents/skills/foo` 与 `.codex/skills/foo` 会按同一个相对 Skill 识别，避免重复导入。
 

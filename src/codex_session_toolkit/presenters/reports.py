@@ -267,6 +267,20 @@ def print_skill_delete_result(result: SkillDeleteResult) -> int:
     return 0
 
 
+def print_skill_delete_results(results: list[SkillDeleteResult]) -> int:
+    if not results:
+        print("Deleted Skills: 0")
+        return 0
+    dry_run = results[0].dry_run
+    action = "Would delete Skills" if dry_run else "Deleted Skills"
+    print(action)
+    print(f"Skills: {len(results)}")
+    for result in results:
+        prefix = "[DRY-RUN] Would delete" if dry_run else "Deleted"
+        print(f"{prefix}: {result.source_root}/{result.relative_dir} ({result.skill_dir})")
+    return 0
+
+
 def print_session_backup_restore_result(result: SessionBackupRestoreResult) -> int:
     action = "Would restore session backup" if result.dry_run else "Restored session backup"
     print(f"{action}: {result.session_id}")

@@ -13,6 +13,11 @@
 - Export, import, and Desktop repair now recover real short titles from rollout `thread_name_updated` events when SQLite or Bundle titles are missing
 - Prompt/title comparison now normalizes whitespace and ignores injected meta context such as `AGENTS.md` instructions, preventing first prompts from replacing Desktop thread names
 
+### Skills
+
+- TUI Skill deletion now supports multi-select deletion and delete-all for local custom Skills, matching archived session cleanup
+- `delete-skill` now accepts multiple Skill targets or `--all` for batch deletion from scripts
+
 ## 0.1.1 - 2026-04-30
 
 ### Highlights

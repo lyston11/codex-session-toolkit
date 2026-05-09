@@ -632,23 +632,7 @@ def execute_menu_action(app: "ToolkitTuiApp", chosen_action: "TuiMenuAction") ->
         return
 
     if choice_id == "delete_skill":
-        selected = app._open_local_skill_browser(mode="select")
-        if not selected:
-            return
-        cli_args = ["delete-skill", selected.relative_dir, "--source-root", selected.source_root]
-        if not app._confirm_dangerous_action(
-            cli_args,
-            warning=f"将删除本机 Skill：{selected.source_root}/{selected.relative_dir}。",
-            impact=str(selected.skill_dir),
-        ):
-            return
-        app._run_action(
-            f"删除本机 Skill {selected.relative_dir}",
-            cli_args,
-            dry_run=False,
-            runner=lambda args=cli_args: app._run_toolkit(args),
-            danger=True,
-        )
+        app._open_local_skill_browser(mode="delete")
         return
 
     resolver = getattr(app, "_resolve_menu_action_request", None)

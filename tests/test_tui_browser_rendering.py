@@ -12,8 +12,8 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in os.sys.path:
     os.sys.path.insert(0, str(SRC_DIR))
 
-from codex_session_toolkit.models import SessionSummary  # noqa: E402
-from codex_session_toolkit.tui.browser_flows import open_archived_session_browser, render_browser_frame  # noqa: E402
+from codex_session_toolkit.models import LocalSkillSummary, SessionSummary  # noqa: E402
+from codex_session_toolkit.tui.browser_flows import open_archived_session_browser, open_local_skill_browser, render_browser_frame  # noqa: E402
 from codex_session_toolkit.tui.progress_flows import _render_progress  # noqa: E402
 from codex_session_toolkit.tui.prompt_flows import prompt_choice, render_prompt_choice  # noqa: E402
 from codex_session_toolkit.tui.terminal import Ansi  # noqa: E402
@@ -58,6 +58,43 @@ class FakeArchivedBrowserApp:
         return [summary.session_id]
 
 
+class FakeSkillDeleteBrowserApp:
+    paths = SimpleNamespace()
+
+    def __init__(self) -> None:
+        self.run_calls = []
+        self.confirm_calls = []
+        self.detail_calls = []
+
+    def _screen_layout(self):
+        return 80, True
+
+    def _fit_lines_to_screen(self, lines):
+        return lines
+
+    def _show_detail_panel(self, title, lines, **kwargs):
+        self.detail_calls.append((title, list(lines), kwargs))
+
+    def _prompt_value(self, **kwargs):
+        raise AssertionError("this test should not prompt for search")
+
+    def _confirm_dangerous_action(self, cli_args, **kwargs):
+        self.confirm_calls.append((list(cli_args), kwargs))
+        return True
+
+    def _run_action(self, action_name, cli_args, **kwargs):
+        self.run_calls.append((action_name, list(cli_args), kwargs))
+
+    def _run_toolkit(self, args):
+        raise AssertionError("browser tests record run_action without invoking toolkit")
+
+    def _local_skill_detail_lines(self, summary):
+        return [summary.relative_dir]
+
+    def _github_sync_hint_lines(self):
+        return []
+
+
 class FakeProgressApp:
     def _screen_layout(self):
         return 80, True
@@ -95,6 +132,17 @@ def archived_summary(session_id: str) -> SessionSummary:
         cwd="/tmp/project",
         model_provider="provider",
         thread_name=f"Thread {session_id}",
+    )
+
+
+def skill_summary(name: str, *, source_root: str = "agents", location_kind: str = "custom") -> LocalSkillSummary:
+    return LocalSkillSummary(
+        name=name,
+        source_root=source_root,
+        relative_dir=name,
+        skill_dir=Path(f"/tmp/home/.{source_root}/skills/{name}"),
+        location_kind=location_kind,
+        content_hash=f"hash-{name}",
     )
 
 
@@ -247,6 +295,55 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         action_name, cli_args, kwargs = app.run_calls[0]
         self.assertEqual(action_name, "删除全部归档会话")
         self.assertEqual(cli_args, ["delete-archived-sessions"])
+        self.assertTrue(kwargs["danger"])
+
+    def test_skill_delete_browser_can_delete_selected_skill(self) -> None:
+        app = FakeSkillDeleteBrowserApp()
+        selected = skill_summary("delete-me")
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["x", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_local_skills", return_value=[selected]))
+            stack.enter_context(redirect_stdout(TtyStringIO()))
+            open_local_skill_browser(app, mode="delete")
+
+        self.assertEqual(app.confirm_calls[0][0], ["delete-skill", str(selected.skill_dir)])
+        action_name, cli_args, kwargs = app.run_calls[0]
+        self.assertEqual(action_name, "删除本机 Skill delete-me")
+        self.assertEqual(cli_args, ["delete-skill", str(selected.skill_dir)])
+        self.assertTrue(kwargs["danger"])
+
+    def test_skill_delete_browser_can_delete_checked_skills(self) -> None:
+        app = FakeSkillDeleteBrowserApp()
+        first = skill_summary("first-skill")
+        second = skill_summary("second-skill", source_root="codex")
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=[" ", "DOWN", " ", "x", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_local_skills", return_value=[first, second]))
+            stack.enter_context(redirect_stdout(TtyStringIO()))
+            open_local_skill_browser(app, mode="delete")
+
+        self.assertEqual(app.confirm_calls[0][0], ["delete-skill", str(first.skill_dir), str(second.skill_dir)])
+        action_name, cli_args, kwargs = app.run_calls[0]
+        self.assertEqual(action_name, "删除 2 个本机 Skills")
+        self.assertEqual(cli_args, ["delete-skill", str(first.skill_dir), str(second.skill_dir)])
+        self.assertTrue(kwargs["danger"])
+
+    def test_skill_delete_browser_can_delete_all_custom_skills(self) -> None:
+        app = FakeSkillDeleteBrowserApp()
+        custom = skill_summary("custom-skill")
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["a", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_local_skills", return_value=[custom]))
+            stack.enter_context(redirect_stdout(TtyStringIO()))
+            open_local_skill_browser(app, mode="delete")
+
+        self.assertEqual(app.confirm_calls[0][0], ["delete-skill", "--all"])
+        action_name, cli_args, kwargs = app.run_calls[0]
+        self.assertEqual(action_name, "删除全部本机 Skills")
+        self.assertEqual(cli_args, ["delete-skill", "--all"])
         self.assertTrue(kwargs["danger"])
 
 

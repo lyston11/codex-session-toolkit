@@ -27,6 +27,7 @@ from ..presenters.reports import (
     print_session_rows,
     print_skill_bundle_rows,
     print_skill_delete_result,
+    print_skill_delete_results,
     print_skill_export_result,
     print_skill_import_result,
     print_validation_report,
@@ -41,6 +42,7 @@ from ..services.github_sync import configure_github_proxy, connect_bundles_to_gi
 from ..services.repair import repair_desktop
 from ..services.skills_transfer import (
     delete_local_skill,
+    delete_local_skills,
     export_skills,
     import_all_skill_bundles,
     import_skill_bundle,
@@ -218,10 +220,20 @@ def _handle_import_skill_bundles(args: argparse.Namespace, paths: CodexPaths) ->
 
 
 def _handle_delete_skill(args: argparse.Namespace, paths: CodexPaths) -> int:
+    if args.all or len(args.input_values) != 1:
+        return print_skill_delete_results(
+            delete_local_skills(
+                paths,
+                args.input_values,
+                source_root=args.source_root,
+                all_skills=args.all,
+                dry_run=args.dry_run,
+            )
+        )
     return print_skill_delete_result(
         delete_local_skill(
             paths,
-            args.input_value,
+            args.input_values[0],
             source_root=args.source_root,
             dry_run=args.dry_run,
         )
