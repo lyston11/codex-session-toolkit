@@ -16,7 +16,7 @@ Codex 的会话数据、Desktop 索引、CLI rollout、history、项目路径、
 - **会话和 Skills 的关系需要可控**：会话 Bundle 只携带实际依赖的自定义 Skills；全量自定义 Skills 通过 standalone Skills Bundle 独立迁移。
 - **多设备 Bundle 需要同步机制**：`./codex_bundles/` 可以连接到一个独立 GitHub Bundle 仓库，支持状态检查、Pull、Push、远端更新时间检测和冲突保护。
 - **GitHub 网络慢需要可控代理**：同步中心可以连接或断开本机代理接口，让状态检查、Pull 和 Push 走代理线路。
-- **导入后 Desktop 状态需要修复**：导入和修复流程会维护 `session_index.jsonl`、Desktop `threads` 表、workspace roots、provider 和线程标题。
+- **导入后 Desktop 状态需要修复**：导入和修复流程会维护 `session_index.jsonl`、Desktop `threads` 表、workspace roots、侧栏顺序、pin 状态、provider 和线程标题。
 - **归档会话过多会拖慢搬运**：可以在 TUI 中预览、勾选并删除归档会话；删除时会保护同 ID 的 active 会话索引和 Desktop 线程记录。
 - **写入操作需要可预演、可回退**：导出、导入、修复、清理、GitHub 同步等关键动作支持 Dry-run；导入覆盖前会备份，备份可在 TUI 中恢复。
 
@@ -113,7 +113,9 @@ codex-session-toolkit
 - 导入单个 Bundle 为会话
 - 按 `设备 -> 分类 -> 项目` 批量导入
 - 导入 project 分类时，把源机器 cwd 映射到当前机器项目目录
-- 导入时维护 `session_index.jsonl`、Desktop `threads` 表和 workspace roots
+- 导入时维护 `session_index.jsonl`、Desktop `threads` 表、workspace roots 和侧栏状态
+- 批量导入会把导入线程写入 Desktop 侧栏顺序和 workspace hint，并提升到 Desktop 最近线程池前部
+- 导入到 Desktop 时会自动 pin 导入线程，避免历史会话过多时只在 TUI 可见
 - 选择显示到 Desktop 时，归档来源的 Bundle 会导入为 active 会话，避免只在 TUI 可见而不出现在 Desktop 主线程栏
 
 导入如果会覆盖本地 rollout，会先生成 `.bak.<timestamp>` 备份。
@@ -138,13 +140,14 @@ codex-session-toolkit
 
 - 迁移到当前 Provider
 - 修复会话在 Codex Desktop 中显示
+- 修复 Desktop 有限最近线程池被旧记录占满、侧栏筛选/折叠状态遮挡、空 `thread_source` 和失效 `threads` 行
 - 删除归档会话
 - 管理会话备份
 - 清理旧版无标记副本
 - 可选把未登记 CLI 会话纳入 Desktop
 - 支持 Dry-run 预演
 
-Desktop 修复默认只处理 active 会话；需要 archived 会话时，从 Repair / Maintenance 的修复入口中选择对应范围。
+Desktop 修复默认只处理 active 会话；需要 archived 会话时，从 Repair / Maintenance 的修复入口中选择对应范围。修复会备份被改动的 Desktop state、SQLite 和索引文件。
 
 删除归档会话会先进入列表页：
 
@@ -407,12 +410,29 @@ project 分类额外记录：
 工具会尽量保留用户在 Desktop 中看到的真实标题和 provider 语义。
 
 - 导出时优先读取源机器 Desktop `state_*.sqlite` 中的 `threads.title`
+- 如果 SQLite 标题缺失，会读取 rollout 中的 `thread_name_updated` 事件作为真实短标题
 - `THREAD_NAME` 保存左侧线程短标题
 - `FIRST_USER_MESSAGE` 保存第一条用户消息，作为兜底预览
 - 导入时优先使用 `THREAD_NAME`
-- 旧 Bundle 没有标题时，才从现有 Desktop 标题、`session_index.jsonl` 或 rollout 首条用户消息恢复
+- 旧 Bundle 没有标题时，才从现有 Desktop 标题、`thread_name_updated`、`session_index.jsonl` 或 rollout 首条用户消息恢复
+- 标题比较会折叠换行和多余空白，避免把同一条长提示误判成短标题
+- `AGENTS.md` 注入上下文、系统技能上下文等元信息不会被当成标题
 - 账号登录模式下，如果 `~/.codex/config.toml` 没有 `model_provider`，会从 Desktop `threads` 表和最新 rollout 中推断
-- Desktop 修复会保留已有 Desktop 短标题，只修复 provider、索引、workspace roots 和 `threads` 登记
+- Desktop 修复会保留已有 Desktop 短标题；当旧标题明显是第一条提示或注入上下文时，会用 `thread_name_updated` 恢复真实短标题
+
+如果旧会话既没有 Desktop SQLite 标题、Bundle `THREAD_NAME`，也没有 `thread_name_updated` 事件，工具只能退回到第一条有意义的用户消息或工作区/时间兜底名。这是源数据限制，不会伪造不存在的短标题。
+
+## Desktop 侧栏可见性
+
+Codex Desktop 左侧线程栏不只是读取 rollout 文件。它还依赖 Desktop SQLite 的 `threads` 表、全局 state 中的 workspace roots、线程到 workspace 的 hint、项目内线程顺序、pin 列表和当前侧栏筛选/折叠状态。历史记录很多时，Desktop 还会优先显示最近线程；旧的归档或失效 `threads` 行可能占住这个有限列表。
+
+因此，本工具在导入和 `repair-desktop` 中会同时处理这些状态：
+
+- 写入或修复 `threads` 行，并清理指向缺失/归档 managed rollout 的失效行
+- 写入 workspace roots、`thread-workspace-root-hints` 和 `sidebar-project-thread-orders`
+- 展开 chats / pinned / threads 分区，清除会挡住目标项目的折叠组，并把 workspace filter 切回全部
+- 将导入或修复的线程提升到 Desktop 最近线程池前部
+- pin 导入或修复的目标线程，让它们在会话很多时仍能出现在侧栏
 
 Provider 识别顺序：
 

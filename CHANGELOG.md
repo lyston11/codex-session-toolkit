@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Desktop Visibility
+
+- Import and batch import now update Desktop sidebar state, including workspace hints, project thread order, workspace roots, expanded sidebar sections, and pin state
+- Imported Desktop-visible threads are promoted in Desktop SQLite so they appear inside Desktop's limited recent thread pool even when many old conversations exist
+- `repair-desktop` now repairs blank managed `thread_source` values and prunes stale managed Desktop `threads` rows that point to missing or archived rollout files
+
+### Thread Titles
+
+- Export, import, and Desktop repair now recover real short titles from rollout `thread_name_updated` events when SQLite or Bundle titles are missing
+- Prompt/title comparison now normalizes whitespace and ignores injected meta context such as `AGENTS.md` instructions, preventing first prompts from replacing Desktop thread names
+
 ## 0.1.1 - 2026-04-30
 
 ### Highlights

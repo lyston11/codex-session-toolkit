@@ -12,19 +12,24 @@ from ..paths import CodexPaths
 from ..services.provider import detect_provider
 from ..stores.desktop_state import (
     build_threads_row,
+    ensure_sidebar_thread_state,
+    ensure_sidebar_workspace_visibility,
     load_thread_metadata,
     load_thread_session_ids,
     load_desktop_state_data,
     merge_workspace_root,
+    pin_desktop_thread_ids,
+    promote_workspace_threads_for_sidebar,
     prune_threads_rows,
+    repair_blank_thread_sources,
     upsert_threads_rows,
     write_desktop_state_data,
 )
 from ..stores.history import first_history_messages
 from ..stores.index import SessionIndexEntry, is_weak_thread_name, load_existing_index, write_session_index_entries
 from ..stores.session_files import build_session_preview, iter_session_files
-from ..stores.session_parser import parse_session_file
-from ..support import backup_file, classify_session_kind, iso_to_epoch, nearest_existing_parent, normalize_iso
+from ..stores.session_parser import looks_like_session_meta_text, normalize_session_text, parse_session_file
+from ..support import backup_file, classify_session_kind, iso_to_epoch, normalize_iso
 
 
 def repair_desktop(
@@ -135,15 +140,15 @@ def repair_desktop(
             session_file=session_file,
             cwd=cwd,
             first_user_prompt=parsed_session.first_user_prompt,
+            explicit_thread_name=parsed_session.explicit_thread_name,
             desktop_thread_title=str(existing_thread_metadata.get(session_id, {}).get("title") or ""),
             existing_index=existing_index,
             history_first_messages=history_first_messages,
         )
         first_user_message = parsed_session.first_user_prompt or history_first_messages.get(session_id) or thread_name
         if cwd:
-            candidate = nearest_existing_parent(cwd) or cwd
-            if candidate and candidate not in workspace_candidates:
-                workspace_candidates[candidate] = True
+            if cwd not in workspace_candidates:
+                workspace_candidates[cwd] = True
 
         entries.append(
             {
@@ -183,10 +188,11 @@ def repair_desktop(
 
     for root in workspace_candidates:
         merge_workspace_root(state_data, root)
-
-    if not dry_run:
-        backup_file(paths.code_dir, backup_root, backed_up, paths.state_file, enabled=True)
-        write_desktop_state_data(paths.state_file, state_data)
+    ensure_sidebar_workspace_visibility(
+        state_data,
+        list(workspace_candidates),
+        reset_workspace_filter=True,
+    )
 
     thread_rows = [
         build_threads_row(
@@ -208,6 +214,8 @@ def repair_desktop(
 
     threads_updated = 0
     threads_pruned = 0
+    thread_sources_repaired = 0
+    promoted_thread_ids: list[str] = []
     if state_db and state_db.exists():
         if not dry_run:
             backup_file(paths.code_dir, backup_root, backed_up, state_db, enabled=True)
@@ -219,6 +227,35 @@ def repair_desktop(
                 dry_run=dry_run,
             )
         threads_updated = upsert_threads_rows(state_db, thread_rows, dry_run=dry_run)
+        thread_sources_repaired = repair_blank_thread_sources(
+            state_db,
+            managed_roots=(paths.sessions_dir, paths.archived_sessions_dir),
+            dry_run=dry_run,
+        )
+        promoted_thread_ids = promote_workspace_threads_for_sidebar(
+            state_db,
+            list(workspace_candidates),
+            managed_roots=(paths.sessions_dir, paths.archived_sessions_dir),
+            dry_run=dry_run,
+        )
+
+    visible_thread_workspaces = [
+        (str(entry["id"]), str(entry["cwd"]))
+        for entry in entries
+        if entry["desktop_visible"] and entry["cwd"]
+    ]
+    desktop_sidebar_state_count, desktop_pinned_count = ensure_sidebar_thread_state(
+        state_data,
+        visible_thread_workspaces,
+        reset_workspace_filter=True,
+        pin_threads=True,
+    )
+    if promoted_thread_ids:
+        desktop_pinned_count = max(desktop_pinned_count, pin_desktop_thread_ids(state_data, promoted_thread_ids))
+
+    if not dry_run:
+        backup_file(paths.code_dir, backup_root, backed_up, paths.state_file, enabled=True)
+        write_desktop_state_data(paths.state_file, state_data)
 
     return RepairResult(
         provider=provider,
@@ -231,7 +268,10 @@ def repair_desktop(
         skipped_sessions=skipped_sessions,
         workspace_roots_count=len(state_data.get("active-workspace-roots", [])),
         threads_updated=threads_updated,
+        thread_sources_repaired=thread_sources_repaired,
         threads_pruned=threads_pruned,
+        desktop_sidebar_promoted_count=desktop_sidebar_state_count or len(promoted_thread_ids),
+        desktop_pinned_count=desktop_pinned_count,
         backup_root=(None if dry_run else backup_root),
         changed_sessions=changed_sessions,
         warnings=warnings,
@@ -244,6 +284,7 @@ def _repair_thread_name(
     session_file,
     cwd: str,
     first_user_prompt: str,
+    explicit_thread_name: str,
     desktop_thread_title: str,
     existing_index: dict,
     history_first_messages: dict[str, str],
@@ -252,6 +293,24 @@ def _repair_thread_name(
     existing_name = str(existing_index.get(session_id, {}).get("thread_name") or "").strip()
     history_name = str(history_first_messages.get(session_id, "") or "").strip()
     prompt_name = str(first_user_prompt or "").strip()
+    explicit_name = str(explicit_thread_name or "").strip()
+    normalized_prompt = normalize_session_text(prompt_name)
+    normalized_explicit = normalize_session_text(explicit_name)
+    normalized_desktop = normalize_session_text(desktop_name)
+    normalized_existing = normalize_session_text(existing_name)
+    if (
+        not is_weak_thread_name(explicit_name, session_id)
+        and normalized_explicit != normalized_prompt
+        and (
+            not desktop_name
+            or not existing_name
+            or normalized_desktop == normalized_prompt
+            or normalized_existing == normalized_prompt
+            or looks_like_session_meta_text(desktop_name)
+            or looks_like_session_meta_text(existing_name)
+        )
+    ):
+        return explicit_name
     if not is_weak_thread_name(desktop_name, session_id):
         if prompt_name and history_name and desktop_name == history_name and desktop_name != prompt_name:
             return prompt_name
@@ -260,6 +319,8 @@ def _repair_thread_name(
         if prompt_name and history_name and existing_name == history_name and existing_name != prompt_name:
             return prompt_name
         return existing_name
+    if not is_weak_thread_name(explicit_name, session_id):
+        return explicit_name
 
     preview = build_session_preview(
         history_name,

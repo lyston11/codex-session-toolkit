@@ -20,19 +20,22 @@ from ..stores.bundle_repository import (
     resolve_known_bundle_dir,
 )
 from ..stores.desktop_state import (
+    ensure_desktop_sidebar_thread_state,
+    ensure_desktop_thread_pins,
     ensure_desktop_workspace_root,
     load_thread_metadata,
+    promote_desktop_thread_ids_for_sidebar,
+    promote_workspace_threads_for_sidebar,
     prepare_session_for_import,
     upsert_threads_table,
 )
 from ..stores.history import first_history_text
 from ..stores.index import is_weak_thread_name, load_existing_index, upsert_session_index
 from ..stores.session_files import build_session_preview, extract_last_timestamp, extract_session_field_from_file
-from ..stores.session_parser import parse_session_file
+from ..stores.session_parser import normalize_session_text, parse_session_file
 from ..support import (
     classify_session_kind,
     iso_to_epoch,
-    nearest_existing_parent,
     normalize_bundle_root,
     restrict_to_local_bundle_workspace,
 )
@@ -58,6 +61,7 @@ def import_session(
     session_cwd_override: str = "",
     skills_mode: str = "best-effort",
     skills_restore_report_path: Optional[Path] = None,
+    pin_sidebar_workspace: bool = True,
 ) -> ImportResult:
     bundle_dir, resolved_from_session_id = _resolve_import_bundle_dir(
         paths,
@@ -214,6 +218,7 @@ def import_session(
             existing_desktop_thread_name=existing_desktop_thread_name,
             existing_index_thread_name=existing_thread_name,
             recovered_thread_name=recovered_thread_name,
+            explicit_thread_name=parsed_effective_session.explicit_thread_name,
             parsed_first_user_prompt=parsed_effective_session.first_user_prompt,
             bundle_history_preview=bundle_history_preview,
         )
@@ -227,21 +232,13 @@ def import_session(
         desktop_registered = False
         desktop_registration_target = ""
         if session_cwd:
-            if Path(session_cwd).is_dir():
-                desktop_registration_target = session_cwd
-            else:
-                desktop_registration_target = nearest_existing_parent(session_cwd)
-                if desktop_registration_target and desktop_registration_target != session_cwd:
-                    warnings.append(
-                        OperationWarning(
-                            code="workspace_parent_used",
-                            session_id=session_id,
-                            path=session_cwd,
-                            related_path=desktop_registration_target,
-                        )
-                    )
+            desktop_registration_target = session_cwd
         if desktop_registration_target:
-            desktop_registered = ensure_desktop_workspace_root(desktop_registration_target, paths.state_file)
+            desktop_registered = ensure_desktop_workspace_root(
+                desktop_registration_target,
+                paths.state_file,
+                reset_workspace_filter=desktop_visible,
+            )
 
         thread_row_upserted = bool(
             state_db and upsert_threads_table(
@@ -260,6 +257,29 @@ def import_session(
                 classify_session_kind=classify_session_kind,
             )
         )
+        promoted_thread_ids: list[str] = []
+        desktop_pinned_count = 0
+        desktop_sidebar_visible_count = 0
+        if desktop_visible and thread_row_upserted and state_db and session_cwd:
+            promoted_thread_ids = promote_desktop_thread_ids_for_sidebar(
+                state_db,
+                [session_id],
+                managed_roots=(paths.sessions_dir, paths.archived_sessions_dir),
+            )
+            desktop_sidebar_visible_count, desktop_pinned_count = ensure_desktop_sidebar_thread_state(
+                paths.state_file,
+                [(session_id, session_cwd)],
+                reset_workspace_filter=True,
+                pin_threads=pin_sidebar_workspace,
+            )
+            if pin_sidebar_workspace:
+                desktop_pinned_count = max(
+                    desktop_pinned_count,
+                    ensure_desktop_thread_pins(
+                        paths.state_file,
+                        promoted_thread_ids or [session_id],
+                    ),
+                )
 
         skills_restore_summary = restore_bundle_skills_sidecar(
             home=paths.home,
@@ -296,6 +316,8 @@ def import_session(
             skills_conflict_skipped_count=skills_conflict_skipped_count,
             skills_missing_count=skills_missing_count,
             skills_failed_count=skills_failed_count,
+            desktop_sidebar_promoted_count=desktop_sidebar_visible_count or len(promoted_thread_ids),
+            desktop_pinned_count=desktop_pinned_count,
         )
     finally:
         Path(prepared_path).unlink(missing_ok=True)
@@ -317,6 +339,7 @@ def _select_import_thread_name(
     existing_desktop_thread_name: str,
     existing_index_thread_name: str,
     recovered_thread_name: str,
+    explicit_thread_name: str,
     parsed_first_user_prompt: str,
     bundle_history_preview: str,
 ) -> str:
@@ -330,9 +353,17 @@ def _select_import_thread_name(
     if (
         manifest_title
         and not is_weak_thread_name(manifest_title, session_id)
-        and (not first_message or manifest_title != first_message)
+        and (not first_message or normalize_session_text(manifest_title) != normalize_session_text(first_message))
     ):
         return manifest_title
+
+    explicit_title = str(explicit_thread_name or "").strip()
+    if (
+        explicit_title
+        and not is_weak_thread_name(explicit_title, session_id)
+        and (not first_message or normalize_session_text(explicit_title) != normalize_session_text(first_message))
+    ):
+        return explicit_title
 
     existing_title = _first_strong_thread_name(
         session_id,
@@ -342,7 +373,7 @@ def _select_import_thread_name(
     if existing_title:
         return existing_title
 
-    return _first_strong_thread_name(session_id, manifest_title, recovered_thread_name)
+    return _first_strong_thread_name(session_id, explicit_thread_name, recovered_thread_name, manifest_title)
 
 
 def _resolve_import_bundle_dir(
@@ -417,6 +448,9 @@ def import_desktop_all(
     total_skills_conflict_skipped = 0
     total_skills_missing = 0
     total_skills_failed = 0
+    imported_workspaces: list[str] = []
+    imported_thread_ids: list[str] = []
+    imported_thread_workspaces: list[tuple[str, str]] = []
     skills_restore_report_path = None
     warnings: list[OperationWarning] = []
     for summary in plan.bundle_summaries:
@@ -430,6 +464,7 @@ def import_desktop_all(
                 session_cwd_override=plan.session_cwd_override_for(summary),
                 skills_mode=skills_mode,
                 skills_restore_report_path=plan.skills_restore_report_candidate_path,
+                pin_sidebar_workspace=False,
             )
             success_dirs.append(summary.bundle_dir)
             total_skills_restored += result.skills_restored_count
@@ -437,9 +472,43 @@ def import_desktop_all(
             total_skills_conflict_skipped += result.skills_conflict_skipped_count
             total_skills_missing += result.skills_missing_count
             total_skills_failed += result.skills_failed_count
+            if result.session_cwd:
+                imported_workspaces.append(result.session_cwd)
+            if result.thread_row_upserted:
+                imported_thread_ids.append(result.session_id)
+                if result.session_cwd:
+                    imported_thread_workspaces.append((result.session_id, result.session_cwd))
             warnings.extend(result.warnings)
         except (ToolkitError, OSError) as exc:
             failed_imports.append((summary.bundle_dir, str(exc)))
+
+    desktop_sidebar_promoted_count = 0
+    desktop_pinned_count = 0
+    state_db = paths.latest_state_db()
+    if desktop_visible and imported_workspaces and state_db:
+        visible_thread_ids = promote_desktop_thread_ids_for_sidebar(
+            state_db,
+            imported_thread_ids,
+            managed_roots=(paths.sessions_dir, paths.archived_sessions_dir),
+        )
+        representative_thread_ids = promote_workspace_threads_for_sidebar(
+            state_db,
+            imported_workspaces,
+            managed_roots=(paths.sessions_dir, paths.archived_sessions_dir),
+        )
+        desktop_sidebar_promoted_count, desktop_pinned_count = ensure_desktop_sidebar_thread_state(
+            paths.state_file,
+            imported_thread_workspaces,
+            reset_workspace_filter=True,
+            pin_threads=True,
+        )
+        if representative_thread_ids:
+            desktop_pinned_count = max(
+                desktop_pinned_count,
+                ensure_desktop_thread_pins(paths.state_file, representative_thread_ids),
+            )
+        if not desktop_sidebar_promoted_count:
+            desktop_sidebar_promoted_count = len(visible_thread_ids)
 
     if (
         plan.skills_restore_report_candidate_path is not None
@@ -468,5 +537,7 @@ def import_desktop_all(
         total_skills_missing=total_skills_missing,
         total_skills_failed=total_skills_failed,
         skills_restore_report_path=skills_restore_report_path,
+        desktop_sidebar_promoted_count=desktop_sidebar_promoted_count,
+        desktop_pinned_count=desktop_pinned_count,
         warnings=warnings,
     )

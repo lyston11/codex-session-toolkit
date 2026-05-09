@@ -46,6 +46,15 @@ from codex_session_toolkit.services.skills_transfer import delete_local_skill, e
 from codex_session_toolkit.support import default_local_project_target, iso_to_epoch_ms, machine_label_to_key  # noqa: E402
 from codex_session_toolkit.stores import bundles as legacy_bundles  # noqa: E402
 from codex_session_toolkit.stores.bundle_scanner import collect_known_bundle_summaries, latest_distinct_bundle_summaries  # noqa: E402
+from codex_session_toolkit.stores.desktop_state import (  # noqa: E402
+    ensure_sidebar_workspace_visibility,
+    ensure_sidebar_thread_state,
+    merge_workspace_root,
+    pin_desktop_thread_ids,
+    promote_desktop_thread_ids_for_sidebar,
+    promote_workspace_threads_for_sidebar,
+    repair_blank_thread_sources,
+)
 from codex_session_toolkit.stores.session_files import iter_session_files, read_session_payload  # noqa: E402
 from codex_session_toolkit.stores.skills import SkillDescriptor, SkillsManifest, compute_skill_directory_hash, read_skills_manifest, write_skills_manifest  # noqa: E402
 from codex_session_toolkit.validation import load_manifest  # noqa: E402
@@ -130,7 +139,8 @@ def create_threads_db_file(db_path: Path) -> Path:
             model text,
             reasoning_effort text,
             created_at_ms integer,
-            updated_at_ms integer
+            updated_at_ms integer,
+            thread_source text
         )
         """
     )
@@ -158,6 +168,7 @@ def write_session(
     archived: bool = False,
     timestamp: str = "2026-04-10T10:00:00Z",
     user_message: str = "",
+    explicit_thread_name: str = "",
     include_env_context: bool = False,
 ) -> Path:
     base = home / ".codex" / ("archived_sessions" if archived else "sessions") / "2026" / "04" / "10"
@@ -199,6 +210,18 @@ def write_session(
                     "type": "message",
                     "role": "user",
                     "content": [{"type": "input_text", "text": user_message}],
+                },
+            }
+        )
+    if explicit_thread_name:
+        lines.append(
+            {
+                "timestamp": "2026-04-10T10:04:50Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "thread_name_updated",
+                    "thread_id": session_id,
+                    "thread_name": explicit_thread_name,
                 },
             }
         )
@@ -276,6 +299,7 @@ def write_bundled_session_file(
     originator: str = "Codex Desktop",
     timestamp: str = "2026-04-10T10:00:00Z",
     user_message: str = "",
+    explicit_thread_name: str = "",
 ) -> Path:
     codex_dir = bundle_dir / "codex" / "sessions" / "2026" / "04" / "10"
     codex_dir.mkdir(parents=True, exist_ok=True)
@@ -304,6 +328,18 @@ def write_bundled_session_file(
                     "type": "message",
                     "role": "user",
                     "content": [{"type": "input_text", "text": user_message}],
+                },
+            }
+        )
+    if explicit_thread_name:
+        lines.append(
+            {
+                "timestamp": "2026-04-10T10:04:50Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "thread_name_updated",
+                    "thread_id": session_id,
+                    "thread_name": explicit_thread_name,
                 },
             }
         )
@@ -475,6 +511,287 @@ class CoreWorkflowTests(unittest.TestCase):
             iso_to_epoch_ms("2026-04-10T10:00:00.468Z"),
             1775815200468,
         )
+
+    def test_desktop_workspace_roots_preserve_nested_projects(self) -> None:
+        data = {
+            "electron-saved-workspace-roots": ["/Users/example/Projects"],
+            "active-workspace-roots": ["/Users/example/Projects"],
+            "project-order": ["/Users/example/Projects"],
+        }
+
+        merge_workspace_root(data, "/Users/example/Projects/demo")
+        merge_workspace_root(data, "/Users/example/Projects/demo")
+
+        self.assertEqual(
+            data["electron-saved-workspace-roots"],
+            ["/Users/example/Projects", "/Users/example/Projects/demo"],
+        )
+        self.assertEqual(
+            data["active-workspace-roots"],
+            ["/Users/example/Projects", "/Users/example/Projects/demo"],
+        )
+        self.assertEqual(
+            data["project-order"],
+            ["/Users/example/Projects", "/Users/example/Projects/demo"],
+        )
+
+    def test_desktop_sidebar_visibility_expands_sections_filter_and_groups(self) -> None:
+        data = {
+            "electron-persisted-atom-state": {
+                "sidebar-collapsed-sections-v1": {
+                    "chats": True,
+                    "pinned": True,
+                    "threads": True,
+                    "custom": True,
+                },
+                "sidebar-workspace-filter-v2": "current",
+                "sidebar-collapsed-groups": {
+                    "/Users/example/Projects/demo": True,
+                    "/Users/example/Projects/other": True,
+                },
+            }
+        }
+
+        changed = ensure_sidebar_workspace_visibility(
+            data,
+            ["/Users/example/Projects/demo"],
+            reset_workspace_filter=True,
+        )
+
+        self.assertTrue(changed)
+        persisted = data["electron-persisted-atom-state"]
+        self.assertEqual(
+            persisted["sidebar-collapsed-sections-v1"],
+            {
+                "chats": False,
+                "pinned": False,
+                "threads": False,
+                "custom": True,
+            },
+        )
+        self.assertEqual(persisted["sidebar-workspace-filter-v2"], "all")
+        self.assertEqual(
+            persisted["sidebar-collapsed-groups"],
+            {"/Users/example/Projects/other": True},
+        )
+
+    def test_repair_blank_thread_sources_updates_only_managed_user_threads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            db_path = create_threads_db(home)
+            managed_rollout = home / ".codex" / "sessions" / "2026" / "04" / "10" / "rollout-managed.jsonl"
+            outside_rollout = Path(tmpdir) / "outside" / "rollout-outside.jsonl"
+
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "insert into threads (id, rollout_path, source, thread_source) values (?, ?, ?, ?)",
+                ("managed", str(managed_rollout), "vscode", ""),
+            )
+            conn.execute(
+                "insert into threads (id, rollout_path, source, thread_source) values (?, ?, ?, ?)",
+                ("subagent", str(managed_rollout), '{"parentThreadId":"managed"}', ""),
+            )
+            conn.execute(
+                "insert into threads (id, rollout_path, source, thread_source) values (?, ?, ?, ?)",
+                ("outside", str(outside_rollout), "vscode", ""),
+            )
+            conn.commit()
+            conn.close()
+
+            repaired = repair_blank_thread_sources(
+                db_path,
+                managed_roots=(home / ".codex" / "sessions", home / ".codex" / "archived_sessions"),
+            )
+
+            self.assertEqual(repaired, 1)
+            conn = sqlite3.connect(db_path)
+            rows = conn.execute("select id, thread_source from threads order by id").fetchall()
+            conn.close()
+            self.assertEqual(
+                rows,
+                [
+                    ("managed", "user"),
+                    ("outside", ""),
+                    ("subagent", ""),
+                ],
+            )
+
+    def test_pin_desktop_thread_ids_prepends_unique_ids(self) -> None:
+        data = {"pinned-thread-ids": ["existing", "target-a"]}
+
+        pinned = pin_desktop_thread_ids(data, ["target-a", "target-b", "", "target-b"])
+
+        self.assertEqual(pinned, 2)
+        self.assertEqual(data["pinned-thread-ids"], ["target-a", "target-b", "existing"])
+
+    def test_ensure_sidebar_thread_state_promotes_project_orders_hints_and_pins(self) -> None:
+        data = {
+            "electron-saved-workspace-roots": ["/Users/example/Projects"],
+            "active-workspace-roots": ["/Users/example/Projects"],
+            "project-order": ["/Users/example/Projects"],
+            "thread-workspace-root-hints": {"old-thread": "/Users/example/Projects/old"},
+            "sidebar-project-thread-orders": {
+                "/Users/example/Projects/demo": {"threadIds": ["old-demo", "thread-a"]},
+            },
+            "pinned-thread-ids": ["old-pinned", "thread-b"],
+            "electron-persisted-atom-state": {
+                "sidebar-collapsed-sections-v1": {"chats": True, "pinned": True, "threads": True},
+                "sidebar-workspace-filter-v2": "current",
+                "sidebar-collapsed-groups": {"/Users/example/Projects/demo": True},
+            },
+        }
+
+        visible_count, pinned_count = ensure_sidebar_thread_state(
+            data,
+            [
+                ("thread-a", "/Users/example/Projects/demo"),
+                ("thread-b", "/Users/example/Projects/demo"),
+                ("thread-c", "/Users/example/Projects/other"),
+                ("thread-a", "/Users/example/Projects/demo"),
+            ],
+            reset_workspace_filter=True,
+            pin_threads=True,
+        )
+
+        self.assertEqual(visible_count, 3)
+        self.assertEqual(pinned_count, 3)
+        self.assertEqual(
+            data["active-workspace-roots"],
+            [
+                "/Users/example/Projects/demo",
+                "/Users/example/Projects/other",
+                "/Users/example/Projects",
+            ],
+        )
+        self.assertEqual(
+            data["project-order"],
+            [
+                "/Users/example/Projects/demo",
+                "/Users/example/Projects/other",
+                "/Users/example/Projects",
+            ],
+        )
+        self.assertEqual(data["thread-workspace-root-hints"]["thread-a"], "/Users/example/Projects/demo")
+        self.assertEqual(data["thread-workspace-root-hints"]["thread-c"], "/Users/example/Projects/other")
+        self.assertEqual(
+            data["sidebar-project-thread-orders"]["/Users/example/Projects/demo"]["threadIds"],
+            ["thread-a", "thread-b", "old-demo"],
+        )
+        self.assertEqual(
+            data["sidebar-project-thread-orders"]["/Users/example/Projects/other"]["threadIds"],
+            ["thread-c"],
+        )
+        self.assertEqual(data["pinned-thread-ids"], ["thread-a", "thread-b", "thread-c", "old-pinned"])
+        persisted = data["electron-persisted-atom-state"]
+        self.assertEqual(persisted["sidebar-workspace-filter-v2"], "all")
+        self.assertEqual(persisted["sidebar-collapsed-groups"], {})
+
+    def test_promote_workspace_threads_for_sidebar_uses_one_recent_managed_thread_per_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            workspace = Path(tmpdir) / "workspace"
+            workspace_a = workspace / "project-a"
+            workspace_b = workspace / "project-b"
+            workspace_a.mkdir(parents=True)
+            workspace_b.mkdir()
+            db_path = create_threads_db(home)
+            managed_rollout_a1 = home / ".codex" / "sessions" / "2026" / "04" / "10" / "rollout-a1.jsonl"
+            managed_rollout_a2 = home / ".codex" / "sessions" / "2026" / "04" / "10" / "rollout-a2.jsonl"
+            managed_rollout_b1 = home / ".codex" / "sessions" / "2026" / "04" / "10" / "rollout-b1.jsonl"
+            managed_rollout_archived = home / ".codex" / "sessions" / "2026" / "04" / "10" / "rollout-archived.jsonl"
+            outside_rollout = Path(tmpdir) / "outside" / "rollout-outside.jsonl"
+
+            conn = sqlite3.connect(db_path)
+            rows = [
+                ("a-old", managed_rollout_a1, str(workspace_a), 10, 10000, "vscode", 0),
+                ("a-new", managed_rollout_a2, str(workspace_a), 20, 20000, "vscode", 0),
+                ("b-new", managed_rollout_b1, str(workspace_b), 30, 30000, "vscode", 0),
+                ("b-archived", managed_rollout_archived, str(workspace_b), 40, 40000, "vscode", 1),
+                ("b-subagent", managed_rollout_b1, str(workspace_b), 50, 50000, '{"parentThreadId":"b-new"}', 0),
+                ("outside", outside_rollout, str(workspace_a), 60, 60000, "vscode", 0),
+            ]
+            for session_id, rollout_path, cwd, updated_at, updated_at_ms, source, archived in rows:
+                conn.execute(
+                    """
+                    insert into threads (
+                        id, rollout_path, cwd, updated_at, updated_at_ms, source, archived
+                    ) values (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (session_id, str(rollout_path), cwd, updated_at, updated_at_ms, source, archived),
+                )
+            conn.commit()
+            conn.close()
+
+            promoted = promote_workspace_threads_for_sidebar(
+                db_path,
+                [str(workspace_a), str(workspace_b), str(workspace_a)],
+                managed_roots=(home / ".codex" / "sessions", home / ".codex" / "archived_sessions"),
+                base_updated_at=1000,
+            )
+
+            self.assertEqual(promoted, ["a-new", "b-new"])
+            conn = sqlite3.connect(db_path)
+            updated_rows = conn.execute(
+                "select id, updated_at, updated_at_ms from threads where id in ('a-new', 'b-new') order by updated_at desc"
+            ).fetchall()
+            ignored_rows = conn.execute(
+                "select id, updated_at from threads where id in ('b-archived', 'b-subagent', 'outside') order by id"
+            ).fetchall()
+            conn.close()
+            self.assertEqual(updated_rows, [("a-new", 1000, 1000000), ("b-new", 999, 999000)])
+            self.assertEqual(ignored_rows, [("b-archived", 40), ("b-subagent", 50), ("outside", 60)])
+
+    def test_promote_desktop_thread_ids_for_sidebar_refreshes_each_managed_active_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            db_path = create_threads_db(home)
+            managed_rollout = home / ".codex" / "sessions" / "2026" / "04" / "10" / "rollout-managed.jsonl"
+            archived_rollout = home / ".codex" / "archived_sessions" / "2026" / "04" / "10" / "rollout-archived.jsonl"
+            outside_rollout = Path(tmpdir) / "outside" / "rollout-outside.jsonl"
+
+            conn = sqlite3.connect(db_path)
+            rows = [
+                ("managed-a", managed_rollout, 10, 10000, "vscode", 0),
+                ("managed-b", managed_rollout, 11, 11000, "vscode", 0),
+                ("archived", archived_rollout, 12, 12000, "vscode", 1),
+                ("subagent", managed_rollout, 13, 13000, '{"parentThreadId":"managed-a"}', 0),
+                ("outside", outside_rollout, 14, 14000, "vscode", 0),
+            ]
+            for session_id, rollout_path, updated_at, updated_at_ms, source, archived in rows:
+                conn.execute(
+                    """
+                    insert into threads (
+                        id, rollout_path, updated_at, updated_at_ms, source, archived
+                    ) values (?, ?, ?, ?, ?, ?)
+                    """,
+                    (session_id, str(rollout_path), updated_at, updated_at_ms, source, archived),
+                )
+            conn.commit()
+            conn.close()
+
+            promoted = promote_desktop_thread_ids_for_sidebar(
+                db_path,
+                ["managed-a", "missing", "managed-b", "managed-a", "archived", "subagent", "outside"],
+                managed_roots=(home / ".codex" / "sessions", home / ".codex" / "archived_sessions"),
+                base_updated_at=2000,
+            )
+
+            self.assertEqual(promoted, ["managed-a", "managed-b"])
+            conn = sqlite3.connect(db_path)
+            rows = conn.execute(
+                "select id, updated_at, updated_at_ms from threads order by updated_at desc, id"
+            ).fetchall()
+            conn.close()
+            self.assertEqual(
+                rows,
+                [
+                    ("managed-a", 2000, 2000000),
+                    ("managed-b", 1999, 1999000),
+                    ("outside", 14, 14000),
+                    ("subagent", 13, 13000),
+                    ("archived", 12, 12000),
+                ],
+            )
 
     def test_session_summaries_do_not_full_parse_rollouts_for_list_view(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1492,9 +1809,10 @@ class CoreWorkflowTests(unittest.TestCase):
 
             state_data = json.loads((dst_home / ".codex" / ".codex-global-state.json").read_text(encoding="utf-8"))
             self.assertIn(str(target_project), state_data["electron-saved-workspace-roots"])
+            self.assertIn(str(target_project / "packages" / "ui"), state_data["electron-saved-workspace-roots"])
 
             conn = sqlite3.connect(dst_home / ".codex" / "state_0001.sqlite")
-            rows = conn.execute("select id, cwd from threads order by id").fetchall()
+            rows = conn.execute("select id, cwd, thread_source from threads order by id").fetchall()
             time_rows = conn.execute(
                 "select id, created_at_ms, updated_at_ms from threads order by id"
             ).fetchall()
@@ -1502,8 +1820,8 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertEqual(
                 rows,
                 [
-                    (source_root_session, str(target_project)),
-                    (source_nested_session, str(target_project / "packages" / "ui")),
+                    (source_root_session, str(target_project), "user"),
+                    (source_nested_session, str(target_project / "packages" / "ui"), "user"),
                 ],
             )
             self.assertEqual([row[0] for row in time_rows], [source_root_session, source_nested_session])
@@ -1523,6 +1841,28 @@ class CoreWorkflowTests(unittest.TestCase):
 
             session_id = "22222222-2222-2222-2222-222222222222"
             missing_cwd = workspace / "missing-project"
+            (dst_home / ".codex" / ".codex-global-state.json").write_text(
+                json.dumps(
+                    {
+                        "electron-saved-workspace-roots": [str(workspace)],
+                        "active-workspace-roots": [str(workspace)],
+                        "project-order": [str(workspace)],
+                        "electron-persisted-atom-state": {
+                            "sidebar-collapsed-sections-v1": {
+                                "chats": True,
+                                "pinned": True,
+                                "threads": True,
+                            },
+                            "sidebar-workspace-filter-v2": "current",
+                            "sidebar-collapsed-groups": {
+                                str(missing_cwd): True,
+                            },
+                        },
+                    },
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
             write_session(
                 src_home,
                 session_id,
@@ -1564,11 +1904,27 @@ class CoreWorkflowTests(unittest.TestCase):
 
             state_data = json.loads((dst_home / ".codex" / ".codex-global-state.json").read_text(encoding="utf-8"))
             self.assertIn(str(missing_cwd), state_data["electron-saved-workspace-roots"])
+            self.assertIn(str(missing_cwd), state_data["active-workspace-roots"])
+            self.assertIn(str(missing_cwd), state_data["project-order"])
+            persisted_state = state_data["electron-persisted-atom-state"]
+            self.assertEqual(
+                persisted_state["sidebar-collapsed-sections-v1"],
+                {
+                    "chats": False,
+                    "pinned": False,
+                    "threads": False,
+                },
+            )
+            self.assertEqual(persisted_state["sidebar-workspace-filter-v2"], "all")
+            self.assertEqual(persisted_state["sidebar-collapsed-groups"], {})
 
             conn = sqlite3.connect(dst_home / ".codex" / "state_0001.sqlite")
-            row = conn.execute("select source, model_provider, cwd from threads where id = ?", (session_id,)).fetchone()
+            row = conn.execute(
+                "select source, thread_source, model_provider, cwd from threads where id = ?",
+                (session_id,),
+            ).fetchone()
             conn.close()
-            self.assertEqual(row, ("vscode", "target-provider", str(missing_cwd)))
+            self.assertEqual(row, ("vscode", "user", "target-provider", str(missing_cwd)))
 
     def test_list_session_backups_finds_import_overwrite_backups(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1753,6 +2109,32 @@ class CoreWorkflowTests(unittest.TestCase):
                 "Long first user prompt that should not become the Desktop title",
             )
 
+    def test_export_session_uses_thread_name_updated_event_when_sqlite_title_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            workspace.mkdir()
+            write_config(src_home, "source-provider")
+
+            session_id = "21212121-2121-2121-2121-212121212121"
+            write_session(
+                src_home,
+                session_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                user_message="Long prompt that should stay first_user_message",
+                explicit_thread_name="renamed desktop title",
+            )
+
+            with pushd(workspace):
+                export_result = export_session(CodexPaths(home=src_home), session_id)
+
+            manifest = load_manifest(export_result.bundle_dir / "manifest.env")
+            self.assertEqual(manifest["THREAD_NAME"], "renamed desktop title")
+            self.assertEqual(manifest["FIRST_USER_MESSAGE"], "Long prompt that should stay first_user_message")
+
     def test_import_session_recovers_index_title_from_rollout_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
@@ -1909,6 +2291,195 @@ class CoreWorkflowTests(unittest.TestCase):
             conn.close()
             self.assertEqual(row, ("existing short title", "Long original prompt from Desktop"))
 
+    def test_import_session_prefers_thread_name_event_when_existing_title_is_prompt_with_newline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            dst_home = Path(tmpdir) / "dst_home"
+            bundle_root = Path(tmpdir) / "codex_sessions" / "bundle"
+            bundle_dir = bundle_root / "24242424-2424-2424-2424-242424242424"
+            workspace.mkdir()
+            write_config(dst_home, "target-provider")
+            write_state_file(dst_home)
+            db_path = create_threads_db(dst_home)
+
+            session_id = "24242424-2424-2424-2424-242424242424"
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "insert into threads (id, title, first_user_message) values (?, ?, ?)",
+                (
+                    session_id,
+                    "https://example.test/repo.git \nclone it",
+                    "https://example.test/repo.git clone it",
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            write_bundle_manifest(
+                bundle_dir,
+                session_id=session_id,
+                thread_name="https://example.test/repo.git clone it",
+                first_user_message="https://example.test/repo.git clone it",
+                session_cwd=str(workspace),
+            )
+            write_bundled_session_file(
+                bundle_dir,
+                session_id,
+                cwd=workspace,
+                user_message="https://example.test/repo.git clone it",
+                explicit_thread_name="repo short title",
+            )
+
+            with pushd(Path(tmpdir)):
+                import_session(
+                    CodexPaths(home=dst_home),
+                    session_id,
+                    bundle_root=bundle_root,
+                    desktop_visible=True,
+                )
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute("select title, first_user_message from threads where id = ?", (session_id,)).fetchone()
+            conn.close()
+            self.assertEqual(row, ("repo short title", "https://example.test/repo.git clone it"))
+
+    def test_import_session_recovers_title_from_thread_name_updated_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            dst_home = Path(tmpdir) / "dst_home"
+            bundle_root = Path(tmpdir) / "codex_sessions" / "bundle"
+            bundle_dir = bundle_root / "22222222-2222-2222-2222-222222222222"
+            workspace.mkdir()
+            write_config(dst_home, "target-provider")
+            write_state_file(dst_home)
+            create_threads_db(dst_home)
+
+            session_id = "22222222-2222-2222-2222-222222222222"
+            write_bundle_manifest(
+                bundle_dir,
+                session_id=session_id,
+                thread_name="",
+                session_cwd=str(workspace),
+            )
+            write_bundled_session_file(
+                bundle_dir,
+                session_id,
+                cwd=workspace,
+                user_message="Long original prompt from Desktop",
+                explicit_thread_name="short renamed title",
+            )
+
+            with pushd(Path(tmpdir)):
+                import_session(
+                    CodexPaths(home=dst_home),
+                    session_id,
+                    bundle_root=bundle_root,
+                    desktop_visible=True,
+                )
+
+            index_obj = json.loads((dst_home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(index_obj["thread_name"], "short renamed title")
+
+            conn = sqlite3.connect(dst_home / ".codex" / "state_0001.sqlite")
+            row = conn.execute("select title, first_user_message from threads where id = ?", (session_id,)).fetchone()
+            conn.close()
+            self.assertEqual(row, ("short renamed title", "Long original prompt from Desktop"))
+
+    def test_repair_desktop_prefers_thread_name_event_over_prompt_fallback_with_agents_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "target-provider")
+            write_state_file(home)
+            db_path = create_threads_db(home)
+
+            session_id = "23232323-2323-2323-2323-232323232323"
+            write_session(
+                home,
+                session_id,
+                provider="target-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                include_env_context=True,
+                user_message="# AGENTS.md instructions for /tmp/project\n<INSTRUCTIONS>\nkeep behavior compatible\n</INSTRUCTIONS>",
+                explicit_thread_name="short renamed title",
+            )
+            index_file = home / ".codex" / "session_index.jsonl"
+            index_file.write_text(
+                json.dumps(
+                    {
+                        "id": session_id,
+                        "thread_name": "# AGENTS.md instructions for /tmp/project",
+                        "updated_at": "2026-04-10T10:00:00Z",
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "insert into threads (id, title, first_user_message) values (?, ?, ?)",
+                (
+                    session_id,
+                    "# AGENTS.md instructions for /tmp/project",
+                    "# AGENTS.md instructions for /tmp/project",
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            repair_desktop(CodexPaths(home=home))
+
+            index_obj = json.loads(index_file.read_text(encoding="utf-8"))
+            self.assertEqual(index_obj["thread_name"], "short renamed title")
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute("select title from threads where id = ?", (session_id,)).fetchone()
+            conn.close()
+            self.assertEqual(row[0], "short renamed title")
+
+    def test_repair_desktop_prefers_thread_name_event_over_prompt_fallback_with_newline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "target-provider")
+            write_state_file(home)
+            db_path = create_threads_db(home)
+
+            session_id = "25252525-2525-2525-2525-252525252525"
+            write_session(
+                home,
+                session_id,
+                provider="target-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                user_message="https://example.test/repo.git clone it",
+                explicit_thread_name="repo short title",
+            )
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "insert into threads (id, title, first_user_message) values (?, ?, ?)",
+                (
+                    session_id,
+                    "https://example.test/repo.git \nclone it",
+                    "https://example.test/repo.git clone it",
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            repair_desktop(CodexPaths(home=home))
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute("select title, first_user_message from threads where id = ?", (session_id,)).fetchone()
+            conn.close()
+            self.assertEqual(row, ("repo short title", "https://example.test/repo.git clone it"))
+
     def test_import_session_uses_desktop_thread_provider_when_config_has_no_model_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
@@ -1945,6 +2516,82 @@ class CoreWorkflowTests(unittest.TestCase):
             payload = read_session_payload(target_session)
             self.assertEqual(import_result.target_desktop_model_provider, "account-provider")
             self.assertEqual(payload["model_provider"], "account-provider")
+
+    def test_import_session_promotes_imported_thread_even_when_workspace_has_newer_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_config(src_home, "source-provider")
+            write_config(dst_home, "target-provider")
+            write_state_file(dst_home)
+            db_path = create_threads_db(dst_home)
+
+            workspace_dir = workspace / "project"
+            workspace_dir.mkdir()
+            imported_session_id = "21212121-2121-4121-8121-212121212121"
+            newer_session_id = "22222222-2222-4222-8222-222222222222"
+            write_session(
+                src_home,
+                imported_session_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace_dir,
+            )
+            write_history(src_home, imported_session_id, "imported prompt")
+
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                insert into threads (
+                    id, rollout_path, cwd, updated_at, updated_at_ms, source, archived
+                ) values (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    newer_session_id,
+                    str(dst_home / ".codex" / "sessions" / "2026" / "04" / "10" / "rollout-newer.jsonl"),
+                    str(workspace_dir),
+                    1770000000,
+                    1770000000000,
+                    "vscode",
+                    0,
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "Source-Mac"):
+                export_result = export_session(CodexPaths(home=src_home), imported_session_id)
+                import_result = import_session(
+                    CodexPaths(home=dst_home),
+                    str(export_result.bundle_dir),
+                    desktop_visible=True,
+                )
+
+            self.assertEqual(import_result.desktop_sidebar_promoted_count, 1)
+            self.assertEqual(import_result.desktop_pinned_count, 1)
+            state_data = json.loads((dst_home / ".codex" / ".codex-global-state.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                state_data["thread-workspace-root-hints"][imported_session_id],
+                str(workspace_dir),
+            )
+            self.assertEqual(
+                state_data["sidebar-project-thread-orders"][str(workspace_dir)]["threadIds"][0],
+                imported_session_id,
+            )
+            self.assertEqual(state_data["pinned-thread-ids"][0], imported_session_id)
+            conn = sqlite3.connect(db_path)
+            rows = conn.execute(
+                "select id, updated_at, updated_at_ms from threads where id in (?, ?) order by updated_at desc",
+                (imported_session_id, newer_session_id),
+            ).fetchall()
+            conn.close()
+            self.assertEqual(rows[0][0], imported_session_id)
+            self.assertEqual(rows[1][0], newer_session_id)
+            self.assertGreater(rows[0][1], 1770000000)
+            self.assertEqual(rows[0][2], rows[0][1] * 1000)
 
     def test_repair_desktop_rebuilds_index_and_converts_cli_threads(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2011,14 +2658,14 @@ class CoreWorkflowTests(unittest.TestCase):
 
             conn = sqlite3.connect(home / ".codex" / "state_0001.sqlite")
             rows = conn.execute(
-                "select id, model_provider, source from threads order by id"
+                "select id, model_provider, source, thread_source from threads order by id"
             ).fetchall()
             conn.close()
             self.assertEqual(
                 rows,
                 [
-                    (desktop_id, "repaired-provider", "vscode"),
-                    (cli_id, "repaired-provider", "cli"),
+                    (desktop_id, "repaired-provider", "vscode", "user"),
+                    (cli_id, "repaired-provider", "cli", "user"),
                 ],
             )
 
@@ -2355,6 +3002,105 @@ class CoreWorkflowTests(unittest.TestCase):
 
             repaired_index = json.loads((home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8"))
             self.assertEqual(repaired_index["thread_name"], "sub2api")
+
+    def test_repair_desktop_repairs_orphan_blank_thread_sources_and_sidebar_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "repaired-provider")
+            write_state_file(home)
+            db_path = create_threads_db(home)
+
+            project_dir = workspace / "visible-project"
+            project_dir.mkdir()
+            session_id = "78787878-7878-7878-7878-787878787878"
+            write_session(
+                home,
+                session_id,
+                provider="old-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=project_dir,
+                user_message="Visible project prompt",
+            )
+            orphan_id = "89898989-8989-8989-8989-898989898989"
+            orphan_rollout = (
+                home
+                / ".codex"
+                / "sessions"
+                / "2026"
+                / "04"
+                / "10"
+                / f"rollout-2026-04-10T10-00-00-{orphan_id}.jsonl"
+            )
+            orphan_rollout.parent.mkdir(parents=True, exist_ok=True)
+            orphan_rollout.write_text("{invalid json\n", encoding="utf-8")
+
+            state_file = home / ".codex" / ".codex-global-state.json"
+            state_file.write_text(
+                json.dumps(
+                    {
+                        "electron-saved-workspace-roots": [str(workspace)],
+                        "active-workspace-roots": [str(workspace)],
+                        "project-order": [str(workspace)],
+                        "electron-persisted-atom-state": {
+                            "sidebar-collapsed-sections-v1": {
+                                "chats": True,
+                                "pinned": True,
+                                "threads": True,
+                            },
+                            "sidebar-workspace-filter-v2": "current",
+                            "sidebar-collapsed-groups": {
+                                str(project_dir): True,
+                            },
+                        },
+                    },
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "insert into threads (id, rollout_path, source, thread_source) values (?, ?, ?, ?)",
+                (orphan_id, str(orphan_rollout), "vscode", ""),
+            )
+            conn.commit()
+            conn.close()
+
+            result = repair_desktop(CodexPaths(home=home))
+
+            self.assertEqual(result.thread_sources_repaired, 1)
+            state_data = json.loads(state_file.read_text(encoding="utf-8"))
+            self.assertIn(str(project_dir), state_data["electron-saved-workspace-roots"])
+            self.assertIn(str(project_dir), state_data["active-workspace-roots"])
+            self.assertIn(str(project_dir), state_data["project-order"])
+            self.assertEqual(state_data["thread-workspace-root-hints"][session_id], str(project_dir))
+            self.assertEqual(
+                state_data["sidebar-project-thread-orders"][str(project_dir)]["threadIds"][0],
+                session_id,
+            )
+            self.assertEqual(state_data["pinned-thread-ids"][0], session_id)
+            persisted_state = state_data["electron-persisted-atom-state"]
+            self.assertEqual(
+                persisted_state["sidebar-collapsed-sections-v1"],
+                {
+                    "chats": False,
+                    "pinned": False,
+                    "threads": False,
+                },
+            )
+            self.assertEqual(persisted_state["sidebar-workspace-filter-v2"], "all")
+            self.assertEqual(persisted_state["sidebar-collapsed-groups"], {})
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                "select thread_source from threads where id = ?",
+                (orphan_id,),
+            ).fetchone()
+            conn.close()
+            self.assertEqual(row, ("user",))
 
     def test_repair_desktop_ignores_thread_rows_outside_codex_session_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3022,6 +3768,97 @@ class CoreWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(validated_ids, visible_ids)
             self.assertEqual(imported_ids, visible_ids)
+
+    def test_import_desktop_all_promotes_each_imported_thread_and_pins_one_per_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_config(dst_home, "dst-provider")
+            write_state_file(dst_home)
+            db_path = create_threads_db(dst_home)
+
+            bulk_project = workspace / "bulk-project"
+            hidden_project = workspace / "hidden-project"
+            bulk_project.mkdir()
+            hidden_project.mkdir()
+
+            bundle_root = workspace / "codex_bundles" / "MachineA" / "sessions" / "active" / "20260411-100000-000001"
+            bulk_session_ids = []
+            for index in range(60):
+                session_id = f"aaa20000-0000-7000-8000-{index:012d}"
+                bulk_session_ids.append(session_id)
+                bundle_dir = bundle_root / session_id
+                write_bundle_manifest(
+                    bundle_dir,
+                    session_id=session_id,
+                    export_machine="MachineA",
+                    export_machine_key="MachineA",
+                    updated_at="2026-04-10T10:00:00Z",
+                    session_cwd=str(bulk_project),
+                )
+                write_bundled_session_file(
+                    bundle_dir,
+                    session_id,
+                    cwd=bulk_project,
+                    timestamp="2026-04-10T10:00:00Z",
+                    user_message=f"bulk prompt {index}",
+                )
+
+            hidden_session_id = "aaa20000-0000-7000-8000-999999999999"
+            hidden_bundle = bundle_root / hidden_session_id
+            write_bundle_manifest(
+                hidden_bundle,
+                session_id=hidden_session_id,
+                export_machine="MachineA",
+                export_machine_key="MachineA",
+                updated_at="2026-04-09T10:00:00Z",
+                session_cwd=str(hidden_project),
+            )
+            write_bundled_session_file(
+                hidden_bundle,
+                hidden_session_id,
+                cwd=hidden_project,
+                timestamp="2026-04-09T10:00:00Z",
+                user_message="hidden project prompt",
+            )
+
+            paths = CodexPaths(home=dst_home)
+            with pushd(workspace):
+                result = import_desktop_all(paths, desktop_visible=True)
+
+            self.assertEqual(len(result.success_dirs), 61)
+            self.assertEqual(result.desktop_sidebar_promoted_count, 61)
+            self.assertEqual(result.desktop_pinned_count, 61)
+
+            state_data = json.loads((dst_home / ".codex" / ".codex-global-state.json").read_text(encoding="utf-8"))
+            pinned_ids = state_data["pinned-thread-ids"]
+            self.assertEqual(len(pinned_ids), 61)
+            self.assertIn(hidden_session_id, pinned_ids)
+            self.assertEqual(
+                state_data["sidebar-project-thread-orders"][str(bulk_project)]["threadIds"],
+                list(reversed(bulk_session_ids)),
+            )
+            self.assertEqual(
+                state_data["sidebar-project-thread-orders"][str(hidden_project)]["threadIds"],
+                [hidden_session_id],
+            )
+            self.assertEqual(state_data["thread-workspace-root-hints"][hidden_session_id], str(hidden_project))
+
+            conn = sqlite3.connect(db_path)
+            top_rows = conn.execute(
+                "select id, cwd from threads order by updated_at desc, id desc limit 61"
+            ).fetchall()
+            hidden_row = conn.execute(
+                "select updated_at, updated_at_ms from threads where id = ?",
+                (hidden_session_id,),
+            ).fetchone()
+            conn.close()
+            self.assertEqual({row[0] for row in top_rows}, set(bulk_session_ids + [hidden_session_id]))
+            self.assertEqual({row[1] for row in top_rows}, {str(bulk_project), str(hidden_project)})
+            self.assertEqual(top_rows[0][0], bulk_session_ids[-1])
+            self.assertIn(hidden_session_id, {row[0] for row in top_rows[:2]})
+            self.assertEqual(hidden_row[1], hidden_row[0] * 1000)
 
     def test_import_desktop_all_writes_skills_restore_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

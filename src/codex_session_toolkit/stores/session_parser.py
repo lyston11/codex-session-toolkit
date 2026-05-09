@@ -30,6 +30,7 @@ def looks_like_session_meta_text(text: str) -> bool:
             "<skills_instructions>",
             "<turn_aborted>",
             "<image",
+            "# agents.md instructions",
         )
     )
 
@@ -66,6 +67,17 @@ def first_user_prompt_from_record(obj: dict) -> str:
     return ""
 
 
+def explicit_thread_name_from_record(obj: dict) -> str:
+    payload = obj.get("payload")
+    if (
+        obj.get("type") == "event_msg"
+        and isinstance(payload, dict)
+        and payload.get("type") == "thread_name_updated"
+    ):
+        return first_text_fragment(payload.get("thread_name"))
+    return ""
+
+
 def parse_jsonl_records(path: Path) -> List[Tuple[str, Optional[dict]]]:
     records: List[Tuple[str, Optional[dict]]] = []
     try:
@@ -95,6 +107,7 @@ class ParsedSessionFile:
     turn_context: dict
     last_timestamp: str
     first_user_prompt: str
+    explicit_thread_name: str
 
     @property
     def session_id(self) -> str:
@@ -131,6 +144,7 @@ class ParsedSessionSummary:
     path: Path
     session_meta: dict
     first_user_prompt: str
+    explicit_thread_name: str
 
     @property
     def session_id(self) -> str:
@@ -162,9 +176,15 @@ class ParsedSessionSummary:
         return classify_session_kind(self.source_name, self.originator_name)
 
 
-def parse_session_summary_file(path: Path, *, include_first_user_prompt: bool = True) -> ParsedSessionSummary:
+def parse_session_summary_file(
+    path: Path,
+    *,
+    include_first_user_prompt: bool = True,
+    include_explicit_thread_name: bool = False,
+) -> ParsedSessionSummary:
     session_meta: dict = {}
     first_user_prompt = ""
+    explicit_thread_name = ""
 
     try:
         with path.open("r", encoding="utf-8") as fh:
@@ -182,15 +202,20 @@ def parse_session_summary_file(path: Path, *, include_first_user_prompt: bool = 
                 payload = obj.get("payload")
                 if obj.get("type") == "session_meta" and isinstance(payload, dict) and not session_meta:
                     session_meta = dict(payload)
-                    if not include_first_user_prompt or first_user_prompt:
+                    if (not include_first_user_prompt or first_user_prompt) and not include_explicit_thread_name:
                         break
                     continue
+
+                if include_explicit_thread_name:
+                    candidate = explicit_thread_name_from_record(obj)
+                    if candidate:
+                        explicit_thread_name = candidate
 
                 if include_first_user_prompt and not first_user_prompt:
                     candidate = first_user_prompt_from_record(obj)
                     if candidate:
                         first_user_prompt = candidate
-                        if session_meta:
+                        if session_meta and not include_explicit_thread_name:
                             break
     except FileNotFoundError as exc:
         raise ToolkitError(f"Missing file: {path}") from exc
@@ -198,7 +223,12 @@ def parse_session_summary_file(path: Path, *, include_first_user_prompt: bool = 
     if not session_meta:
         raise ToolkitError(f"{path}: session_meta not found")
 
-    return ParsedSessionSummary(path=path, session_meta=session_meta, first_user_prompt=first_user_prompt)
+    return ParsedSessionSummary(
+        path=path,
+        session_meta=session_meta,
+        first_user_prompt=first_user_prompt,
+        explicit_thread_name=explicit_thread_name,
+    )
 
 
 def parse_session_file(path: Path) -> ParsedSessionFile:
@@ -207,6 +237,7 @@ def parse_session_file(path: Path) -> ParsedSessionFile:
     turn_context: dict = {}
     last_timestamp = ""
     first_user_prompt = ""
+    explicit_thread_name = ""
 
     for _, obj in records:
         if not obj:
@@ -224,12 +255,14 @@ def parse_session_file(path: Path) -> ParsedSessionFile:
             turn_context = dict(payload)
             continue
 
-        if first_user_prompt:
-            continue
+        thread_name_candidate = explicit_thread_name_from_record(obj)
+        if thread_name_candidate:
+            explicit_thread_name = thread_name_candidate
 
-        candidate = first_user_prompt_from_record(obj)
-        if candidate:
-            first_user_prompt = candidate
+        if not first_user_prompt:
+            candidate = first_user_prompt_from_record(obj)
+            if candidate:
+                first_user_prompt = candidate
 
     if not session_meta:
         raise ToolkitError(f"{path}: session_meta not found")
@@ -241,4 +274,5 @@ def parse_session_file(path: Path) -> ParsedSessionFile:
         turn_context=turn_context,
         last_timestamp=last_timestamp,
         first_user_prompt=first_user_prompt,
+        explicit_thread_name=explicit_thread_name,
     )

@@ -23,7 +23,7 @@ from ..stores.session_files import (
     extract_session_field_from_file,
     find_session_file,
 )
-from ..stores.session_parser import parse_session_summary_file
+from ..stores.session_parser import normalize_session_text, parse_session_summary_file
 from ..support import (
     build_single_export_root,
     classify_session_kind,
@@ -91,7 +91,7 @@ def export_session(
         session_source = extract_session_field_from_file("source", session_file)
         session_originator = extract_session_field_from_file("originator", session_file)
         session_kind = classify_session_kind(session_source, session_originator)
-        session_summary = parse_session_summary_file(session_file)
+        session_summary = parse_session_summary_file(session_file, include_explicit_thread_name=True)
         thread_metadata = load_thread_metadata(paths.latest_state_db(), session_ids={session_id}).get(session_id, {})
         desktop_thread_name = str(thread_metadata.get("title") or "").strip()
         first_prompt = (
@@ -105,7 +105,16 @@ def export_session(
             session_cwd,
             first_user_prompt=session_summary.first_user_prompt,
         )
-        if desktop_thread_name and not is_weak_thread_name(desktop_thread_name, session_id):
+        if session_summary.explicit_thread_name and not is_weak_thread_name(
+            session_summary.explicit_thread_name,
+            session_id,
+        ):
+            thread_name = session_summary.explicit_thread_name
+        if (
+            desktop_thread_name
+            and not is_weak_thread_name(desktop_thread_name, session_id)
+            and normalize_session_text(desktop_thread_name) != normalize_session_text(first_prompt)
+        ):
             thread_name = desktop_thread_name
         last_updated = extract_last_timestamp(session_file) or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 

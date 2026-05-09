@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
@@ -22,6 +23,7 @@ class DesktopThreadRow:
     created_at_ms: int
     updated_at_ms: int
     source: str
+    thread_source: Optional[str]
     model_provider: str
     cwd: str
     title: str
@@ -56,33 +58,408 @@ def merge_workspace_root(data: dict, workspace_dir: str) -> bool:
     active_saved = list(data.setdefault("active-workspace-roots", saved))
     project_order = list(data.setdefault("project-order", []))
 
-    covered = False
-    for root in saved:
-        if workspace_dir == root or workspace_dir.startswith(root.rstrip("/") + "/"):
-            covered = True
-            break
-
-    if not covered:
+    if workspace_dir not in saved:
         saved.append(workspace_dir)
+    if workspace_dir not in active_saved:
         active_saved.append(workspace_dir)
-        if workspace_dir not in project_order:
-            project_order.append(workspace_dir)
+    if workspace_dir not in project_order:
+        project_order.append(workspace_dir)
 
     data["electron-saved-workspace-roots"] = saved
-    data["active-workspace-roots"] = list(saved)
+    data["active-workspace-roots"] = active_saved
     data["project-order"] = project_order
     return True
 
 
-def ensure_desktop_workspace_root(workspace_dir: str, state_file: Path) -> bool:
+def ensure_sidebar_workspace_visibility(
+    data: dict,
+    workspace_dirs: Sequence[str] = (),
+    *,
+    reset_workspace_filter: bool = False,
+) -> bool:
+    persisted = data.setdefault("electron-persisted-atom-state", {})
+    if not isinstance(persisted, dict):
+        persisted = {}
+        data["electron-persisted-atom-state"] = persisted
+
+    changed = False
+    raw_collapsed_sections = persisted.get("sidebar-collapsed-sections-v1")
+    collapsed_sections = dict(raw_collapsed_sections) if isinstance(raw_collapsed_sections, dict) else {}
+    for section in ("chats", "pinned", "threads"):
+        if collapsed_sections.get(section) is not False:
+            collapsed_sections[section] = False
+            changed = True
+    if changed or not isinstance(raw_collapsed_sections, dict):
+        persisted["sidebar-collapsed-sections-v1"] = collapsed_sections
+
+    if reset_workspace_filter and persisted.get("sidebar-workspace-filter-v2") != "all":
+        persisted["sidebar-workspace-filter-v2"] = "all"
+        changed = True
+
+    collapsed_groups = persisted.get("sidebar-collapsed-groups")
+    if isinstance(collapsed_groups, dict) and workspace_dirs:
+        visible_roots = {_normalized_thread_path(root) for root in workspace_dirs if root}
+        next_groups = {
+            group: value
+            for group, value in collapsed_groups.items()
+            if _normalized_thread_path(str(group)) not in visible_roots
+        }
+        if len(next_groups) != len(collapsed_groups):
+            persisted["sidebar-collapsed-groups"] = next_groups
+            changed = True
+
+    return changed
+
+
+def ensure_sidebar_thread_state(
+    data: dict,
+    thread_workspaces: Sequence[tuple[str, str]],
+    *,
+    reset_workspace_filter: bool = False,
+    pin_threads: bool = False,
+) -> tuple[int, int]:
+    pairs = _normalized_thread_workspace_pairs(thread_workspaces)
+    if not pairs:
+        return 0, 0
+
+    workspace_dirs = [workspace for _, workspace in pairs if workspace]
+    for workspace_dir in workspace_dirs:
+        merge_workspace_root(data, workspace_dir)
+
+    _prepend_unique_state_list(data, "active-workspace-roots", workspace_dirs)
+    _prepend_unique_state_list(data, "project-order", workspace_dirs)
+    ensure_sidebar_workspace_visibility(
+        data,
+        workspace_dirs,
+        reset_workspace_filter=reset_workspace_filter,
+    )
+
+    hints = data.get("thread-workspace-root-hints")
+    if not isinstance(hints, dict):
+        hints = {}
+    for thread_id, workspace_dir in pairs:
+        if workspace_dir:
+            hints[thread_id] = workspace_dir
+    data["thread-workspace-root-hints"] = hints
+
+    project_orders = data.get("sidebar-project-thread-orders")
+    if not isinstance(project_orders, dict):
+        project_orders = {}
+    for workspace_dir, thread_ids in _group_thread_ids_by_workspace(pairs).items():
+        if not workspace_dir:
+            continue
+        raw_order = project_orders.get(workspace_dir)
+        order = dict(raw_order) if isinstance(raw_order, dict) else {}
+        raw_existing = order.get("threadIds", [])
+        existing_ids = [str(item).strip() for item in raw_existing] if isinstance(raw_existing, list) else []
+        existing_ids = [item for item in existing_ids if item]
+        desired = _dedupe_strings(thread_ids)
+        desired_set = set(desired)
+        order["threadIds"] = desired + [thread_id for thread_id in existing_ids if thread_id not in desired_set]
+        project_orders[workspace_dir] = order
+    data["sidebar-project-thread-orders"] = project_orders
+
+    pinned_count = pin_desktop_thread_ids(data, [thread_id for thread_id, _ in pairs]) if pin_threads else 0
+    return len(pairs), pinned_count
+
+
+def ensure_desktop_sidebar_thread_state(
+    state_file: Path,
+    thread_workspaces: Sequence[tuple[str, str]],
+    *,
+    reset_workspace_filter: bool = False,
+    pin_threads: bool = False,
+) -> tuple[int, int]:
+    if not state_file.exists():
+        print(f"Warning: Codex Desktop state file not found: {state_file}", file=sys.stderr)
+        return 0, 0
+
+    data = load_desktop_state_data(state_file)
+    visible_count, pinned_count = ensure_sidebar_thread_state(
+        data,
+        thread_workspaces,
+        reset_workspace_filter=reset_workspace_filter,
+        pin_threads=pin_threads,
+    )
+    if visible_count:
+        write_desktop_state_data(state_file, data)
+    return visible_count, pinned_count
+
+
+def pin_desktop_thread_ids(data: dict, thread_ids: Sequence[str]) -> int:
+    desired = []
+    seen = set()
+    for thread_id in thread_ids:
+        value = str(thread_id or "").strip()
+        if not value or value in seen:
+            continue
+        desired.append(value)
+        seen.add(value)
+
+    if not desired:
+        return 0
+
+    raw_existing = data.get("pinned-thread-ids", [])
+    existing = [str(item).strip() for item in raw_existing] if isinstance(raw_existing, list) else []
+    existing = [item for item in existing if item]
+
+    next_ids = desired + [thread_id for thread_id in existing if thread_id not in seen]
+    if next_ids != raw_existing:
+        data["pinned-thread-ids"] = next_ids
+    return len(desired)
+
+
+def ensure_desktop_thread_pins(state_file: Path, thread_ids: Sequence[str]) -> int:
+    if not state_file.exists():
+        print(f"Warning: Codex Desktop state file not found: {state_file}", file=sys.stderr)
+        return 0
+
+    data = load_desktop_state_data(state_file)
+    pinned = pin_desktop_thread_ids(data, thread_ids)
+    if pinned:
+        write_desktop_state_data(state_file, data)
+    return pinned
+
+
+def ensure_desktop_workspace_root(
+    workspace_dir: str,
+    state_file: Path,
+    *,
+    reset_workspace_filter: bool = False,
+) -> bool:
     if not state_file.exists():
         print(f"Warning: Codex Desktop state file not found: {state_file}", file=sys.stderr)
         return False
 
     data = load_desktop_state_data(state_file)
     merge_workspace_root(data, workspace_dir)
+    ensure_sidebar_workspace_visibility(
+        data,
+        [workspace_dir],
+        reset_workspace_filter=reset_workspace_filter,
+    )
     write_desktop_state_data(state_file, data)
     return True
+
+
+def repair_blank_thread_sources(
+    state_db: Path,
+    *,
+    managed_roots: Sequence[Path],
+    thread_source: str = "user",
+    dry_run: bool = False,
+) -> int:
+    if not state_db or not state_db.is_file():
+        return 0
+
+    conn = sqlite3.connect(state_db)
+    cur = conn.cursor()
+    try:
+        row = cur.execute("select name from sqlite_master where type='table' and name='threads'").fetchone()
+        if not row:
+            return 0
+
+        columns = [r[1] for r in cur.execute("pragma table_info(threads)").fetchall()]
+        if "id" not in columns or "rollout_path" not in columns or "thread_source" not in columns:
+            return 0
+
+        select_columns = ["id", "rollout_path"]
+        if "source" in columns:
+            select_columns.append("source")
+        rows = cur.execute(
+            f"select {', '.join(select_columns)} from threads where thread_source is null or thread_source = ''"
+        ).fetchall()
+        repairable_ids = []
+        for values in rows:
+            item = dict(zip(select_columns, values))
+            session_id = item.get("id")
+            rollout_path = item.get("rollout_path")
+            source = str(item.get("source") or "").strip()
+            if source.startswith("{"):
+                continue
+            if not isinstance(session_id, str) or not isinstance(rollout_path, str):
+                continue
+            if _path_is_under_any_root(rollout_path, managed_roots):
+                repairable_ids.append(session_id)
+
+        if not dry_run:
+            for session_id in repairable_ids:
+                cur.execute("update threads set thread_source = ? where id = ?", (thread_source, session_id))
+            conn.commit()
+        return len(repairable_ids)
+    finally:
+        conn.close()
+
+
+def promote_workspace_threads_for_sidebar(
+    state_db: Path,
+    workspace_dirs: Sequence[str],
+    *,
+    managed_roots: Sequence[Path],
+    dry_run: bool = False,
+    base_updated_at: Optional[int] = None,
+) -> list[str]:
+    if not state_db or not state_db.is_file() or not workspace_dirs:
+        return []
+
+    target_roots = []
+    seen_roots = set()
+    for workspace_dir in workspace_dirs:
+        normalized = _normalized_thread_path(workspace_dir)
+        if not normalized or normalized in seen_roots:
+            continue
+        target_roots.append(normalized)
+        seen_roots.add(normalized)
+    if not target_roots:
+        return []
+
+    conn = sqlite3.connect(state_db)
+    cur = conn.cursor()
+    try:
+        row = cur.execute("select name from sqlite_master where type='table' and name='threads'").fetchone()
+        if not row:
+            return []
+
+        columns = [r[1] for r in cur.execute("pragma table_info(threads)").fetchall()]
+        required_columns = {"id", "cwd", "rollout_path", "updated_at"}
+        if not required_columns.issubset(columns):
+            return []
+
+        select_columns = ["id", "cwd", "rollout_path", "updated_at"]
+        if "updated_at_ms" in columns:
+            select_columns.append("updated_at_ms")
+        if "archived" in columns:
+            select_columns.append("archived")
+        if "source" in columns:
+            select_columns.append("source")
+
+        rows = cur.execute(f"select {', '.join(select_columns)} from threads").fetchall()
+        best_by_workspace: dict[str, tuple[int, str]] = {}
+        for values in rows:
+            item = dict(zip(select_columns, values))
+            session_id = item.get("id")
+            cwd = item.get("cwd")
+            rollout_path = item.get("rollout_path")
+            if not isinstance(session_id, str) or not isinstance(cwd, str) or not isinstance(rollout_path, str):
+                continue
+            normalized_cwd = _normalized_thread_path(cwd)
+            if normalized_cwd not in seen_roots:
+                continue
+            if int(item.get("archived") or 0):
+                continue
+            if str(item.get("source") or "").strip().startswith("{"):
+                continue
+            if not _path_is_under_any_root(rollout_path, managed_roots):
+                continue
+
+            updated_at = int(item.get("updated_at") or 0)
+            updated_at_ms = int(item.get("updated_at_ms") or 0) if "updated_at_ms" in item else 0
+            sort_value = max(updated_at_ms, updated_at * 1000)
+            current = best_by_workspace.get(normalized_cwd)
+            if current is None or (sort_value, session_id) > current:
+                best_by_workspace[normalized_cwd] = (sort_value, session_id)
+
+        representative_ids = [
+            best_by_workspace[root][1]
+            for root in target_roots
+            if root in best_by_workspace
+        ]
+        if not representative_ids:
+            return []
+
+        if not dry_run:
+            max_updated_at = cur.execute("select max(updated_at) from threads").fetchone()[0]
+            base_epoch = base_updated_at or max(int(time.time()), int(max_updated_at or 0)) + len(representative_ids)
+            for index, session_id in enumerate(representative_ids):
+                promoted_updated_at = base_epoch - index
+                update_parts = ["updated_at = ?"]
+                values: list[object] = [promoted_updated_at]
+                if "updated_at_ms" in columns:
+                    update_parts.append("updated_at_ms = ?")
+                    values.append(promoted_updated_at * 1000)
+                values.append(session_id)
+                cur.execute(f"update threads set {', '.join(update_parts)} where id = ?", values)
+            conn.commit()
+        return representative_ids
+    finally:
+        conn.close()
+
+
+def promote_desktop_thread_ids_for_sidebar(
+    state_db: Path,
+    thread_ids: Sequence[str],
+    *,
+    managed_roots: Sequence[Path],
+    dry_run: bool = False,
+    base_updated_at: Optional[int] = None,
+) -> list[str]:
+    if not state_db or not state_db.is_file() or not thread_ids:
+        return []
+
+    desired_ids = []
+    seen_ids = set()
+    for thread_id in thread_ids:
+        value = str(thread_id or "").strip()
+        if not value or value in seen_ids:
+            continue
+        desired_ids.append(value)
+        seen_ids.add(value)
+    if not desired_ids:
+        return []
+
+    conn = sqlite3.connect(state_db)
+    cur = conn.cursor()
+    try:
+        row = cur.execute("select name from sqlite_master where type='table' and name='threads'").fetchone()
+        if not row:
+            return []
+
+        columns = [r[1] for r in cur.execute("pragma table_info(threads)").fetchall()]
+        required_columns = {"id", "rollout_path", "updated_at"}
+        if not required_columns.issubset(columns):
+            return []
+
+        select_columns = ["id", "rollout_path"]
+        if "archived" in columns:
+            select_columns.append("archived")
+        if "source" in columns:
+            select_columns.append("source")
+
+        eligible_ids = set()
+        for values in cur.execute(f"select {', '.join(select_columns)} from threads").fetchall():
+            item = dict(zip(select_columns, values))
+            session_id = item.get("id")
+            rollout_path = item.get("rollout_path")
+            if not isinstance(session_id, str) or session_id not in seen_ids:
+                continue
+            if not isinstance(rollout_path, str) or not _path_is_under_any_root(rollout_path, managed_roots):
+                continue
+            if int(item.get("archived") or 0):
+                continue
+            if str(item.get("source") or "").strip().startswith("{"):
+                continue
+            eligible_ids.add(session_id)
+
+        promoted_ids = [session_id for session_id in desired_ids if session_id in eligible_ids]
+        if not promoted_ids:
+            return []
+
+        if not dry_run:
+            max_updated_at = cur.execute("select max(updated_at) from threads").fetchone()[0]
+            base_epoch = base_updated_at or max(int(time.time()), int(max_updated_at or 0)) + len(promoted_ids)
+            for index, session_id in enumerate(promoted_ids):
+                promoted_updated_at = base_epoch - index
+                update_parts = ["updated_at = ?"]
+                values: list[object] = [promoted_updated_at]
+                if "updated_at_ms" in columns:
+                    update_parts.append("updated_at_ms = ?")
+                    values.append(promoted_updated_at * 1000)
+                values.append(session_id)
+                cur.execute(f"update threads set {', '.join(update_parts)} where id = ?", values)
+            conn.commit()
+        return promoted_ids
+    finally:
+        conn.close()
 
 
 def load_thread_metadata(
@@ -208,6 +585,7 @@ def build_threads_row(
         created_at_ms=iso_to_epoch_ms(created_iso),
         updated_at_ms=iso_to_epoch_ms(updated_iso),
         source=source_name or ("vscode" if effective_kind == "desktop" else "cli" if effective_kind == "cli" else "unknown"),
+        thread_source="user",
         model_provider=model_provider,
         cwd=cwd,
         title=title,
@@ -252,6 +630,7 @@ def upsert_threads_rows(
                 "created_at_ms": thread_row.created_at_ms,
                 "updated_at_ms": thread_row.updated_at_ms,
                 "source": thread_row.source,
+                "thread_source": thread_row.thread_source,
                 "model_provider": thread_row.model_provider,
                 "cwd": thread_row.cwd,
                 "title": thread_row.title,
@@ -457,6 +836,49 @@ def _path_is_under_any_root(path_value: str, roots: Sequence[Path]) -> bool:
 
 def _normalized_thread_path(path_value: str) -> str:
     return str(path_value or "").replace("\\", "/").rstrip("/")
+
+
+def _dedupe_strings(values: Sequence[str]) -> list[str]:
+    deduped = []
+    seen = set()
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        deduped.append(normalized)
+        seen.add(normalized)
+    return deduped
+
+
+def _prepend_unique_state_list(data: dict, key: str, values: Sequence[str]) -> None:
+    desired = _dedupe_strings(values)
+    if not desired:
+        return
+    raw_existing = data.get(key, [])
+    existing = [str(item).strip() for item in raw_existing] if isinstance(raw_existing, list) else []
+    existing = [item for item in existing if item]
+    desired_set = set(desired)
+    data[key] = desired + [item for item in existing if item not in desired_set]
+
+
+def _normalized_thread_workspace_pairs(thread_workspaces: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
+    pairs = []
+    seen = set()
+    for thread_id, workspace_dir in thread_workspaces:
+        normalized_thread_id = str(thread_id or "").strip()
+        normalized_workspace = _normalized_thread_path(workspace_dir)
+        if not normalized_thread_id or normalized_thread_id in seen:
+            continue
+        pairs.append((normalized_thread_id, normalized_workspace))
+        seen.add(normalized_thread_id)
+    return pairs
+
+
+def _group_thread_ids_by_workspace(pairs: Sequence[tuple[str, str]]) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    for thread_id, workspace_dir in pairs:
+        grouped.setdefault(workspace_dir, []).append(thread_id)
+    return grouped
 
 
 def upsert_threads_table(

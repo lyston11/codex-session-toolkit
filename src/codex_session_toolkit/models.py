@@ -376,6 +376,8 @@ class ImportResult:
     skills_conflict_skipped_count: int = 0
     skills_missing_count: int = 0
     skills_failed_count: int = 0
+    desktop_sidebar_promoted_count: int = 0
+    desktop_pinned_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -400,6 +402,8 @@ class BatchImportResult:
     total_skills_missing: int = 0
     total_skills_failed: int = 0
     skills_restore_report_path: Optional[Path] = None
+    desktop_sidebar_promoted_count: int = 0
+    desktop_pinned_count: int = 0
     warnings: List[OperationWarning] = field(default_factory=list)
 
 
@@ -416,6 +420,9 @@ class RepairResult:
     workspace_roots_count: int
     threads_updated: int
     threads_pruned: int
+    thread_sources_repaired: int
+    desktop_sidebar_promoted_count: int
+    desktop_pinned_count: int
     backup_root: Optional[Path]
     changed_sessions: List[str]
     warnings: List[OperationWarning]

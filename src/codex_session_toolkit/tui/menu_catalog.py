@@ -61,11 +61,16 @@ TUI_ACTION_NOTES = {
     "export_desktop_all": ["默认归档到 ./codex_bundles/<machine>/sessions/desktop/<timestamp>/。", "范围包含 active + archived 的 Desktop 会话，并分别生成 Bundle。"],
     "export_desktop_active": ["默认归档到 ./codex_bundles/<machine>/sessions/active/<timestamp>/。", "仅导出 ~/.codex/sessions/ 下的 Desktop 会话，不会扫描 ~/.codex/archived_sessions/。"],
     "export_cli_all": ["默认归档到 ./codex_bundles/<machine>/sessions/cli/<timestamp>/。", "范围包含 active + archived 的 CLI 会话，并分别生成 Bundle。"],
-    "import_one": ["从 Bundle 列表中选择要导入为会话的条目。", "可先按导出机器和导出方式筛选。", "导入时会顺手修复 history / index / Desktop 元数据。"],
+    "import_one": [
+        "从 Bundle 列表中选择要导入为会话的条目。",
+        "可先按导出机器和导出方式筛选。",
+        "导入时会同步修复 history / index / Desktop 线程表和侧栏状态。",
+    ],
     "import_desktop_all": [
         "先选择设备文件夹，再选择该设备下的分类文件夹，然后批量导入。",
         "分类文件夹会显示为 desktop / active / cli / project / single。",
         "如果选择 project，还会继续选择项目文件夹，并显示本机是否已有同名/同路径项目。",
+        "导入线程会写入 Desktop 侧栏顺序并提升到最近线程池前部，避免只在 TUI 可见。",
     ],
     "list_skills": ["浏览本机已安装的 Skills，默认只显示自定义 Skills。"],
     "export_skill_one": ["从本机 Skills 列表中选择一个自定义 Skill 单独导出。"],
@@ -97,6 +102,7 @@ TUI_ACTION_NOTES = {
     ],
     "desktop_repair": [
         "修复会话在 Desktop 中的显示、索引和登记信息。",
+        "会处理侧栏筛选/折叠、线程池排序、pin 状态、空 thread_source 和失效 threads 行。",
     ],
     "browse_backups": [
         "浏览、恢复或删除导入覆盖前自动保留的会话备份。",

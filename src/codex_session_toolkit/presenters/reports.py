@@ -482,6 +482,8 @@ def print_import_result(result: ImportResult) -> int:
     print(f"Desktop workspace registered: {'yes' if result.desktop_registered else 'no'}")
     print(f"Desktop registration target: {result.desktop_registration_target or 'none'}")
     print(f"Threads table upserted: {'yes' if result.thread_row_upserted else 'no'}")
+    print(f"Desktop sidebar threads promoted: {result.desktop_sidebar_promoted_count}")
+    print(f"Desktop threads pinned: {result.desktop_pinned_count}")
     if result.target_desktop_model_provider:
         print(f"Desktop model provider: {result.target_desktop_model_provider}")
     if (
@@ -516,6 +518,8 @@ def print_batch_import_result(result: BatchImportResult) -> int:
     print(f"History view: {'仅最新' if result.latest_only else '全部历史'}")
     print(f"Bundle directories found: {len(result.bundle_dirs)}")
     print(f"Imported bundle directories: {len(result.success_dirs)}")
+    print(f"Desktop sidebar threads promoted: {result.desktop_sidebar_promoted_count}")
+    print(f"Desktop threads pinned: {result.desktop_pinned_count}")
     if result.failed_imports:
         print("Batch import completed with partial failures.")
         sys.stdout.flush()
@@ -552,6 +556,9 @@ def print_repair_result(result: RepairResult) -> int:
     print(f"Skipped invalid session files: {len(result.skipped_sessions)}")
     print(f"Workspace roots active after repair: {result.workspace_roots_count}")
     print(f"Desktop thread rows upserted: {result.threads_updated}")
+    print(f"Desktop thread sources repaired: {result.thread_sources_repaired}")
+    print(f"Desktop sidebar threads promoted: {result.desktop_sidebar_promoted_count}")
+    print(f"Desktop threads pinned: {result.desktop_pinned_count}")
     print(f"Desktop thread rows pruned: {result.threads_pruned}")
     if result.backup_root is not None:
         print(f"Backup directory: {result.backup_root}")
