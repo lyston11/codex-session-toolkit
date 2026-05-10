@@ -77,7 +77,7 @@ jobs:
           version = os.environ["VERSION"]
           text = Path("CHANGELOG.md").read_text(encoding="utf-8")
           match = re.search(
-              rf"^##\s+{re.escape(version)}(?:\s+-\s+.*)?\n(?P<body>.*?)(?=^##\s+|\Z)",
+              rf"^##\s+{re.escape(version)}(?:\s+-\s+[^\n]*)?\n(?P<body>.*?)(?=^##\s+|\Z)",
               text,
               re.M | re.S,
           )
@@ -99,7 +99,9 @@ jobs:
           zipball="$output_dir/codex-session-toolkit-$version.zip"
 
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists."
+            gh release edit "$tag" \
+              --title "$tag" \
+              --notes-file "$RUNNER_TEMP/release-notes.md"
           else
             gh release create "$tag" \
               --title "$tag" \
