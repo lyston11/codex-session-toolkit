@@ -1,7 +1,7 @@
 name: "Release"
 
-on:
-  workflow_dispatch:
+"on":
+  workflow_dispatch: {}
   push:
     branches:
       - main
@@ -32,10 +32,10 @@ jobs:
           set -euo pipefail
           version="$(
             PYTHONPATH=src python - <<'PY'
-from codex_session_toolkit import __version__
+          from codex_session_toolkit import __version__
 
-print(__version__)
-PY
+          print(__version__)
+          PY
           )"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
@@ -70,20 +70,20 @@ PY
         run: |
           set -euo pipefail
           python - <<'PY' > "$RUNNER_TEMP/release-notes.md"
-from pathlib import Path
-import os
-import re
+          from pathlib import Path
+          import os
+          import re
 
-version = os.environ["VERSION"]
-text = Path("CHANGELOG.md").read_text(encoding="utf-8")
-match = re.search(
-    rf"^##\s+{re.escape(version)}(?:\s+-\s+.*)?\n(?P<body>.*?)(?=^##\s+|\Z)",
-    text,
-    re.M | re.S,
-)
-body = match.group("body").strip() if match else ""
-print(body or f"Release v{version}")
-PY
+          version = os.environ["VERSION"]
+          text = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          match = re.search(
+              rf"^##\s+{re.escape(version)}(?:\s+-\s+.*)?\n(?P<body>.*?)(?=^##\s+|\Z)",
+              text,
+              re.M | re.S,
+          )
+          body = match.group("body").strip() if match else ""
+          print(body or f"Release v{version}")
+          PY
         env:
           VERSION: ${{ steps.version.outputs.version }}
 
