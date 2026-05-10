@@ -6,7 +6,7 @@ from importlib import import_module
 
 APP_DISPLAY_NAME = "Codex Session Toolkit"
 APP_COMMAND = "codex-session-toolkit"
-__version__ = "0.1.1"
+__version__ = "1.0.0"
 
 _STABLE_EXPORTS = {
     "CodexPaths": (".paths", "CodexPaths"),

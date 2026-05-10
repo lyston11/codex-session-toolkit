@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 - 2026-05-10
 
 ### Desktop Visibility
 
@@ -33,6 +33,7 @@
 - Bundle export-all menu labels no longer use the extra “批量” prefix
 - `import` now accepts multiple bundle inputs plus project remap options, while legacy `import-desktop-all` remains available for scripts
 - TUI Bundle import browsing now reuses cached scan results while navigating and uses import-oriented source/category labels
+- Bundle browsing is now separated from importing; the browse page manages local Bundle records and can delete selected filtered Bundles after confirmation
 
 ## 0.1.1 - 2026-04-30
 
