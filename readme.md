@@ -91,9 +91,9 @@ codex-session-toolkit
 - 浏览并导出最近会话
 - 搜索 session id、标题、预览、provider、cwd
 - 查看会话详情
-- 支持单个、多选和全部本机会话导出为 Bundle
+- 支持当前会话、勾选多条导出；按 `a` 选中全部匹配项后再按 `e` 导出
 - 按项目路径查看该项目下的会话
-- 支持按项目单个、多选和全部匹配会话导出为 Bundle
+- 支持按项目导出当前、勾选多条会话；按 `a` 选中全部匹配项后再按 `e` 导出
 
 项目导出路径：
 
@@ -110,7 +110,7 @@ codex-session-toolkit
 - 导出全部 Desktop 会话
 - 导出全部 active Desktop 会话
 - 导出全部 CLI 会话
-- 导入 Bundle 为会话使用单独入口，支持当前、勾选多条和全部匹配项
+- 导入 Bundle 为会话使用单独入口，支持当前、勾选多条导入；按 `a` 选中全部匹配项后再按 `i` 导入
 - 导入 project 分类时，把源机器 cwd 映射到当前机器项目目录
 - 导入时维护 `session_index.jsonl`、Desktop `threads` 表、workspace roots 和侧栏状态
 - 多选/全部导入会把导入线程写入 Desktop 侧栏顺序和 workspace hint，并提升到 Desktop 最近线程池前部
@@ -124,11 +124,11 @@ codex-session-toolkit
 用于独立迁移自定义 Skills。
 
 - 浏览本机 Skills，默认只显示自定义 Skills
-- 在同一个 Skills 列表中导出当前、勾选多条或全部匹配自定义 Skills
+- 在同一个 Skills 列表中导出当前、勾选多条自定义 Skills；按 `a` 选中全部匹配项后再按 `e` 导出
 - 浏览 standalone Skills Bundle
-- 在同一个 Skills Bundle 列表中导入当前、勾选多条或全部匹配 Bundle
+- 在同一个 Skills Bundle 列表中导入当前、勾选多条 Bundle；按 `a` 选中全部匹配项后再按 `i` 导入
 - 删除本机自定义 Skills，删除前确认
-- 删除 Skills 列表支持 `Space` 多选、`x` 删除选中/当前、`a` 删除全部自定义 Skills
+- 删除 Skills 列表支持 `Space` 多选、`a` 选中全部匹配自定义 Skills、`x` 删除选中/当前
 
 `.agents/skills/foo` 与 `.codex/skills/foo` 会按同一个相对 Skill 识别，避免重复导入。
 
@@ -152,7 +152,7 @@ Desktop 修复默认只处理 active 会话；需要 archived 会话时，从 Re
 - `Enter` / `d` 预览当前归档会话
 - `Space` 勾选或取消勾选
 - `x` 删除选中项；未勾选时删除当前项
-- `a` 删除全部归档会话
+- `a` 选中全部匹配归档会话；随后按 `x` 删除选中项
 
 删除只针对 `~/.codex/archived_sessions/` 下的归档 rollout。若同一个 session id 同时还有 active rollout，工具会保留 `session_index.jsonl` 中的 active 索引，并把 Desktop `threads` 记录指回 active 文件，避免误删后左侧线程栏丢失。
 
@@ -269,7 +269,7 @@ socks5://127.0.0.1:7890
 1. 把另一台机器的 `./codex_bundles/` 拷贝过来，或从独立 GitHub Bundle 仓库拉取。
 2. 进入 `Bundle / Transfer`。
 3. 选择 `导入 Bundle 为会话`。
-4. 用 `s/m/l` 筛选到 project Bundle，空格勾选或按 `a` 导入全部匹配项。
+4. 用 `s/m/l` 筛选到 project Bundle，按 `Space` 勾选，或按 `a` 选中全部匹配项后再按 `i` 导入。
 5. 查看工具识别出的当前机器项目路径，必要时修改目标项目路径。
 6. 选择是否自动创建缺失目录。
 8. 执行导入。
@@ -282,14 +282,14 @@ socks5://127.0.0.1:7890
 
 1. 进入 `Skills / Transfer`。
 2. 选择 `浏览并导出本机 Skills`。
-3. 按 `Space` 勾选后按 `e` 导出，或直接按 `a` 导出全部匹配自定义 Skills。
+3. 按 `Space` 勾选后按 `e` 导出，或按 `a` 选中全部匹配自定义 Skills 后再按 `e` 导出。
 4. 得到 `./codex_bundles/<machine>/skills/<single|selected|all>/<timestamp>/`。
 
 目标机器：
 
 1. 进入 `Skills / Transfer`。
 2. 选择 `浏览并导入 Skills Bundle`。
-3. 按 `Space` 勾选后按 `i` 导入，或直接按 `a` 导入全部匹配 Skills Bundle。
+3. 按 `Space` 勾选后按 `i` 导入，或按 `a` 选中全部匹配 Skills Bundle 后再按 `i` 导入。
 4. 内容一致的 Skill 会直接复用。
 5. 内容冲突默认跳过，不覆盖本机版本。
 
@@ -311,7 +311,7 @@ socks5://127.0.0.1:7890
 2. 选择 `删除归档会话`。
 3. 按 `Enter` 或 `d` 预览当前会话。
 4. 按 `Space` 勾选多条，或直接停在某条上按 `x` 删除当前条。
-5. 需要清空归档时按 `a`，确认后删除全部归档会话。
+5. 需要清空归档时按 `a` 选中全部匹配项，再按 `x` 确认删除选中归档会话。
 
 这个功能用来减轻跨设备同步和搬运负担。它只删除归档 rollout；如果本机还有同 ID 的 active rollout，会保留 active 索引和 Desktop 可见性。
 
@@ -473,7 +473,7 @@ Provider 识别顺序：
 | `p` | 在项目会话浏览器中重新输入项目路径 |
 | `x` | 在删除类浏览器中删除选中/当前条目 |
 | `Space` | 在可批量操作的列表中勾选或取消勾选 |
-| `a` | 在 Bundle 浏览页全选当前筛选结果；在导入页导入全部匹配；其他页面按页内提示执行全部操作 |
+| `a` | 在支持多选的功能页选中当前筛选结果的全部匹配项 |
 | `s` | 按 Bundle 类别筛选 |
 | `m` | 按来源机器筛选 Bundle |
 | `l` | 切换历史范围：全部历史 / 仅最新 |

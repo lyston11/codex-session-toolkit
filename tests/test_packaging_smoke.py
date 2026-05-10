@@ -901,13 +901,12 @@ class PackagingSmokeTests(unittest.TestCase):
 
         self.assertEqual(app.open_calls, ["delete"])
 
-    def test_project_export_dry_run_returns_to_execution_mode(self) -> None:
+    def test_project_export_select_all_then_exports_selected_sessions(self) -> None:
         class ProjectExportApp:
             context = SimpleNamespace(bundle_root_label="./codex_bundles")
             paths = CodexPaths(home=Path("/tmp"))
 
             def __init__(self) -> None:
-                self.mode_answers = [True, None]
                 self.mode_calls = 0
                 self.run_calls = []
 
@@ -945,16 +944,16 @@ class PackagingSmokeTests(unittest.TestCase):
             model_provider="demo-provider",
         )
         with patch("codex_session_toolkit.tui.browser_flows.get_project_session_summaries", return_value=[summary]):
-            with patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["a", "q"]):
+            with patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["a", "e", "q"]):
                 with redirect_stdout(io.StringIO()):
                     open_project_session_browser(app)
 
-        self.assertEqual(app.mode_calls, 2)
+        self.assertEqual(app.mode_calls, 0)
         self.assertEqual(len(app.run_calls), 1)
         action_name, cli_args, kwargs = app.run_calls[0]
-        self.assertEqual(action_name, "导出项目 demo-project 下的 1 个会话为 Bundle（Dry-run）")
-        self.assertEqual(cli_args, ["export-project", "--dry-run", "/tmp/demo-project"])
-        self.assertTrue(kwargs["dry_run"])
+        self.assertEqual(action_name, "导出会话 demo-session 为 Bundle")
+        self.assertEqual(cli_args, ["export", "demo-session"])
+        self.assertFalse(kwargs["dry_run"])
 
     def test_commands_module_reexports_parser_builder(self) -> None:
         self.assertIs(create_parser, build_command_parser)

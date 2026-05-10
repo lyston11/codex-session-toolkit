@@ -436,21 +436,26 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         self.assertEqual(cli_args, ["delete-archived-sessions", first_id, second_id])
         self.assertTrue(kwargs["danger"])
 
-    def test_archived_browser_can_delete_all_sessions(self) -> None:
+    def test_archived_browser_can_select_all_matching_sessions_then_delete(self) -> None:
         app = FakeArchivedBrowserApp()
-        dry_run_result = SimpleNamespace(files_to_delete=[Path("/tmp/a.jsonl"), Path("/tmp/b.jsonl")])
+        first_id = "11111111-2222-4333-8444-555555555555"
+        second_id = "22222222-3333-4444-8555-666666666666"
 
         with ExitStack() as stack:
-            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["a", "q"]))
-            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.get_session_summaries", return_value=[archived_summary("11111111-2222-4333-8444-555555555555")]))
-            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.delete_archived_sessions", return_value=dry_run_result))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["a", "x", "q"]))
+            stack.enter_context(
+                patch(
+                    "codex_session_toolkit.tui.browser_flows.get_session_summaries",
+                    return_value=[archived_summary(first_id), archived_summary(second_id)],
+                )
+            )
             stack.enter_context(redirect_stdout(TtyStringIO()))
             open_archived_session_browser(app)
 
-        self.assertEqual(app.confirm_calls[0][0], ["delete-archived-sessions"])
+        self.assertEqual(app.confirm_calls[0][0], ["delete-archived-sessions", first_id, second_id])
         action_name, cli_args, kwargs = app.run_calls[0]
-        self.assertEqual(action_name, "删除全部归档会话")
-        self.assertEqual(cli_args, ["delete-archived-sessions"])
+        self.assertEqual(action_name, "删除 2 个归档会话")
+        self.assertEqual(cli_args, ["delete-archived-sessions", first_id, second_id])
         self.assertTrue(kwargs["danger"])
 
     def test_session_browser_can_export_checked_sessions(self) -> None:
@@ -474,25 +479,26 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         self.assertEqual(cli_args, ["export", first_id, second_id])
         self.assertFalse(kwargs["danger"])
 
-    def test_session_browser_can_export_current_and_all_sessions(self) -> None:
-        session_id = "11111111-2222-4333-8444-555555555555"
+    def test_session_browser_can_export_current_and_select_all_matching_sessions(self) -> None:
+        first_id = "11111111-2222-4333-8444-555555555555"
+        second_id = "22222222-3333-4444-8555-666666666666"
         app = FakeSessionBrowserApp()
 
         with ExitStack() as stack:
-            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["x", "a", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["x", "a", "e", "q"]))
             stack.enter_context(
                 patch(
                     "codex_session_toolkit.tui.browser_flows.get_session_summaries",
-                    return_value=[active_summary(session_id)],
+                    return_value=[active_summary(first_id), active_summary(second_id)],
                 )
             )
             stack.enter_context(redirect_stdout(TtyStringIO()))
             open_session_browser(app, mode="view")
 
-        self.assertEqual(app.run_calls[0][0], f"导出会话 {session_id} 为 Bundle")
-        self.assertEqual(app.run_calls[0][1], ["export", session_id])
-        self.assertEqual(app.run_calls[1][0], "导出全部本机会话为 Bundle")
-        self.assertEqual(app.run_calls[1][1], ["export", "--all"])
+        self.assertEqual(app.run_calls[0][0], f"导出会话 {first_id} 为 Bundle")
+        self.assertEqual(app.run_calls[0][1], ["export", first_id])
+        self.assertEqual(app.run_calls[1][0], "导出 2 个会话为 Bundle")
+        self.assertEqual(app.run_calls[1][1], ["export", first_id, second_id])
 
     def test_project_session_browser_can_export_current_session(self) -> None:
         session_id = "11111111-2222-4333-8444-555555555555"
@@ -535,27 +541,27 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         self.assertEqual(cli_args, ["export", first_id, second_id])
         self.assertFalse(kwargs["danger"])
 
-    def test_project_session_browser_can_export_all_project_sessions(self) -> None:
-        session_id = "11111111-2222-4333-8444-555555555555"
+    def test_project_session_browser_can_select_all_matching_sessions_then_export(self) -> None:
+        first_id = "11111111-2222-4333-8444-555555555555"
+        second_id = "22222222-3333-4444-8555-666666666666"
         app = FakeProjectSessionBrowserApp()
-        app.mode_answers = [True, None]
 
         with ExitStack() as stack:
-            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["a", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["a", "e", "q"]))
             stack.enter_context(
                 patch(
                     "codex_session_toolkit.tui.browser_flows.get_project_session_summaries",
-                    return_value=[active_summary(session_id)],
+                    return_value=[active_summary(first_id), active_summary(second_id)],
                 )
             )
             stack.enter_context(redirect_stdout(TtyStringIO()))
             open_project_session_browser(app)
 
-        self.assertEqual(app.mode_calls, 2)
+        self.assertEqual(app.mode_calls, 0)
         action_name, cli_args, kwargs = app.run_calls[0]
-        self.assertEqual(action_name, "导出项目 project 下的 1 个会话为 Bundle（Dry-run）")
-        self.assertEqual(cli_args, ["export-project", "--dry-run", "/tmp/project"])
-        self.assertTrue(kwargs["dry_run"])
+        self.assertEqual(action_name, "导出 2 个会话为 Bundle")
+        self.assertEqual(cli_args, ["export", first_id, second_id])
+        self.assertFalse(kwargs["dry_run"])
 
     def test_bundle_import_browser_can_import_checked_bundles(self) -> None:
         first_id = "11111111-2222-4333-8444-555555555555"
@@ -592,7 +598,7 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         )
         self.assertFalse(kwargs["danger"])
 
-    def test_bundle_import_browser_can_import_current_and_all_matching_bundles(self) -> None:
+    def test_bundle_import_browser_can_import_current_and_select_all_matching_bundles(self) -> None:
         first_id = "11111111-2222-4333-8444-555555555555"
         second_id = "22222222-3333-4444-8555-666666666666"
         app = FakeBundleBrowserApp()
@@ -606,13 +612,13 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         )
 
         with ExitStack() as stack:
-            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["i", "a", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["i", "a", "i", "q"]))
             stack.enter_context(redirect_stdout(TtyStringIO()))
             open_bundle_browser(app, mode="import")
 
         self.assertEqual(app.run_calls[0][0], f"导入 Bundle {first_id} 为会话（显示到 Desktop）")
         self.assertEqual(app.run_calls[0][1][-1], str(app.snapshot.entries[0].bundle_dir))
-        self.assertEqual(app.run_calls[1][0], "导入全部匹配 Bundle 为会话（2 个）（显示到 Desktop）")
+        self.assertEqual(app.run_calls[1][0], "导入 2 个 Bundle 为会话（显示到 Desktop）")
         self.assertEqual(app.run_calls[1][1][-2:], [str(entry.bundle_dir) for entry in app.snapshot.entries])
         self.assertTrue(any(call.get("limit") is None for call in app.snapshot_calls))
 
@@ -761,20 +767,20 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         self.assertEqual(cli_args, ["export-skills", str(first.skill_dir), str(second.skill_dir)])
         self.assertFalse(kwargs["danger"])
 
-    def test_local_skill_browser_can_export_current_and_all_skills(self) -> None:
+    def test_local_skill_browser_can_export_current_and_select_all_matching_skills(self) -> None:
         app = FakeSkillBrowserApp()
         first = skill_summary("first-skill")
         second = skill_summary("second-skill", source_root="codex")
 
         with ExitStack() as stack:
-            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["e", "a", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["e", "a", "e", "q"]))
             stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_local_skills", return_value=[first, second]))
             stack.enter_context(redirect_stdout(TtyStringIO()))
             open_local_skill_browser(app, mode="view")
 
         self.assertEqual(app.run_calls[0][0], "导出 Skill first-skill")
         self.assertEqual(app.run_calls[0][1], ["export-skills", str(first.skill_dir)])
-        self.assertEqual(app.run_calls[1][0], "导出全部匹配自定义 Skills（2 个）")
+        self.assertEqual(app.run_calls[1][0], "导出 2 个 Skills")
         self.assertEqual(app.run_calls[1][1], ["export-skills", str(first.skill_dir), str(second.skill_dir)])
 
     def test_skill_bundle_browser_can_import_checked_bundles(self) -> None:
@@ -793,20 +799,20 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         self.assertEqual(cli_args, ["import-skill-bundle", str(first.bundle_dir), str(second.bundle_dir)])
         self.assertFalse(kwargs["danger"])
 
-    def test_skill_bundle_browser_can_import_current_and_all_bundles(self) -> None:
+    def test_skill_bundle_browser_can_import_current_and_select_all_matching_bundles(self) -> None:
         app = FakeSkillBundleBrowserApp()
         first = skill_bundle_summary("bundle-a")
         second = skill_bundle_summary("bundle-b")
 
         with ExitStack() as stack:
-            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["i", "a", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["i", "a", "i", "q"]))
             stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_skill_bundles", return_value=[first, second]))
             stack.enter_context(redirect_stdout(TtyStringIO()))
             open_skill_bundle_browser(app, mode="view")
 
         self.assertEqual(app.run_calls[0][0], "导入 Skills Bundle bundle-a")
         self.assertEqual(app.run_calls[0][1], ["import-skill-bundle", str(first.bundle_dir)])
-        self.assertEqual(app.run_calls[1][0], "导入全部匹配 Skills Bundle（2 个）")
+        self.assertEqual(app.run_calls[1][0], "导入 2 个 Skills Bundle")
         self.assertEqual(app.run_calls[1][1], ["import-skill-bundle", str(first.bundle_dir), str(second.bundle_dir)])
 
     def test_skill_delete_browser_can_delete_selected_skill(self) -> None:
@@ -842,20 +848,21 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         self.assertEqual(cli_args, ["delete-skill", str(first.skill_dir), str(second.skill_dir)])
         self.assertTrue(kwargs["danger"])
 
-    def test_skill_delete_browser_can_delete_all_custom_skills(self) -> None:
+    def test_skill_delete_browser_can_select_all_matching_custom_skills_then_delete(self) -> None:
         app = FakeSkillDeleteBrowserApp()
-        custom = skill_summary("custom-skill")
+        first = skill_summary("first-skill")
+        second = skill_summary("second-skill", source_root="codex")
 
         with ExitStack() as stack:
-            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["a", "q"]))
-            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_local_skills", return_value=[custom]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["a", "x", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_local_skills", return_value=[first, second]))
             stack.enter_context(redirect_stdout(TtyStringIO()))
             open_local_skill_browser(app, mode="delete")
 
-        self.assertEqual(app.confirm_calls[0][0], ["delete-skill", "--all"])
+        self.assertEqual(app.confirm_calls[0][0], ["delete-skill", str(first.skill_dir), str(second.skill_dir)])
         action_name, cli_args, kwargs = app.run_calls[0]
-        self.assertEqual(action_name, "删除全部本机 Skills")
-        self.assertEqual(cli_args, ["delete-skill", "--all"])
+        self.assertEqual(action_name, "删除 2 个本机 Skills")
+        self.assertEqual(cli_args, ["delete-skill", str(first.skill_dir), str(second.skill_dir)])
         self.assertTrue(kwargs["danger"])
 
 

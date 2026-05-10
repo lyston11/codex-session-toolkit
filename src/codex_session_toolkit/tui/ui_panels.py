@@ -88,7 +88,7 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         "  s                  在 Bundle 列表按 Bundle 类别筛选",
         "  m                  在 Bundle 列表按来源机器筛选",
         "  l                  在 Bundle 列表切换历史范围（全部历史 / 仅最新）",
-        "  a                  在 Bundle 浏览页全选当前筛选结果；在导入页导入全部匹配",
+        "  a                  在支持多选的功能页选中当前筛选结果的全部匹配项",
         "  i                  在 Bundle 浏览页删除选中/当前；在导入页导入选中/当前",
         "  g                  在 Skills 列表切换是否显示系统/运行时 Skills",
         "  r                  在 Skills 列表删除选中的自定义 Skill；在会话备份列表恢复选中备份",

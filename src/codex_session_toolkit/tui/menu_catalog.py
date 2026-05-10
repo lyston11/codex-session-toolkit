@@ -46,16 +46,16 @@ TUI_ACTION_NOTES = {
     ],
     "delete_archived_sessions": [
         "进入归档会话列表，先预览再删除。",
-        "支持勾选多条删除，也支持一键删除全部归档会话。",
+        "支持空格逐条勾选，也支持按 a 选中全部匹配项后删除。",
         "会同步移除 Desktop 线程栏和本工具索引里的归档记录。",
     ],
     "list_sessions": [
         "内置会话浏览器，支持搜索、预览、详情查看和导出。",
-        "支持勾选多条导出，也支持一键导出全部本机会话。",
+        "支持空格逐条勾选，也支持按 a 选中全部匹配项后导出。",
     ],
     "project_sessions": [
         "粘贴项目路径后，只查看这个项目下的全部会话。",
-        "支持当前会话、勾选多条导出，也支持一键导出该项目全部会话。",
+        "支持当前会话、勾选多条导出，也支持按 a 选中该项目全部匹配项后导出。",
     ],
     "browse_bundles": ["独立浏览和管理 Bundle 记录，不在这里执行导入。", "支持按 Bundle 类别、来源机器和历史范围筛选，也支持勾选后删除本地 Bundle。"],
     "validate_bundles": ["扫描 Bundle 导出目录里的 manifest、session JSONL 和 history JSONL。", "适合在批量导入前先找出坏包。"],
@@ -64,24 +64,24 @@ TUI_ACTION_NOTES = {
     "export_cli_all": ["默认归档到 ./codex_bundles/<machine>/sessions/cli/<timestamp>/。", "范围包含 active + archived 的 CLI 会话，并分别生成 Bundle。"],
     "import_bundles": [
         "进入 Bundle 列表后可搜索、筛选、勾选再导入。",
-        "支持当前 Bundle、勾选多条和全部匹配 Bundle 导入；删除请回到浏览 Bundle。",
+        "支持当前 Bundle、勾选多条导入，也支持按 a 选中全部匹配 Bundle 后导入；删除请回到浏览 Bundle。",
         "导入会同步修复 history / index / Desktop 线程表和侧栏状态。",
     ],
     "list_skills": [
         "浏览本机已安装的 Skills，默认只显示自定义 Skills。",
-        "支持当前 Skill、勾选多条和全部自定义 Skills 导出。",
+        "支持当前 Skill、勾选多条导出，也支持按 a 选中全部匹配自定义 Skills 后导出。",
     ],
     "export_skill_one": ["从本机 Skills 列表中选择一个自定义 Skill 单独导出。"],
     "export_skills_all": ["将本机自定义 Skills 独立导出，适合跨设备同步 Skill 库。"],
     "browse_skill_bundles": [
         "浏览 standalone Skills Bundle，和会话 Bundle 分开管理。",
-        "支持当前 Bundle、勾选多条和全部匹配 Skills Bundle 导入。",
+        "支持当前 Bundle、勾选多条导入，也支持按 a 选中全部匹配 Skills Bundle 后导入。",
     ],
     "import_skill_bundle": ["选择一个 Skills Bundle 导入；同内容复用，冲突默认跳过。"],
     "import_skill_bundles": ["批量导入 standalone Skills Bundle，可按来源机器过滤。"],
     "delete_skill": [
         "删除本机自定义 Skills。只允许删除 .agents/.codex 下的 custom Skill。",
-        "支持勾选多条删除，也支持一键删除全部自定义 Skills。",
+        "支持空格逐条勾选，也支持按 a 选中全部匹配自定义 Skills 后删除。",
     ],
     "github_status": [
         "先快速读取本地连接状态，再检查 GitHub 远端更新时间。",
@@ -174,7 +174,7 @@ def build_tui_menu_actions() -> List[TuiMenuAction]:
         _menu_action("browse_bundles", "o", "浏览 Bundle", ("list-bundles", "--limit", "20")),
         _menu_action("validate_bundles", "y", "校验 Bundle", ("validate-bundles", "--source", "all")),
         _menu_action("export_desktop_all", "b", "导出全部 Desktop 会话为 Bundle", ("export-desktop-all",)),
-        _menu_action("export_desktop_active", "a", "导出全部 Active Desktop 会话为 Bundle", ("export-active-desktop-all",)),
+        _menu_action("export_desktop_active", "v", "导出全部 Active Desktop 会话为 Bundle", ("export-active-desktop-all",)),
         _menu_action("export_cli_all", "c", "导出全部 CLI 会话为 Bundle", ("export-cli-all",)),
         _menu_action("import_bundles", "i", "导入 Bundle 为会话", ("import", "<bundle_dir...>")),
         _menu_action("list_skills", "s", "浏览并导出本机 Skills", ("list-skills",)),

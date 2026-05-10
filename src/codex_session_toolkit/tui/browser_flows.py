@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from ..errors import ToolkitError
-from ..services.archived_sessions import delete_archived_sessions
 from ..services.backups import list_session_backups
 from ..services.browse import get_project_session_summaries, get_session_summaries
 from ..services.bundle_management import delete_bundle_summaries
@@ -100,7 +99,7 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
 
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
-        subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · x/e 导出选中/当前 · a 导出全部 · / 搜索 · p 修改路径 · q 返回"
+        subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · x/e 导出选中/当前 · a 选中全部 · / 搜索 · p 修改路径 · q 返回"
 
         info_lines = [
             f"{style_text('项目名', Ansi.DIM)} : {project_label}",
@@ -210,15 +209,14 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
             selected_session_ids.clear()
             continue
         if key_str == "a":
-            if not entries:
-                app._show_detail_panel(
-                    "项目会话导出",
-                    ["当前项目路径下没有匹配会话，无法执行批量导出。"],
-                    border_codes=(Ansi.DIM, Ansi.YELLOW),
-                )
-                continue
-            _run_project_session_export(app, project_label, project_path, len(entries))
-            selected_session_ids.clear()
+            all_entries = _all_project_session_entries_for_current_filter(
+                app,
+                project_path=project_path,
+                filter_text=filter_text,
+            )
+            _select_matching_sessions(app, selected_session_ids, all_entries, empty_title="项目会话选择")
+            if all_entries:
+                entries = all_entries
             continue
 
 
@@ -243,7 +241,7 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
         subtitle = (
-            "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · x/e 导出选中/当前 · a 导出全部 · q 返回"
+            "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · x/e 导出选中/当前 · a 选中全部 · q 返回"
             if mode == "view"
             else "↑/↓ 选择 · Enter 确认 · / 搜索 · d 查看详情 · q 返回"
         )
@@ -354,8 +352,10 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
             selected_session_ids.clear()
             continue
         if key_str == "a" and mode == "view":
-            _run_all_session_export(app)
-            selected_session_ids.clear()
+            all_entries = _all_session_entries_for_current_filter(app, filter_text=filter_text)
+            _select_matching_sessions(app, selected_session_ids, all_entries, empty_title="会话选择")
+            if all_entries:
+                entries = all_entries
             continue
 
 
@@ -379,6 +379,60 @@ def _selected_or_current_sessions(
     if not selected_entries and entries:
         selected_entries = [entries[selected_index]]
     return selected_entries
+
+
+def _all_session_entries_for_current_filter(
+    app: "ToolkitTuiApp",
+    *,
+    filter_text: str,
+    archived_only: bool = False,
+) -> list["SessionSummary"]:
+    try:
+        return get_session_summaries(
+            app.paths,
+            pattern=filter_text,
+            limit=None,
+            archived_only=archived_only,
+        )
+    except ToolkitError as exc:
+        app._show_detail_panel("读取会话失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+        return []
+
+
+def _all_project_session_entries_for_current_filter(
+    app: "ToolkitTuiApp",
+    *,
+    project_path: str,
+    filter_text: str,
+) -> list["SessionSummary"]:
+    try:
+        return get_project_session_summaries(
+            app.paths,
+            project_path=project_path,
+            pattern=filter_text,
+            limit=None,
+        )
+    except ToolkitError as exc:
+        app._show_detail_panel("读取项目会话失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+        return []
+
+
+def _select_matching_sessions(
+    app: "ToolkitTuiApp",
+    selected_session_ids: set[str],
+    entries: list["SessionSummary"],
+    *,
+    empty_title: str,
+) -> None:
+    if not entries:
+        app._show_detail_panel(
+            empty_title,
+            ["当前没有匹配会话。"],
+            border_codes=(Ansi.DIM, Ansi.YELLOW),
+        )
+        return
+    for entry in entries:
+        selected_session_ids.add(entry.session_id)
 
 
 def _run_selected_session_export(app: "ToolkitTuiApp", summaries: list["SessionSummary"]) -> None:
@@ -406,47 +460,6 @@ def _run_selected_session_export(app: "ToolkitTuiApp", summaries: list["SessionS
     )
 
 
-def _run_all_session_export(app: "ToolkitTuiApp") -> None:
-    app._run_action(
-        "导出全部本机会话为 Bundle",
-        ["export", "--all"],
-        dry_run=False,
-        runner=lambda: app._run_toolkit(["export", "--all"]),
-        danger=False,
-    )
-
-
-def _run_project_session_export(
-    app: "ToolkitTuiApp",
-    project_label: str,
-    project_path: str,
-    count: int,
-) -> None:
-    while True:
-        dry_run = app._prompt_execution_mode(
-            title=f"导出项目 {project_label} 下的全部会话",
-            default_dry_run=False,
-        )
-        if dry_run is None:
-            break
-        cli_args = ["export-project"]
-        if dry_run:
-            cli_args.append("--dry-run")
-        cli_args.append(project_path)
-        action_name = f"导出项目 {project_label} 下的 {count} 个会话为 Bundle"
-        if dry_run:
-            action_name += "（Dry-run）"
-        app._run_action(
-            action_name,
-            cli_args,
-            dry_run=dry_run,
-            runner=lambda args=cli_args: app._run_toolkit(list(args)),
-            danger=False,
-        )
-        if not dry_run:
-            break
-
-
 def open_archived_session_browser(app: "ToolkitTuiApp") -> None:
     filter_text = ""
     selected_index = 0
@@ -472,7 +485,7 @@ def open_archived_session_browser(app: "ToolkitTuiApp") -> None:
 
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
-        subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 预览 · / 搜索 · x 删除选中/当前 · a 删除全部 · q 返回"
+        subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 预览 · / 搜索 · x 删除选中/当前 · a 选中全部 · q 返回"
         info_lines = [
             f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
             f"{style_text('归档数量', Ansi.DIM)} : {len(entries)}",
@@ -614,32 +627,14 @@ def open_archived_session_browser(app: "ToolkitTuiApp") -> None:
             needs_reload = True
             continue
         if key_str == "a":
-            if not entries:
-                app._show_detail_panel(
-                    "删除归档会话",
-                    ["当前没有匹配归档会话。"],
-                    border_codes=(Ansi.DIM, Ansi.YELLOW),
-                )
-                continue
-            result = delete_archived_sessions(app.paths, dry_run=True)
-            if not app._confirm_dangerous_action(
-                ["delete-archived-sessions"],
-                title="删除全部归档会话确认",
-                subtitle="该操作会删除本机 archived_sessions 下的全部归档会话文件。",
-                warning=f"将删除 {len(result.files_to_delete)} 个归档会话文件，并同步清理 Desktop 线程记录。",
-                impact=str(app.paths.archived_sessions_dir),
-            ):
-                continue
-            app._run_action(
-                "删除全部归档会话",
-                ["delete-archived-sessions"],
-                dry_run=False,
-                runner=lambda: app._run_toolkit(["delete-archived-sessions"]),
-                danger=True,
+            all_entries = _all_session_entries_for_current_filter(
+                app,
+                filter_text=filter_text,
+                archived_only=True,
             )
-            selected_index = 0
-            selected_session_ids.clear()
-            needs_reload = True
+            _select_matching_sessions(app, selected_session_ids, all_entries, empty_title="归档会话选择")
+            if all_entries:
+                entries = all_entries
             continue
 
 
@@ -842,10 +837,10 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
         if browse_mode:
-            subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · a 全选当前筛选结果 · i 删除选中/当前 · / 搜索 · s 类别 · m 机器 · l 历史 · q 返回"
+            subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · a 选中全部 · i 删除选中/当前 · / 搜索 · s 类别 · m 机器 · l 历史 · q 返回"
             title = "浏览 Bundle"
         elif import_mode:
-            subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · i 导入选中/当前 · a 导入全部匹配 · / 搜索 · s 类别 · m 机器 · l 历史 · q 返回"
+            subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · i 导入选中/当前 · a 选中全部 · / 搜索 · s 类别 · m 机器 · l 历史 · q 返回"
             title = "导入 Bundle 为会话"
         else:
             subtitle = "↑/↓ 选择 · Enter 确认 · / 搜索 · s 类别 · m 来源机器 · l 历史范围 · d 查看详情 · q 返回"
@@ -973,8 +968,18 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
         if key_str in {" ", "x"} and entries and (browse_mode or import_mode):
             _toggle_selected_bundle(selected_bundle_dirs, entries[selected_index])
             continue
-        if key_str == "a" and browse_mode:
-            _select_matching_bundles(selected_bundle_dirs, entries)
+        if key_str == "a" and (browse_mode or import_mode):
+            all_entries = _all_bundle_entries_for_current_filters(
+                app,
+                filter_text=filter_text,
+                machine_filter=machine_filter,
+                export_group_filter=export_group_filter,
+                latest_only=latest_only,
+                source_group=source_group,
+            )
+            _select_matching_bundles(app, selected_bundle_dirs, all_entries)
+            if all_entries:
+                entries = all_entries
             continue
         if key_str == "i" and entries and browse_mode:
             selected_entries = _selected_or_current_bundles(entries, selected_index, selected_bundle_dirs)
@@ -987,34 +992,9 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
             _run_bundle_import(
                 app,
                 selected_entries,
-                action_scope="selected",
             )
             selected_bundle_dirs.clear()
             continue
-        if key_str == "a" and import_mode:
-            all_entries = _all_bundle_entries_for_current_filters(
-                app,
-                filter_text=filter_text,
-                machine_filter=machine_filter,
-                export_group_filter=export_group_filter,
-                latest_only=latest_only,
-                source_group=source_group,
-            )
-            if not all_entries:
-                app._show_detail_panel(
-                    "导入 Bundle",
-                    ["当前没有匹配 Bundle。"],
-                    border_codes=(Ansi.DIM, Ansi.YELLOW),
-                )
-                continue
-            _run_bundle_import(
-                app,
-                all_entries,
-                action_scope="all",
-            )
-            selected_bundle_dirs.clear()
-            continue
-
 
 def _bundle_dir_key(bundle: "BundleSummary") -> str:
     try:
@@ -1120,9 +1100,17 @@ def _selected_or_current_bundles(
 
 
 def _select_matching_bundles(
+    app: "ToolkitTuiApp",
     selected_bundle_dirs: set[str],
     entries: list["BundleSummary"],
 ) -> None:
+    if not entries:
+        app._show_detail_panel(
+            "Bundle 选择",
+            ["当前没有匹配 Bundle。"],
+            border_codes=(Ansi.DIM, Ansi.YELLOW),
+        )
+        return
     for entry in entries:
         selected_bundle_dirs.add(_bundle_dir_key(entry))
 
@@ -1166,8 +1154,6 @@ def _delete_selected_bundles(app: "ToolkitTuiApp", bundles: list["BundleSummary"
 def _run_bundle_import(
     app: "ToolkitTuiApp",
     bundles: list["BundleSummary"],
-    *,
-    action_scope: str,
 ) -> None:
     if not bundles:
         app._show_detail_panel(
@@ -1208,8 +1194,6 @@ def _run_bundle_import(
     count = len(bundles)
     if count == 1:
         action_name = f"导入 Bundle {bundles[0].session_id} 为会话"
-    elif action_scope == "all":
-        action_name = f"导入全部匹配 Bundle 为会话（{count} 个）"
     else:
         action_name = f"导入 {count} 个 Bundle 为会话"
     action_name += "（显示到 Desktop）"
@@ -1350,10 +1334,10 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
         subtitle = (
-            "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · g 切换系统 Skills · e 导出选中/当前 · a 导出全部 · q 返回"
+            "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · g 切换系统 Skills · e 导出选中/当前 · a 选中全部 · q 返回"
             if mode == "view"
             else (
-                "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · x 删除选中/当前 · a 删除全部 · q 返回"
+                "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · x 删除选中/当前 · a 选中全部 · q 返回"
                 if mode == "delete"
                 else "↑/↓ 选择 · Enter 确认 · / 搜索 · g 切换系统 Skills · d 查看详情 · q 返回"
             )
@@ -1503,7 +1487,7 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
                     border_codes=(Ansi.DIM, Ansi.YELLOW),
                 )
                 continue
-            _run_skill_export(app, selected_entries, action_scope="selected")
+            _run_skill_export(app, selected_entries)
             selected_skills.clear()
             continue
         if key_str == "r" and entries and mode == "view":
@@ -1551,22 +1535,15 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
             selected_index = 0
             selected_skills.clear()
             continue
-        if key_str == "a" and mode == "delete":
-            _confirm_and_delete_all_skills(app)
-            selected_index = 0
-            selected_skills.clear()
-            continue
-        if key_str == "a" and mode == "view":
-            selected_entries = [entry for entry in entries if entry.location_kind == "custom"]
-            if not selected_entries:
-                app._show_detail_panel(
-                    "导出 Skill",
-                    ["当前没有匹配的自定义 Skills。"],
-                    border_codes=(Ansi.DIM, Ansi.YELLOW),
-                )
-                continue
-            _run_skill_export(app, selected_entries, action_scope="all")
-            selected_skills.clear()
+        if key_str == "a" and mode in {"view", "delete"}:
+            all_entries = _all_local_skill_entries_for_current_filter(
+                app,
+                filter_text=filter_text,
+                include_system=include_system,
+            )
+            _select_matching_skills(app, selected_skills, all_entries)
+            if all_entries:
+                entries = all_entries
             continue
 
 
@@ -1595,18 +1572,48 @@ def _selected_or_current_skills(
     return selected_entries
 
 
+def _all_local_skill_entries_for_current_filter(
+    app: "ToolkitTuiApp",
+    *,
+    filter_text: str,
+    include_system: bool,
+) -> list["LocalSkillSummary"]:
+    try:
+        return list_local_skills(
+            app.paths,
+            pattern=filter_text,
+            include_system=include_system,
+        )
+    except ToolkitError as exc:
+        app._show_detail_panel("读取本机 Skills 失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+        return []
+
+
+def _select_matching_skills(
+    app: "ToolkitTuiApp",
+    selected_skills: set[tuple[str, str]],
+    entries: list["LocalSkillSummary"],
+) -> None:
+    custom_entries = [entry for entry in entries if entry.location_kind == "custom"]
+    if not custom_entries:
+        app._show_detail_panel(
+            "Skill 选择",
+            ["当前没有匹配的自定义 Skills。"],
+            border_codes=(Ansi.DIM, Ansi.YELLOW),
+        )
+        return
+    for entry in custom_entries:
+        selected_skills.add((entry.source_root, entry.relative_dir))
+
+
 def _run_skill_export(
     app: "ToolkitTuiApp",
     skills: list["LocalSkillSummary"],
-    *,
-    action_scope: str,
 ) -> None:
     cli_args = ["export-skills", *[str(skill.skill_dir) for skill in skills]]
     count = len(skills)
     if count == 1:
         action_name = f"导出 Skill {skills[0].relative_dir}"
-    elif action_scope == "all":
-        action_name = f"导出全部匹配自定义 Skills（{count} 个）"
     else:
         action_name = f"导出 {count} 个 Skills"
     app._run_action(
@@ -1646,44 +1653,6 @@ def _confirm_and_delete_skills(app: "ToolkitTuiApp", skills: list["LocalSkillSum
     )
 
 
-def _confirm_and_delete_all_skills(
-    app: "ToolkitTuiApp",
-) -> None:
-    try:
-        skills = [
-            skill
-            for skill in list_local_skills(app.paths, include_system=False)
-            if skill.location_kind == "custom"
-        ]
-    except ToolkitError as exc:
-        app._show_detail_panel("删除 Skill", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
-        return
-    if not skills:
-        app._show_detail_panel(
-            "删除 Skill",
-            ["当前没有本机自定义 Skills。"],
-            border_codes=(Ansi.DIM, Ansi.YELLOW),
-        )
-        return
-    cli_args = ["delete-skill", "--all"]
-    count = len(skills)
-    if not app._confirm_dangerous_action(
-        cli_args,
-        title="删除全部 Skills 确认",
-        subtitle="该操作会删除匹配范围内的全部本机自定义 Skills。",
-        warning=f"将删除 {count} 个本机自定义 Skills。",
-        impact="全部自定义 Skills",
-    ):
-        return
-    app._run_action(
-        "删除全部本机 Skills",
-        cli_args,
-        dry_run=False,
-        runner=lambda args=cli_args: app._run_toolkit(args),
-        danger=True,
-    )
-
-
 def open_skill_bundle_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["SkillBundleSummary"]:
     filter_text = ""
     selected_index = 0
@@ -1702,7 +1671,7 @@ def open_skill_bundle_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["S
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
         subtitle = (
-            "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · i 导入选中/当前 · a 导入全部 · q 返回"
+            "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · i 导入选中/当前 · a 选中全部 · q 返回"
             if mode == "view"
             else "↑/↓ 选择 · Enter 确认 · / 搜索 · d 查看详情 · q 返回"
         )
@@ -1813,19 +1782,14 @@ def open_skill_bundle_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["S
             continue
         if key_str == "i" and entries and mode == "view":
             selected_entries = _selected_or_current_skill_bundles(entries, selected_index, selected_bundle_dirs)
-            _run_skill_bundle_import(app, selected_entries, action_scope="selected")
+            _run_skill_bundle_import(app, selected_entries)
             selected_bundle_dirs.clear()
             continue
         if key_str == "a" and mode == "view":
-            if not entries:
-                app._show_detail_panel(
-                    "导入 Skills Bundle",
-                    ["当前没有匹配的 Skills Bundle。"],
-                    border_codes=(Ansi.DIM, Ansi.YELLOW),
-                )
-                continue
-            _run_skill_bundle_import(app, entries, action_scope="all")
-            selected_bundle_dirs.clear()
+            all_entries = _all_skill_bundle_entries_for_current_filter(app, filter_text=filter_text)
+            _select_matching_skill_bundles(app, selected_bundle_dirs, all_entries)
+            if all_entries:
+                entries = all_entries
             continue
 
 
@@ -1859,18 +1823,42 @@ def _selected_or_current_skill_bundles(
     return selected_entries
 
 
+def _all_skill_bundle_entries_for_current_filter(
+    app: "ToolkitTuiApp",
+    *,
+    filter_text: str,
+) -> list["SkillBundleSummary"]:
+    try:
+        return list_skill_bundles(app.paths, pattern=filter_text)
+    except ToolkitError as exc:
+        app._show_detail_panel("读取 Skills Bundle 失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+        return []
+
+
+def _select_matching_skill_bundles(
+    app: "ToolkitTuiApp",
+    selected_bundle_dirs: set[str],
+    entries: list["SkillBundleSummary"],
+) -> None:
+    if not entries:
+        app._show_detail_panel(
+            "Skills Bundle 选择",
+            ["当前没有匹配的 Skills Bundle。"],
+            border_codes=(Ansi.DIM, Ansi.YELLOW),
+        )
+        return
+    for entry in entries:
+        selected_bundle_dirs.add(_skill_bundle_dir_key(entry))
+
+
 def _run_skill_bundle_import(
     app: "ToolkitTuiApp",
     bundles: list["SkillBundleSummary"],
-    *,
-    action_scope: str,
 ) -> None:
     cli_args = ["import-skill-bundle", *[str(bundle.bundle_dir) for bundle in bundles]]
     count = len(bundles)
     if count == 1:
         action_name = f"导入 Skills Bundle {bundles[0].bundle_dir.name}"
-    elif action_scope == "all":
-        action_name = f"导入全部匹配 Skills Bundle（{count} 个）"
     else:
         action_name = f"导入 {count} 个 Skills Bundle"
     app._run_action(
