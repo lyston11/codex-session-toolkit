@@ -1,11 +1,7 @@
-name: Release
+name: "Release"
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Release version without the leading v, for example 1.0.0"
-        required: false
   push:
     branches:
       - main
@@ -34,17 +30,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          else
-            version="$(
-              PYTHONPATH=src python - <<'PY'
+          version="$(
+            PYTHONPATH=src python - <<'PY'
 from codex_session_toolkit import __version__
 
 print(__version__)
 PY
-            )"
-          fi
+          )"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
@@ -107,11 +99,7 @@ PY
           zipball="$output_dir/codex-session-toolkit-$version.zip"
 
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release edit "$tag" \
-              --title "$tag" \
-              --notes-file "$RUNNER_TEMP/release-notes.md" \
-              --draft=false \
-              --prerelease=false
+            echo "Release $tag already exists."
           else
             gh release create "$tag" \
               --title "$tag" \
