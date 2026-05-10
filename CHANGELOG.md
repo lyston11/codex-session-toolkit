@@ -15,25 +15,31 @@
 
 ### Skills
 
-- TUI Skill deletion now supports multi-select deletion and delete-all for local custom Skills, matching archived session cleanup
+- TUI Skill deletion now supports multi-select deletion and select-all for local custom Skills, matching archived session cleanup
 - `delete-skill` now accepts multiple Skill targets or `--all` for batch deletion from scripts
-- TUI Skill export is now one selectable local Skills browser flow with current, multi-select, and export-all actions
-- TUI Skills Bundle import is now one selectable browser flow with current, multi-select, and import-all actions
+- TUI Skill export is now one selectable local Skills browser flow with current and multi-select actions; `a` selects all matching custom Skills before export
+- TUI Skills Bundle import is now one selectable browser flow with current and multi-select actions; `a` selects all matching Skills Bundles before import
 - `export-skills` and `import-skill-bundle` now accept multiple selected inputs, while legacy all-import remains available for scripts
 
 ### Session Export
 
-- The recent-session browser now includes single, multi-select, and export-all actions, replacing the separate single-session export menu item
-- Project session browsing now supports exporting the current, selected, or all matching project sessions from the same list view
+- The recent-session browser now includes current and multi-select export actions, with `a` standardized as select-all for the current filter
+- Project session browsing now supports exporting the current or selected sessions from the same list view; `a` selects all matching project sessions before export
 - `export` now accepts multiple session ids, `--all`, and `--dry-run` for scriptable batch export
 
 ### Bundle Transfer
 
-- TUI Bundle import is now one selectable browser flow with current, multi-select, and import-all actions
+- TUI Bundle import is now one selectable browser flow with current and multi-select actions; `a` selects all matching Bundles before import
 - Bundle export-all menu labels no longer use the extra “批量” prefix
 - `import` now accepts multiple bundle inputs plus project remap options, while legacy `import-desktop-all` remains available for scripts
 - TUI Bundle import browsing now reuses cached scan results while navigating and uses import-oriented source/category labels
 - Bundle browsing is now separated from importing; the browse page manages local Bundle records and can delete selected filtered Bundles after confirmation
+
+### TUI Selection Shortcuts
+
+- The `a` key now has one standard meaning across multi-select feature pages: select every item matching the current filter
+- Export, import, and delete actions remain explicit through `e`, `i`, or `x` after selection
+- README and in-app help now document the unified select-all workflow
 
 ## 0.1.1 - 2026-04-30
 
