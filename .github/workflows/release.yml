@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without the leading v, for example 1.0.0"
+        required: false
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/release.yml"
+      - "CHANGELOG.md"
+      - "release.sh"
+      - "scripts/release/**"
+      - "src/codex_session_toolkit/__init__.py"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="$(
+              PYTHONPATH=src python - <<'PY'
+from codex_session_toolkit import __version__
+
+print(__version__)
+PY
+            )"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure Release Tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          git fetch --tags --force
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "Tag $tag already exists."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" -m "Release $tag"
+            git push origin "refs/tags/$tag"
+          fi
+
+      - name: Build Release Archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/codex-session-toolkit-release"
+          sh ./release.sh \
+            --version "${{ steps.version.outputs.version }}" \
+            --output-dir "$output_dir"
+          echo "output_dir=$output_dir" >> "$GITHUB_ENV"
+
+      - name: Extract Release Notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/release-notes.md"
+from pathlib import Path
+import os
+import re
+
+version = os.environ["VERSION"]
+text = Path("CHANGELOG.md").read_text(encoding="utf-8")
+match = re.search(
+    rf"^##\s+{re.escape(version)}(?:\s+-\s+.*)?\n(?P<body>.*?)(?=^##\s+|\Z)",
+    text,
+    re.M | re.S,
+)
+body = match.group("body").strip() if match else ""
+print(body or f"Release v{version}")
+PY
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          version="${{ steps.version.outputs.version }}"
+          tarball="$output_dir/codex-session-toolkit-$version.tar.gz"
+          zipball="$output_dir/codex-session-toolkit-$version.zip"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" \
+              --title "$tag" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              --draft=false \
+              --prerelease=false
+          else
+            gh release create "$tag" \
+              --title "$tag" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              --verify-tag
+          fi
+
+          gh release upload "$tag" "$tarball" "$zipball" --clobber
