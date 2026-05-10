@@ -66,9 +66,9 @@ class TuiBundleStateTests(unittest.TestCase):
         self.assertEqual(state.normalized_machine_filter, "machine-a")
         self.assertEqual(state.normalized_export_group_filter, "")
         self.assertEqual(state.current_machine_label, "Machine A")
-        self.assertEqual(state.current_export_group_label, "全部导出方式")
+        self.assertEqual(state.current_export_group_label, "全部类别")
         self.assertEqual(state.machine_options[1:], [("machine-a", "Machine A"), ("machine-b", "Machine B")])
-        self.assertEqual(state.export_group_options, [("", "全部导出方式"), ("active", "active"), ("single", "single")])
+        self.assertEqual(state.export_group_options, [("", "全部类别"), ("active", "active"), ("single", "single")])
 
     def test_build_machine_and_category_folder_options_are_grouped_and_ordered(self) -> None:
         entries = [

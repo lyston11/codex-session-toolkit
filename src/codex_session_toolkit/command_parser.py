@@ -74,7 +74,9 @@ def create_parser() -> argparse.ArgumentParser:
     clean_parser.add_argument("--dry-run", action="store_true")
 
     export_parser = subparsers.add_parser("export", help=command_help("export"))
-    export_parser.add_argument("session_id")
+    export_parser.add_argument("session_ids", nargs="*", help="Session ids to export")
+    export_parser.add_argument("--all", action="store_true", help="Export all local sessions")
+    export_parser.add_argument("--dry-run", action="store_true", help="Preview selected sessions without exporting")
     _add_skills_mode(export_parser, action="export")
 
     export_project_parser = subparsers.add_parser("export-project", help=command_help("export-project"))
@@ -100,12 +102,14 @@ def create_parser() -> argparse.ArgumentParser:
     _add_skills_mode(export_cli_parser, action="export")
 
     import_parser = subparsers.add_parser("import", help=command_help("import"))
-    import_parser.add_argument("input_value", help="Session id or bundle directory")
+    import_parser.add_argument("input_values", nargs="*", help="Session ids or bundle directories")
     import_parser.add_argument("--desktop-visible", action="store_true")
     import_parser.add_argument("--no-create-workspace", action="store_true", help="Do not create a missing cwd when making the import Desktop-visible")
     _add_bundle_source(import_parser, help_text="Which bundle categories to scan when importing by session id")
     import_parser.add_argument("--machine", default="", help="Only search bundles from this machine key")
     import_parser.add_argument("--export-group", default="", help="Only search bundles from this export folder (desktop/active/cli/project/single)")
+    import_parser.add_argument("--project", default="", help="Project folder key for project bundle imports")
+    import_parser.add_argument("--target-project-path", default="", help="Remap imported project cwd values to this local project path")
     _add_skills_mode(import_parser, action="import")
 
     import_all_parser = subparsers.add_parser("import-desktop-all", help=command_help("import-desktop-all"))
@@ -123,7 +127,8 @@ def create_parser() -> argparse.ArgumentParser:
     list_skills_parser.add_argument("--include-system", action="store_true", help="Include system/runtime Skills")
 
     export_skills_parser = subparsers.add_parser("export-skills", help=command_help("export-skills"))
-    _add_optional_pattern(export_skills_parser, help_text="Optional Skill name/path filter")
+    export_skills_parser.add_argument("input_values", nargs="*", help="Optional Skill names, relative directories, or local Skill directories")
+    export_skills_parser.add_argument("--pattern", default="", help="Optional Skill name/path filter")
     export_skills_parser.add_argument("--include-system", action="store_true", help="Include system/runtime Skills in the manifest")
     _add_skills_mode(export_skills_parser, action="export")
 
@@ -131,7 +136,7 @@ def create_parser() -> argparse.ArgumentParser:
     _add_optional_pattern(list_skill_bundles_parser)
 
     import_skill_bundle_parser = subparsers.add_parser("import-skill-bundle", help=command_help("import-skill-bundle"))
-    import_skill_bundle_parser.add_argument("input_value", help="Skill bundle directory or Skill name")
+    import_skill_bundle_parser.add_argument("input_values", nargs="+", help="Skill bundle directories or Skill names")
     _add_skills_mode(import_skill_bundle_parser, action="import")
 
     import_skill_bundles_parser = subparsers.add_parser("import-skill-bundles", help=command_help("import-skill-bundles"))

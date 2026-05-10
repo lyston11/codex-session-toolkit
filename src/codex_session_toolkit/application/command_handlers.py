@@ -36,8 +36,15 @@ from ..services.archived_sessions import delete_archived_sessions
 from ..services.backups import delete_session_backup, list_session_backups, restore_session_backup
 from ..services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles
 from ..services.clone import cleanup_clones, clone_to_provider
-from ..services.exporting import export_active_desktop_all, export_cli_all, export_desktop_all, export_project_sessions, export_session
-from ..services.importing import import_desktop_all, import_session
+from ..services.exporting import (
+    export_active_desktop_all,
+    export_cli_all,
+    export_desktop_all,
+    export_project_sessions,
+    export_selected_sessions,
+    export_session,
+)
+from ..services.importing import import_desktop_all, import_selected_bundles, import_session
 from ..services.github_sync import configure_github_proxy, connect_bundles_to_github, pull_bundles_from_github, sync_bundles_to_github
 from ..services.repair import repair_desktop
 from ..services.skills_transfer import (
@@ -49,7 +56,6 @@ from ..services.skills_transfer import (
     list_local_skills,
     list_skill_bundles,
 )
-from ..support import build_single_export_root
 
 
 CommandHandler = Callable[[argparse.Namespace, CodexPaths], int]
@@ -102,11 +108,20 @@ def _handle_clean_clones(args: argparse.Namespace, paths: CodexPaths) -> int:
 
 
 def _handle_export(args: argparse.Namespace, paths: CodexPaths) -> int:
+    if args.all or len(args.session_ids) != 1 or args.dry_run:
+        return print_batch_export_result(
+            export_selected_sessions(
+                paths,
+                args.session_ids,
+                all_sessions=args.all,
+                dry_run=args.dry_run,
+                skills_mode=args.skills_mode,
+            )
+        )
     return print_export_result(
         export_session(
             paths,
-            args.session_id,
-            bundle_root=build_single_export_root(paths.default_bundle_root),
+            args.session_ids[0],
             skills_mode=args.skills_mode,
         )
     )
@@ -139,10 +154,25 @@ def _handle_export_cli_all(args: argparse.Namespace, paths: CodexPaths) -> int:
 
 
 def _handle_import(args: argparse.Namespace, paths: CodexPaths) -> int:
+    if len(args.input_values) != 1 or args.project or args.target_project_path:
+        return print_batch_import_result(
+            import_selected_bundles(
+                paths,
+                args.input_values,
+                source_group=args.source,
+                machine_filter=args.machine,
+                export_group_filter=args.export_group,
+                project_filter=args.project,
+                target_project_path=args.target_project_path,
+                desktop_visible=args.desktop_visible,
+                create_missing_workspace=args.desktop_visible and not args.no_create_workspace,
+                skills_mode=args.skills_mode,
+            )
+        )
     return print_import_result(
         import_session(
             paths,
-            args.input_value,
+            args.input_values[0],
             source_group=args.source,
             machine_filter=args.machine,
             export_group_filter=args.export_group,
@@ -184,6 +214,7 @@ def _handle_export_skills(args: argparse.Namespace, paths: CodexPaths) -> int:
         export_skills(
             paths,
             pattern=args.pattern,
+            input_values=args.input_values,
             include_system=args.include_system,
             skills_mode=args.skills_mode,
         )
@@ -203,7 +234,7 @@ def _handle_import_skill_bundle(args: argparse.Namespace, paths: CodexPaths) -> 
     return print_skill_import_result(
         import_skill_bundle(
             paths,
-            args.input_value,
+            *args.input_values,
             skills_mode=args.skills_mode,
         )
     )

@@ -13,6 +13,7 @@ from .terminal import Ansi, render_box, style_text
 
 if TYPE_CHECKING:
     from .app import ToolkitTuiApp
+    from .view_models import BatchBundleImportSelection
     from .view_models import TuiMenuAction
 
 
@@ -40,6 +41,26 @@ def build_delete_archived_sessions_cli_args(*, dry_run: bool) -> list[str]:
     if dry_run:
         cli_args.append("--dry-run")
     return cli_args
+
+
+def build_bundle_import_cli_args(
+    selection: "BatchBundleImportSelection",
+    *,
+    create_missing_workspace: bool,
+) -> list[str]:
+    args = ["import", "--desktop-visible"]
+    if not create_missing_workspace:
+        args.append("--no-create-workspace")
+    if selection.machine_filter:
+        args.extend(["--machine", selection.machine_filter])
+    if selection.export_group_filter:
+        args.extend(["--export-group", selection.export_group_filter])
+    if selection.project_filter:
+        args.extend(["--project", selection.project_filter])
+    if selection.target_project_path:
+        args.extend(["--target-project-path", selection.target_project_path])
+    args.extend(str(entry.bundle_dir) for entry in selection.entries)
+    return args
 
 
 def _github_status_snapshot_with_progress(app: "ToolkitTuiApp", *, title: str):
@@ -288,7 +309,7 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
         return None, None
 
     if menu_action.action_id == "browse_bundles":
-        app._open_bundle_browser(mode="view")
+        app._open_bundle_browser(mode="browse")
         return None, None
 
     if menu_action.action_id == "list_skills":
@@ -307,71 +328,25 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
         app._open_archived_session_browser()
         return None, None
 
-    if menu_action.action_id == "export_one":
-        summary = app._open_session_browser(mode="select")
-        if not summary:
-            return None, None
-        return f"导出会话 {summary.session_id} 为 Bundle", ["export", summary.session_id]
-
     if menu_action.action_id == "export_skills_all":
-        return "导出全部自定义 Skills", ["export-skills"]
+        app._open_local_skill_browser(mode="view")
+        return None, None
 
     if menu_action.action_id == "export_skill_one":
-        selected = app._open_local_skill_browser(mode="select")
-        if not selected:
-            return None, None
-        if selected.location_kind != "custom":
-            app._show_detail_panel(
-                "导出 Skill",
-                ["系统/运行时 Skills 只记录元数据，不作为 standalone Skills Bundle 导出。"],
-                border_codes=(Ansi.DIM, Ansi.YELLOW),
-            )
-            return None, None
-        return f"导出 Skill {selected.relative_dir}", ["export-skills", selected.relative_dir]
+        app._open_local_skill_browser(mode="view")
+        return None, None
 
-    if menu_action.action_id == "import_one":
-        bundle = app._open_bundle_browser(mode="select")
-        if not bundle:
-            return None, None
-        create_missing_workspace = app._confirm_toggle(
-            title="导入单个 Bundle 为会话",
-            question="导入后会注册到 Desktop 左侧线程栏；如果工作目录缺失，是否自动创建",
-            yes_label="y",
-            no_label="n",
-            default_yes=False,
-        )
-        args = ["import", "--desktop-visible"]
-        if not create_missing_workspace:
-            args.append("--no-create-workspace")
-        args.append(str(bundle.bundle_dir))
-        action_name = f"导入 Bundle {bundle.session_id} 为会话（显示到 Desktop）"
-        if create_missing_workspace:
-            action_name += "（自动创建目录）"
-        return action_name, args
+    if menu_action.action_id == "import_bundles":
+        app._open_bundle_browser(mode="import")
+        return None, None
 
     if menu_action.action_id == "import_skill_bundle":
-        bundle = app._open_skill_bundle_browser(mode="select")
-        if not bundle:
-            return None, None
-        return f"导入 Skills Bundle {bundle.bundle_dir.name}", ["import-skill-bundle", str(bundle.bundle_dir)]
+        app._open_skill_bundle_browser(mode="view")
+        return None, None
 
     if menu_action.action_id == "import_skill_bundles":
-        machine_filter = app._prompt_value(
-            title="批量导入 Skills Bundle",
-            prompt_label="来源机器过滤",
-            help_lines=[
-                "留空表示导入全部 standalone Skills Bundle。",
-                "也可以输入来源机器 key 或 label，只导入这一台设备导出的 Skills Bundle。",
-            ],
-            allow_empty=True,
-        )
-        args = ["import-skill-bundles"]
-        if machine_filter:
-            args.extend(["--machine", machine_filter])
-        action_name = "批量导入 Skills Bundle"
-        if machine_filter:
-            action_name += f"（{machine_filter}）"
-        return action_name, args
+        app._open_skill_bundle_browser(mode="view")
+        return None, None
 
     if menu_action.action_id == "github_status":
         app._show_github_sync_status()
@@ -423,27 +398,17 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
                 create_question = "导入后会注册到 Desktop 左侧线程栏；目标项目路径不存在，是否先创建后再导入"
                 default_yes = True
         create_missing_workspace = app._confirm_toggle(
-            title="批量导入 Bundle 为会话",
+            title="导入 Bundle 为会话",
             question=create_question,
             yes_label="y",
             no_label="n",
             default_yes=default_yes,
         )
-        args = ["import-desktop-all", "--desktop-visible"]
-        if not create_missing_workspace:
-            args.append("--no-create-workspace")
-        if selection.machine_filter:
-            args.extend(["--machine", selection.machine_filter])
-        if selection.export_group_filter:
-            args.extend(["--export-group", selection.export_group_filter])
-        if selection.project_filter:
-            args.extend(["--project", selection.project_filter])
-        if selection.target_project_path:
-            args.extend(["--target-project-path", selection.target_project_path])
-        action_name = f"批量导入 {selection.machine_label}/{selection.export_group_label}（{len(selection.entries)} 个 Bundle）"
+        args = build_bundle_import_cli_args(selection, create_missing_workspace=create_missing_workspace)
+        action_name = f"导入 {selection.machine_label}/{selection.export_group_label}（{len(selection.entries)} 个 Bundle）"
         if selection.project_label:
             action_name = (
-                f"批量导入 {selection.machine_label}/{selection.export_group_label}/"
+                f"导入 {selection.machine_label}/{selection.export_group_label}/"
                 f"{selection.project_label}（{len(selection.entries)} 个 Bundle）"
             )
         action_name += "（显示到 Desktop）"

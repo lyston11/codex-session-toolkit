@@ -65,7 +65,7 @@ def build_bundle_filter_state(
 
     normalized_machine_filter = machine_filter if machine_filter in seen_machine_keys else ""
 
-    export_group_options = [("", "全部导出方式")]
+    export_group_options = [("", "全部类别")]
     seen_export_groups = {""}
     for export_group in EXPORT_GROUP_ORDER:
         if export_group in seen_export_groups:
@@ -99,7 +99,7 @@ def build_bundle_filter_state(
         ),
         current_export_group_label=next(
             (label for key, label in export_group_options if key == normalized_export_group_filter),
-            "全部导出方式",
+            "全部类别",
         ),
     )
 

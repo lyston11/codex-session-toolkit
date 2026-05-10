@@ -59,21 +59,29 @@ def export_skills(
     paths: CodexPaths,
     *,
     pattern: str = "",
+    input_values: Sequence[str] = (),
     bundle_root: Optional[Path] = None,
     include_system: bool = False,
     skills_mode: str = "best-effort",
 ) -> SkillExportResult:
+    selected_inputs = [value for value in input_values if value]
     machine_key = detect_machine_key()
     machine_label = detect_machine_label()
     resolved_root = normalize_bundle_root(paths, bundle_root, paths.skills_bundle_root)
-    export_root = build_skills_export_root(resolved_root, "all" if not pattern else "single", machine_key)
+    export_group = "all" if not pattern and not selected_inputs else "single" if pattern or len(selected_inputs) == 1 else "selected"
+    export_root = build_skills_export_root(resolved_root, export_group, machine_key)
     export_root.parent.mkdir(parents=True, exist_ok=True)
 
-    local_skills = list_local_skills(paths, pattern=pattern, include_system=include_system)
+    local_skills = _selected_local_skills(
+        paths,
+        pattern=pattern,
+        input_values=selected_inputs,
+        include_system=include_system,
+    )
     exportable = [summary for summary in local_skills if summary.location_kind == "custom"]
     skipped_count = len(local_skills) - len(exportable)
-    if pattern and not exportable:
-        raise ToolkitError(f"No matching custom Skills found: {pattern}")
+    if (pattern or selected_inputs) and not exportable:
+        raise ToolkitError(f"No matching custom Skills found: {_skill_selection_label(pattern, selected_inputs)}")
 
     stage_root = Path(tempfile.mkdtemp(prefix=".skills.tmp.", dir=str(export_root.parent)))
     stage_dir = stage_root / export_root.name
@@ -92,7 +100,7 @@ def export_skills(
             exported_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             machine_label=machine_label,
             machine_key=machine_key,
-            export_group="all" if not pattern else "single",
+            export_group=export_group,
             skill_count=len(exportable),
             bundled_count=bundle_result.manifest.bundled_skill_count,
         )
@@ -172,10 +180,34 @@ def list_skill_bundles(
 def import_skill_bundle(
     paths: CodexPaths,
     input_value: str,
+    *input_values: str,
+    skills_mode: str = "best-effort",
+) -> SkillImportResult:
+    return import_selected_skill_bundles(
+        paths,
+        [input_value, *input_values],
+        skills_mode=skills_mode,
+    )
+
+
+def import_selected_skill_bundles(
+    paths: CodexPaths,
+    input_values: Sequence[str],
     *,
     skills_mode: str = "best-effort",
 ) -> SkillImportResult:
-    bundle_dir = _resolve_skill_bundle(paths, input_value)
+    if not input_values:
+        raise ToolkitError("Skill bundle input is required.")
+    bundle_dirs = _resolve_skill_bundle_dirs(paths, input_values)
+    return _import_skill_bundle_dirs(paths, bundle_dirs, result_bundle_dir=bundle_dirs[0], skills_mode=skills_mode)
+
+
+def _import_one_skill_bundle_dir(
+    paths: CodexPaths,
+    bundle_dir: Path,
+    *,
+    skills_mode: str,
+) -> SkillImportResult:
     _assert_skill_bundle(bundle_dir)
     manifest = read_skills_manifest(bundle_dir)
     if manifest is None:
@@ -209,14 +241,84 @@ def import_all_skill_bundles(
         bundle for bundle in list_skill_bundles(paths)
         if not machine_filter or bundle.source_machine_key == machine_filter or bundle.source_machine == machine_filter
     ]
+    return _import_skill_bundle_dirs(
+        paths,
+        [bundle.bundle_dir for bundle in bundles],
+        result_bundle_dir=paths.skills_bundle_root,
+        skills_mode=skills_mode,
+    )
+
+
+def _selected_local_skills(
+    paths: CodexPaths,
+    *,
+    pattern: str,
+    input_values: Sequence[str],
+    include_system: bool,
+) -> list[LocalSkillSummary]:
+    if not input_values:
+        return list_local_skills(paths, pattern=pattern, include_system=include_system)
+    if pattern:
+        raise ToolkitError("Pass either a pattern or selected Skills, not both.")
+
+    available = collect_local_skill_summaries(paths.home, include_system=include_system)
+    targets: list[LocalSkillSummary] = []
+    seen: set[tuple[str, str]] = set()
+    for input_value in input_values:
+        allow_many = False
+        matches = _resolve_local_skill_matches(available, input_value)
+        if not matches:
+            matches = [
+                summary for summary in list_local_skills(paths, pattern=input_value, include_system=include_system)
+                if summary.location_kind == "custom"
+            ]
+            allow_many = True
+        if not matches:
+            raise ToolkitError(f"Custom Skill not found: {input_value}")
+        if len(matches) > 1 and not allow_many:
+            roots = ", ".join(sorted({match.source_root for match in matches}))
+            raise ToolkitError(f"Multiple matching Skills found in {roots}; pass an exact Skill directory")
+        for target in matches:
+            key = (target.source_root, target.relative_dir)
+            if key not in seen:
+                targets.append(target)
+                seen.add(key)
+    return targets
+
+
+def _skill_selection_label(pattern: str, input_values: Sequence[str]) -> str:
+    if pattern:
+        return pattern
+    return ", ".join(input_values) if input_values else "all"
+
+
+def _resolve_skill_bundle_dirs(paths: CodexPaths, input_values: Sequence[str]) -> list[Path]:
+    bundle_dirs: list[Path] = []
+    seen: set[str] = set()
+    for input_value in input_values:
+        bundle_dir = _resolve_skill_bundle(paths, input_value)
+        dir_key = _path_key(bundle_dir)
+        if dir_key not in seen:
+            bundle_dirs.append(bundle_dir)
+            seen.add(dir_key)
+    return bundle_dirs
+
+
+def _import_skill_bundle_dirs(
+    paths: CodexPaths,
+    bundle_dirs: Sequence[Path],
+    *,
+    result_bundle_dir: Path,
+    skills_mode: str,
+) -> SkillImportResult:
     warnings: list[OperationWarning] = []
     restored = already = conflicts = missing = failed = 0
-    for bundle in bundles:
+    for bundle_dir in bundle_dirs:
         try:
-            result = import_skill_bundle(paths, str(bundle.bundle_dir), skills_mode=skills_mode)
+            result = _import_one_skill_bundle_dir(paths, bundle_dir, skills_mode=skills_mode)
         except ToolkitError as exc:
             failed += 1
-            warnings.append(OperationWarning(code="restore_skills_failed", path=str(bundle.bundle_dir), detail=str(exc)))
+            warnings.append(OperationWarning(code="restore_skills_failed", path=str(bundle_dir), detail=str(exc)))
             continue
         restored += result.restored_count
         already += result.already_present_count
@@ -225,7 +327,7 @@ def import_all_skill_bundles(
         failed += result.failed_count
         warnings.extend(result.warnings)
     return SkillImportResult(
-        bundle_dir=paths.skills_bundle_root,
+        bundle_dir=result_bundle_dir,
         restored_count=restored,
         already_present_count=already,
         conflict_skipped_count=conflicts,
@@ -350,10 +452,25 @@ def _resolve_local_skill_delete_matches(
     candidates = _collect_local_skill_delete_candidates(paths)
     if source_root:
         candidates = [candidate for candidate in candidates if candidate.source_root == source_root]
+    return _resolve_local_skill_matches(candidates, input_value)
+
+
+def _resolve_local_skill_matches(candidates: Sequence[LocalSkillSummary], input_value: str) -> list[LocalSkillSummary]:
+    input_value = input_value.strip()
+    candidate_path = Path(input_value).expanduser()
+    resolved_input = _path_key(candidate_path) if candidate_path.is_absolute() else ""
     return [
         candidate for candidate in candidates
         if input_value in {candidate.name, candidate.relative_dir, str(candidate.skill_dir)}
+        or (resolved_input and _path_key(candidate.skill_dir) == resolved_input)
     ]
+
+
+def _path_key(path: Path) -> str:
+    try:
+        return str(path.expanduser().resolve())
+    except OSError:
+        return str(path.expanduser())
 
 
 def _collect_local_skill_delete_candidates(paths: CodexPaths) -> list[LocalSkillSummary]:

@@ -86,14 +86,14 @@ codex-session-toolkit
 
 ### Session / Browse
 
-用于查看、搜索、筛选和按项目导出会话。
+用于查看、搜索、筛选和导出会话。
 
-- 浏览最近会话
+- 浏览并导出最近会话
 - 搜索 session id、标题、预览、provider、cwd
 - 查看会话详情
-- 导出单个会话为 Bundle
+- 支持单个、多选和全部本机会话导出为 Bundle
 - 按项目路径查看该项目下的会话
-- 按项目批量导出全部匹配会话
+- 支持按项目单个、多选和全部匹配会话导出为 Bundle
 
 项目导出路径：
 
@@ -105,16 +105,15 @@ codex-session-toolkit
 
 用于管理会话 Bundle。
 
-- 浏览 `./codex_bundles/` 中的会话 Bundle
+- 浏览 `./codex_bundles/` 中的会话 Bundle，并可在浏览页勾选后删除本地 Bundle
 - 校验 Bundle manifest、session JSONL、history JSONL
 - 导出全部 Desktop 会话
-- 导出 active Desktop 会话
+- 导出全部 active Desktop 会话
 - 导出全部 CLI 会话
-- 导入单个 Bundle 为会话
-- 按 `设备 -> 分类 -> 项目` 批量导入
+- 导入 Bundle 为会话使用单独入口，支持当前、勾选多条和全部匹配项
 - 导入 project 分类时，把源机器 cwd 映射到当前机器项目目录
 - 导入时维护 `session_index.jsonl`、Desktop `threads` 表、workspace roots 和侧栏状态
-- 批量导入会把导入线程写入 Desktop 侧栏顺序和 workspace hint，并提升到 Desktop 最近线程池前部
+- 多选/全部导入会把导入线程写入 Desktop 侧栏顺序和 workspace hint，并提升到 Desktop 最近线程池前部
 - 导入到 Desktop 时会自动 pin 导入线程，避免历史会话过多时只在 TUI 可见
 - 选择显示到 Desktop 时，归档来源的 Bundle 会导入为 active 会话，避免只在 TUI 可见而不出现在 Desktop 主线程栏
 
@@ -125,12 +124,10 @@ codex-session-toolkit
 用于独立迁移自定义 Skills。
 
 - 浏览本机 Skills，默认只显示自定义 Skills
-- 导出单个自定义 Skill
-- 导出全部自定义 Skills
+- 在同一个 Skills 列表中导出当前、勾选多条或全部匹配自定义 Skills
 - 浏览 standalone Skills Bundle
-- 导入单个 Skills Bundle
-- 批量导入 Skills Bundle
-- 删除本机自定义 Skill，删除前确认
+- 在同一个 Skills Bundle 列表中导入当前、勾选多条或全部匹配 Bundle
+- 删除本机自定义 Skills，删除前确认
 - 删除 Skills 列表支持 `Space` 多选、`x` 删除选中/当前、`a` 删除全部自定义 Skills
 
 `.agents/skills/foo` 与 `.codex/skills/foo` 会按同一个相对 Skill 识别，避免重复导入。
@@ -271,11 +268,10 @@ socks5://127.0.0.1:7890
 
 1. 把另一台机器的 `./codex_bundles/` 拷贝过来，或从独立 GitHub Bundle 仓库拉取。
 2. 进入 `Bundle / Transfer`。
-3. 选择 `批量导入 Bundle 为会话`。
-4. 依次选择 `设备 -> project 分类 -> 项目文件夹`。
-5. 查看工具识别出的当前机器项目路径。
-6. 必要时修改目标项目路径。
-7. 选择是否自动创建缺失目录。
+3. 选择 `导入 Bundle 为会话`。
+4. 用 `s/m/l` 筛选到 project Bundle，空格勾选或按 `a` 导入全部匹配项。
+5. 查看工具识别出的当前机器项目路径，必要时修改目标项目路径。
+6. 选择是否自动创建缺失目录。
 8. 执行导入。
 
 导入不会强制进入 GitHub 拉取流程。用户手动拷贝 Bundle 后，可以直接导入。
@@ -285,15 +281,17 @@ socks5://127.0.0.1:7890
 源机器：
 
 1. 进入 `Skills / Transfer`。
-2. 选择 `导出全部自定义 Skills`。
-3. 得到 `./codex_bundles/<machine>/skills/all/<timestamp>/`。
+2. 选择 `浏览并导出本机 Skills`。
+3. 按 `Space` 勾选后按 `e` 导出，或直接按 `a` 导出全部匹配自定义 Skills。
+4. 得到 `./codex_bundles/<machine>/skills/<single|selected|all>/<timestamp>/`。
 
 目标机器：
 
 1. 进入 `Skills / Transfer`。
-2. 选择 `导入单个 Skills Bundle` 或 `批量导入 Skills Bundle`。
-3. 内容一致的 Skill 会直接复用。
-4. 内容冲突默认跳过，不覆盖本机版本。
+2. 选择 `浏览并导入 Skills Bundle`。
+3. 按 `Space` 勾选后按 `i` 导入，或直接按 `a` 导入全部匹配 Skills Bundle。
+4. 内容一致的 Skill 会直接复用。
+5. 内容冲突默认跳过，不覆盖本机版本。
 
 ### 找回导入覆盖前的会话
 
@@ -469,17 +467,17 @@ Provider 识别顺序：
 | 按键 | 作用 |
 |---|---|
 | `/` | 搜索会话、Bundle、Skill 或备份 |
-| `Enter` | 打开当前条目的操作面板，选择模式下直接确认 |
+| `Enter` | 打开当前条目详情，选择模式下直接确认 |
 | `d` | 查看详情 |
-| `e` | 在会话列表中导出当前会话 |
+| `e` | 在会话/Skills 列表中导出当前或已勾选条目 |
 | `p` | 在项目会话浏览器中重新输入项目路径 |
-| `x` | 在项目会话浏览器导出当前项目全部会话；在 Skills 列表导出全部自定义 Skills；在备份列表删除备份 |
-| `Space` | 在归档会话删除列表中勾选或取消勾选 |
-| `a` | 在归档会话删除列表中删除全部归档会话 |
-| `s` | 切换 Bundle 导出方式 |
-| `m` | 按导出机器切换 Bundle 搜索范围 |
-| `l` | 切换显示全部历史 Bundle / 仅显示最新 Bundle |
-| `i` / `v` | 导入当前 Bundle / 导入并自动创建缺失目录 |
+| `x` | 在删除类浏览器中删除选中/当前条目 |
+| `Space` | 在可批量操作的列表中勾选或取消勾选 |
+| `a` | 在 Bundle 浏览页全选当前筛选结果；在导入页导入全部匹配；其他页面按页内提示执行全部操作 |
+| `s` | 按 Bundle 类别筛选 |
+| `m` | 按来源机器筛选 Bundle |
+| `l` | 切换历史范围：全部历史 / 仅最新 |
+| `i` | 在 Bundle 浏览页删除选中/当前；在导入页导入选中/当前 |
 | `g` | 在 Skills 列表切换是否显示系统/运行时 Skills |
 | `r` | 在 Skills 列表删除自定义 Skill；在备份列表恢复备份 |
 

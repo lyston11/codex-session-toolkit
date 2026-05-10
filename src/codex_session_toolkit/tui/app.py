@@ -59,10 +59,8 @@ from .terminal import (
 )
 from .terminal_io import read_key
 from ..support import normalize_project_path
-from .ui_panels import bundle_action_center as _bundle_action_center_flow
 from .ui_panels import render_home as _render_home_flow
 from .ui_panels import render_section_page as _render_section_page_flow
-from .ui_panels import session_action_center as _session_action_center_flow
 from .ui_panels import show_detail_panel as _show_detail_panel_flow
 from .ui_panels import tui_help_text as _tui_help_text_flow
 from .menu_catalog import SECTION_NOTES, TUI_ACTION_NOTES, build_tui_menu_actions, build_tui_menu_sections
@@ -280,7 +278,7 @@ class ToolkitTuiApp:
         export_group_filter: str,
         latest_only: bool,
         source_group: str = "all",
-        limit: int = 240,
+        limit: Optional[int] = 240,
     ) -> Tuple[BundleBrowserSnapshot, str, str]:
         return _bundle_browser_snapshot_flow(
             self,
@@ -420,12 +418,6 @@ class ToolkitTuiApp:
             lines,
             border_codes=border_codes,
         )
-
-    def _session_action_center(self, summary: SessionSummary) -> None:
-        return _session_action_center_flow(self, summary)
-
-    def _bundle_action_center(self, bundle: BundleSummary) -> None:
-        return _bundle_action_center_flow(self, bundle)
 
     def _open_session_browser(self, *, mode: str) -> Optional[SessionSummary]:
         return _open_session_browser_flow(self, mode=mode)

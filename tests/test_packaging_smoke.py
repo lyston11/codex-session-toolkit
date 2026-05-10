@@ -322,36 +322,43 @@ class PackagingSmokeTests(unittest.TestCase):
                 danger=False,
             )
 
-    def test_tui_single_bundle_import_registers_desktop_without_creating_workspace_by_default(self) -> None:
+    def test_tui_bundle_import_menu_opens_bundle_browser(self) -> None:
         test_case = self
 
         class ImportApp:
-            def _open_bundle_browser(self, *, mode):
-                test_case.assertEqual(mode, "select")
-                return SimpleNamespace(
-                    session_id="demo-session",
-                    bundle_dir=Path("/tmp/codex_bundles/machine/sessions/single/demo-session"),
-                )
+            def __init__(self) -> None:
+                self.open_calls = []
 
-            def _confirm_toggle(self, **kwargs):
-                test_case.assertIn("Desktop 左侧线程栏", kwargs["question"])
-                return False
+            def _open_bundle_browser(self, *, mode):
+                test_case.assertEqual(mode, "import")
+                self.open_calls.append(mode)
 
         action_name, cli_args = resolve_menu_action_request(
             ImportApp(),
-            SimpleNamespace(action_id="import_one", label="导入单个 Bundle 为会话", cli_args=("import",)),
+            SimpleNamespace(action_id="import_bundles", label="导入 Bundle 为会话", cli_args=("import",)),
         )
 
-        self.assertEqual(action_name, "导入 Bundle demo-session 为会话（显示到 Desktop）")
-        self.assertEqual(
-            cli_args,
-            [
-                "import",
-                "--desktop-visible",
-                "--no-create-workspace",
-                "/tmp/codex_bundles/machine/sessions/single/demo-session",
-            ],
+        self.assertIsNone(action_name)
+        self.assertIsNone(cli_args)
+
+    def test_tui_bundle_browse_menu_opens_management_browser(self) -> None:
+        test_case = self
+
+        class BrowseApp:
+            def __init__(self) -> None:
+                self.open_calls = []
+
+            def _open_bundle_browser(self, *, mode):
+                test_case.assertEqual(mode, "browse")
+                self.open_calls.append(mode)
+
+        action_name, cli_args = resolve_menu_action_request(
+            BrowseApp(),
+            SimpleNamespace(action_id="browse_bundles", label="浏览 Bundle", cli_args=("list-bundles",)),
         )
+
+        self.assertIsNone(action_name)
+        self.assertIsNone(cli_args)
 
     def test_tui_batch_import_registers_desktop_and_keeps_workspace_creation_optional(self) -> None:
         test_case = self
@@ -359,7 +366,10 @@ class PackagingSmokeTests(unittest.TestCase):
         class ImportApp:
             def _select_batch_bundle_import_scope(self):
                 return SimpleNamespace(
-                    entries=[object(), object()],
+                    entries=[
+                        SimpleNamespace(bundle_dir=Path("/tmp/codex_bundles/studio-mac/sessions/desktop/session-a")),
+                        SimpleNamespace(bundle_dir=Path("/tmp/codex_bundles/studio-mac/sessions/desktop/session-b")),
+                    ],
                     machine_filter="studio-mac",
                     machine_label="Studio Mac",
                     export_group_filter="desktop",
@@ -375,20 +385,22 @@ class PackagingSmokeTests(unittest.TestCase):
 
         action_name, cli_args = resolve_menu_action_request(
             ImportApp(),
-            SimpleNamespace(action_id="import_desktop_all", label="批量导入 Bundle 为会话", cli_args=("import-desktop-all",)),
+            SimpleNamespace(action_id="import_desktop_all", label="导入 Bundle 为会话", cli_args=("import-desktop-all",)),
         )
 
-        self.assertEqual(action_name, "批量导入 Studio Mac/Desktop（2 个 Bundle）（显示到 Desktop）")
+        self.assertEqual(action_name, "导入 Studio Mac/Desktop（2 个 Bundle）（显示到 Desktop）")
         self.assertEqual(
             cli_args,
             [
-                "import-desktop-all",
+                "import",
                 "--desktop-visible",
                 "--no-create-workspace",
                 "--machine",
                 "studio-mac",
                 "--export-group",
                 "desktop",
+                "/tmp/codex_bundles/studio-mac/sessions/desktop/session-a",
+                "/tmp/codex_bundles/studio-mac/sessions/desktop/session-b",
             ],
         )
 
@@ -398,7 +410,7 @@ class PackagingSmokeTests(unittest.TestCase):
         class ImportApp:
             def _select_batch_bundle_import_scope(self):
                 return SimpleNamespace(
-                    entries=[object()],
+                    entries=[SimpleNamespace(bundle_dir=Path("/tmp/codex_bundles/work-laptop/sessions/project/demo/session-a"))],
                     machine_filter="work-laptop",
                     machine_label="Work Laptop",
                     export_group_filter="project",
@@ -416,14 +428,14 @@ class PackagingSmokeTests(unittest.TestCase):
         with patch("codex_session_toolkit.tui.action_flows.Path.exists", return_value=False):
             action_name, cli_args = resolve_menu_action_request(
                 ImportApp(),
-                SimpleNamespace(action_id="import_desktop_all", label="批量导入 Bundle 为会话", cli_args=("import-desktop-all",)),
+                SimpleNamespace(action_id="import_desktop_all", label="导入 Bundle 为会话", cli_args=("import-desktop-all",)),
             )
 
-        self.assertEqual(action_name, "批量导入 Work Laptop/Project/demo-project（1 个 Bundle）（显示到 Desktop）（自动创建目录）")
+        self.assertEqual(action_name, "导入 Work Laptop/Project/demo-project（1 个 Bundle）（显示到 Desktop）（自动创建目录）")
         self.assertEqual(
             cli_args,
             [
-                "import-desktop-all",
+                "import",
                 "--desktop-visible",
                 "--machine",
                 "work-laptop",
@@ -433,6 +445,7 @@ class PackagingSmokeTests(unittest.TestCase):
                 "demo-project",
                 "--target-project-path",
                 "/tmp/local-demo-project",
+                "/tmp/codex_bundles/work-laptop/sessions/project/demo/session-a",
             ],
         )
 
@@ -884,7 +897,7 @@ class PackagingSmokeTests(unittest.TestCase):
                 raise AssertionError("main menu should not delete Skills directly")
 
         app = DeleteSkillApp()
-        execute_menu_action(app, SimpleNamespace(action_id="delete_skill", label="删除本机 Skill"))
+        execute_menu_action(app, SimpleNamespace(action_id="delete_skill", label="删除本机 Skills"))
 
         self.assertEqual(app.open_calls, ["delete"])
 
@@ -917,9 +930,6 @@ class PackagingSmokeTests(unittest.TestCase):
             def _run_toolkit(self, args):
                 raise AssertionError("dry-run loop should not execute the fallback runner in this test")
 
-            def _session_action_center(self, summary):
-                raise AssertionError("x hotkey should export, not open session action center")
-
             def _show_detail_panel(self, *args, **kwargs):
                 raise AssertionError("project export should not show a detail panel in this test")
 
@@ -935,7 +945,7 @@ class PackagingSmokeTests(unittest.TestCase):
             model_provider="demo-provider",
         )
         with patch("codex_session_toolkit.tui.browser_flows.get_project_session_summaries", return_value=[summary]):
-            with patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["x", "q"]):
+            with patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["a", "q"]):
                 with redirect_stdout(io.StringIO()):
                     open_project_session_browser(app)
 
@@ -978,6 +988,51 @@ class PackagingSmokeTests(unittest.TestCase):
         )
         self.assertEqual(context.entry_command, APP_COMMAND)
 
+    def test_export_parser_accepts_multiple_session_ids_and_all(self) -> None:
+        parser = build_command_parser()
+
+        multi = parser.parse_args(["export", "session-a", "session-b"])
+        self.assertEqual(multi.session_ids, ["session-a", "session-b"])
+        self.assertFalse(multi.all)
+
+        export_all = parser.parse_args(["export", "--all", "--dry-run"])
+        self.assertEqual(export_all.session_ids, [])
+        self.assertTrue(export_all.all)
+        self.assertTrue(export_all.dry_run)
+
+    def test_import_parser_accepts_multiple_bundles_and_project_mapping(self) -> None:
+        parser = build_command_parser()
+
+        parsed = parser.parse_args([
+            "import",
+            "--desktop-visible",
+            "--project",
+            "demo-project",
+            "--target-project-path",
+            "/tmp/demo-project",
+            "/tmp/bundle-a",
+            "/tmp/bundle-b",
+        ])
+
+        self.assertEqual(parsed.input_values, ["/tmp/bundle-a", "/tmp/bundle-b"])
+        self.assertTrue(parsed.desktop_visible)
+        self.assertEqual(parsed.project, "demo-project")
+        self.assertEqual(parsed.target_project_path, "/tmp/demo-project")
+
+    def test_skills_parsers_accept_multiple_selected_inputs(self) -> None:
+        parser = build_command_parser()
+
+        export_parsed = parser.parse_args(["export-skills", "/tmp/skill-a", "/tmp/skill-b"])
+        self.assertEqual(export_parsed.input_values, ["/tmp/skill-a", "/tmp/skill-b"])
+        self.assertEqual(export_parsed.pattern, "")
+
+        pattern_parsed = parser.parse_args(["export-skills", "--pattern", "demo"])
+        self.assertEqual(pattern_parsed.input_values, [])
+        self.assertEqual(pattern_parsed.pattern, "demo")
+
+        import_parsed = parser.parse_args(["import-skill-bundle", "/tmp/bundle-a", "/tmp/bundle-b"])
+        self.assertEqual(import_parsed.input_values, ["/tmp/bundle-a", "/tmp/bundle-b"])
+
     def test_tui_compat_wrappers_expose_explicit_lazy_exports(self) -> None:
         self.assertIn("ToolkitAppContext", tui_app_compat.__all__)
         self.assertIn("run_tui", tui_app_compat.__all__)
@@ -1005,7 +1060,7 @@ class PackagingSmokeTests(unittest.TestCase):
                 if action.action_id not in TUI_ACTION_SECTION_OVERRIDES:
                     self.assertEqual(action.section_id, command_domain(action.cli_args[0]))
 
-        self.assertEqual(actions_by_section["session"], {"list_sessions", "export_one", "project_sessions"})
+        self.assertEqual(actions_by_section["session"], {"list_sessions", "project_sessions"})
         self.assertEqual(
             actions_by_section["bundle"],
             {
@@ -1014,8 +1069,7 @@ class PackagingSmokeTests(unittest.TestCase):
                 "export_desktop_all",
                 "export_desktop_active",
                 "export_cli_all",
-                "import_one",
-                "import_desktop_all",
+                "import_bundles",
             },
         )
         self.assertEqual(
@@ -1046,11 +1100,7 @@ class PackagingSmokeTests(unittest.TestCase):
             actions_by_section["skills"],
             {
                 "list_skills",
-                "export_skill_one",
-                "export_skills_all",
                 "browse_skill_bundles",
-                "import_skill_bundle",
-                "import_skill_bundles",
                 "delete_skill",
             },
         )
@@ -1059,10 +1109,15 @@ class PackagingSmokeTests(unittest.TestCase):
         self.assertEqual(labels_by_action["browse_backups"], "管理会话备份")
         self.assertEqual(labels_by_action["delete_archived_sessions"], "删除归档会话")
         self.assertEqual(labels_by_action["clean_legacy"], "清理旧版无标记副本")
+        self.assertEqual(labels_by_action["list_sessions"], "浏览并导出会话")
         self.assertEqual(labels_by_action["project_sessions"], "按项目路径查看并导出会话")
-        self.assertEqual(labels_by_action["list_skills"], "浏览本机 Skills")
-        self.assertEqual(labels_by_action["export_skill_one"], "导出单个 Skill")
-        self.assertEqual(labels_by_action["delete_skill"], "删除本机 Skill")
+        self.assertEqual(labels_by_action["export_desktop_all"], "导出全部 Desktop 会话为 Bundle")
+        self.assertEqual(labels_by_action["export_desktop_active"], "导出全部 Active Desktop 会话为 Bundle")
+        self.assertEqual(labels_by_action["export_cli_all"], "导出全部 CLI 会话为 Bundle")
+        self.assertEqual(labels_by_action["import_bundles"], "导入 Bundle 为会话")
+        self.assertEqual(labels_by_action["list_skills"], "浏览并导出本机 Skills")
+        self.assertEqual(labels_by_action["browse_skill_bundles"], "浏览并导入 Skills Bundle")
+        self.assertEqual(labels_by_action["delete_skill"], "删除本机 Skills")
         self.assertEqual(labels_by_action["github_status"], "查看 GitHub 同步状态")
         self.assertEqual(labels_by_action["connect_github"], "连接独立 GitHub 仓库")
         self.assertEqual(labels_by_action["github_proxy"], "连接/断开代理")

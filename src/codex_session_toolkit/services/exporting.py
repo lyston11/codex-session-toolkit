@@ -22,10 +22,13 @@ from ..stores.session_files import (
     extract_last_timestamp,
     extract_session_field_from_file,
     find_session_file,
+    iter_session_files,
+    session_id_from_filename,
 )
 from ..stores.session_parser import normalize_session_text, parse_session_summary_file
 from ..support import (
     build_single_export_root,
+    build_machine_bundle_root,
     classify_session_kind,
     detect_machine_key,
     detect_machine_label,
@@ -206,6 +209,120 @@ def export_session(
         raise
     finally:
         shutil.rmtree(stage_root, ignore_errors=True)
+
+
+def export_selected_sessions(
+    paths: CodexPaths,
+    session_ids: list[str] | tuple[str, ...] = (),
+    *,
+    bundle_root: Optional[Path] = None,
+    dry_run: bool = False,
+    all_sessions: bool = False,
+    skills_mode: str = "best-effort",
+) -> BatchExportResult:
+    machine_key = detect_machine_key()
+    machine_label = detect_machine_label()
+    resolved_bundle_root = normalize_bundle_root(paths, bundle_root, paths.default_bundle_root)
+    export_root = build_single_export_root(resolved_bundle_root, machine_key)
+    machine_root = build_machine_bundle_root(resolved_bundle_root, machine_key)
+    selected_ids = _selected_session_ids(paths, session_ids, all_sessions=all_sessions)
+    summary_label = "全部本机会话" if all_sessions else "已选择"
+
+    base_result = BatchExportResult(
+        summary_label=summary_label,
+        bundle_root=resolved_bundle_root,
+        export_root=export_root,
+        machine_root=machine_root,
+        source_machine=machine_label,
+        source_machine_key=machine_key,
+        dry_run=dry_run,
+        active_only=False,
+        session_kind=("all" if all_sessions else "selected"),
+        session_ids=selected_ids,
+        success_ids=[],
+        failed_exports=[],
+        manifest_file=None,
+        selection_label=summary_label,
+        export_group="single",
+    )
+
+    if dry_run or not selected_ids:
+        return base_result
+
+    export_root.mkdir(parents=True, exist_ok=True)
+    success_ids: list[str] = []
+    failed_exports: list[tuple[str, str]] = []
+    total_skills_bundled = 0
+    warnings: list[OperationWarning] = []
+
+    for session_id in selected_ids:
+        try:
+            result = export_session(paths, session_id, bundle_root=export_root, skills_mode=skills_mode)
+            success_ids.append(session_id)
+            total_skills_bundled += result.skills_bundled_count
+            warnings.extend(result.warnings)
+        except (ToolkitError, OSError) as exc:
+            failed_exports.append((session_id, str(exc)))
+
+    manifest_file = write_batch_export_manifest(
+        export_root / "_selected_export_manifest.txt",
+        {
+            "exported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "session_kind": "all" if all_sessions else "selected",
+            "active_only": 0,
+            "count": len(success_ids),
+        },
+        success_ids,
+    )
+
+    return BatchExportResult(
+        summary_label=summary_label,
+        bundle_root=resolved_bundle_root,
+        export_root=export_root,
+        machine_root=machine_root,
+        source_machine=machine_label,
+        source_machine_key=machine_key,
+        dry_run=dry_run,
+        active_only=False,
+        session_kind=("all" if all_sessions else "selected"),
+        session_ids=selected_ids,
+        success_ids=success_ids,
+        failed_exports=failed_exports,
+        manifest_file=manifest_file,
+        selection_label=summary_label,
+        export_group="single",
+        total_skills_bundled=total_skills_bundled,
+        warnings=warnings,
+    )
+
+
+def _selected_session_ids(
+    paths: CodexPaths,
+    session_ids: list[str] | tuple[str, ...],
+    *,
+    all_sessions: bool,
+) -> list[str]:
+    if all_sessions and session_ids:
+        raise ToolkitError("Pass either --all or specific session ids, not both.")
+    if all_sessions:
+        raw_ids = [
+            session_id_from_filename(session_file) or ""
+            for session_file in iter_session_files(paths)
+        ]
+    else:
+        if not session_ids:
+            raise ToolkitError("Session id or --all is required.")
+        raw_ids = list(session_ids)
+
+    selected_ids: list[str] = []
+    seen: set[str] = set()
+    for raw_id in raw_ids:
+        session_id = validate_session_id(raw_id)
+        if session_id in seen:
+            continue
+        selected_ids.append(session_id)
+        seen.add(session_id)
+    return selected_ids
 
 
 def export_sessions_for_kind(

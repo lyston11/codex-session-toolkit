@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from ..errors import ToolkitError
@@ -25,10 +26,12 @@ if TYPE_CHECKING:
 def bundle_detail_lines(app: "ToolkitTuiApp", bundle: BundleSummary) -> List[str]:
     lines = [
         f"{style_text('Session ID', Ansi.DIM)} : {bundle.session_id}",
-        f"{style_text('导出机器', Ansi.DIM)}  : {bundle.source_machine or '（旧布局）'}",
-        f"{style_text('导出方式', Ansi.DIM)}  : {bundle.export_group_label or '（未识别）'}",
-        f"{style_text('导出时间', Ansi.DIM)}  : {bundle.exported_at or '（空）'}",
+        f"{style_text('来源位置', Ansi.DIM)}  : {_bundle_source_location_label(app, bundle)}",
+        f"{style_text('来源机器', Ansi.DIM)}  : {bundle.source_machine or '（旧布局）'}",
+        f"{style_text('Bundle 类别', Ansi.DIM)} : {bundle.export_group_label or '（未识别）'}",
+        f"{style_text('打包时间', Ansi.DIM)}  : {bundle.exported_at or '（空）'}",
         f"{style_text('Bundle 路径', Ansi.DIM)}: {bundle.bundle_dir}",
+        f"{style_text('来源路径', Ansi.DIM)}  : {_bundle_relative_source_path(app, bundle)}",
         f"{style_text('会话类型', Ansi.DIM)}  : {bundle.session_kind or '（空）'}",
         f"{style_text('工作目录', Ansi.DIM)}  : {bundle.session_cwd or '（空）'}",
         f"{style_text('标题', Ansi.DIM)}      : {bundle.thread_name or '（无标题）'}",
@@ -43,6 +46,58 @@ def bundle_detail_lines(app: "ToolkitTuiApp", bundle: BundleSummary) -> List[str
     return lines
 
 
+def _bundle_source_location_label(app: "ToolkitTuiApp", bundle: BundleSummary) -> str:
+    bundle_dir = bundle.bundle_dir.expanduser()
+    root_labels = [
+        ("codex_bundles", "local_bundle_workspace"),
+        ("旧 bundles", "legacy_bundle_root"),
+        ("旧 desktop", "legacy_desktop_bundle_root"),
+        ("codex_sessions", "legacy_session_bundle_workspace"),
+    ]
+    for label, attr_name in root_labels:
+        root = getattr(app.paths, attr_name, None)
+        if root is not None and _path_is_relative_to(bundle_dir, root.expanduser()):
+            return label
+    return {
+        "bundle": "Bundle 工作区",
+        "desktop": "Desktop 导出区",
+        "all": "Bundle",
+    }.get(bundle.source_group, bundle.source_group or "未知来源")
+
+
+def _bundle_relative_source_path(app: "ToolkitTuiApp", bundle: BundleSummary) -> str:
+    bundle_dir = bundle.bundle_dir.expanduser()
+    root_attrs = [
+        ("codex_bundles", "local_bundle_workspace"),
+        ("codex_sessions", "legacy_session_bundle_workspace"),
+        ("旧 bundles", "legacy_bundle_root"),
+        ("旧 desktop", "legacy_desktop_bundle_root"),
+    ]
+    for label, attr_name in root_attrs:
+        root = getattr(app.paths, attr_name, None)
+        if root is None:
+            continue
+        expanded_root = root.expanduser()
+        if _path_is_relative_to(bundle_dir, expanded_root):
+            try:
+                return f"{label}/{bundle_dir.relative_to(expanded_root)}"
+            except ValueError:
+                break
+    return str(bundle_dir)
+
+
+def _path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            return False
+
+
 def bundle_browser_snapshot(
     app: "ToolkitTuiApp",
     *,
@@ -51,7 +106,7 @@ def bundle_browser_snapshot(
     export_group_filter: str,
     latest_only: bool,
     source_group: str = "all",
-    limit: int = 240,
+    limit: Optional[int] = 240,
 ) -> Tuple[object, str, str]:
     from .view_models import BundleBrowserSnapshot
 

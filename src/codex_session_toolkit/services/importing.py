@@ -12,7 +12,7 @@ from typing import Optional
 from ..errors import ToolkitError
 from ..models import BatchImportResult, ImportResult, OperationWarning
 from ..paths import CodexPaths
-from ..services.import_planning import build_batch_import_plan
+from ..services.import_planning import build_batch_import_plan, build_selected_import_plan
 from ..services.provider import detect_provider
 from ..services.skill_sidecars import restore_bundle_skills_sidecar
 from ..stores.bundle_repository import (
@@ -434,7 +434,59 @@ def import_desktop_all(
         latest_only=latest_only,
         skills_mode=skills_mode,
     )
+    return _execute_batch_import_plan(
+        paths,
+        plan,
+        desktop_visible=desktop_visible,
+        create_missing_workspace=create_missing_workspace,
+        skills_mode=skills_mode,
+    )
 
+
+def import_selected_bundles(
+    paths: CodexPaths,
+    input_values: list[str] | tuple[str, ...],
+    *,
+    bundle_root: Optional[Path] = None,
+    source_group: str = "all",
+    machine_filter: str = "",
+    export_group_filter: str = "",
+    project_filter: str = "",
+    target_project_path: str = "",
+    latest_only: bool = False,
+    desktop_visible: bool = False,
+    create_missing_workspace: Optional[bool] = None,
+    skills_mode: str = "best-effort",
+) -> BatchImportResult:
+    plan = build_selected_import_plan(
+        paths,
+        input_values,
+        bundle_root=bundle_root,
+        source_group=source_group,
+        machine_filter=machine_filter,
+        export_group_filter=export_group_filter,
+        project_filter=project_filter,
+        target_project_path=target_project_path,
+        latest_only=latest_only,
+        skills_mode=skills_mode,
+    )
+    return _execute_batch_import_plan(
+        paths,
+        plan,
+        desktop_visible=desktop_visible,
+        create_missing_workspace=create_missing_workspace,
+        skills_mode=skills_mode,
+    )
+
+
+def _execute_batch_import_plan(
+    paths: CodexPaths,
+    plan,
+    *,
+    desktop_visible: bool,
+    create_missing_workspace: Optional[bool],
+    skills_mode: str,
+) -> BatchImportResult:
     if create_missing_workspace is None:
         create_missing_workspace = desktop_visible
 
@@ -526,7 +578,7 @@ def import_desktop_all(
         machine_label=plan.machine_label,
         export_group_filter=plan.export_group_filter,
         export_group_label=plan.export_group_label,
-        latest_only=latest_only,
+        latest_only=plan.latest_only,
         project_filter=plan.project_filter,
         project_label=plan.project_label,
         project_source_path=plan.project_source_path,

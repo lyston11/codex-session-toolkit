@@ -408,6 +408,15 @@ class BatchImportResult:
 
 
 @dataclass(frozen=True)
+class BundleDeleteResult:
+    bundle_dir: Path
+    session_id: str
+    dry_run: bool = False
+    deleted: bool = False
+    error: str = ""
+
+
+@dataclass(frozen=True)
 class RepairResult:
     provider: str
     dry_run: bool

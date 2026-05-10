@@ -24,8 +24,9 @@ from codex_session_toolkit.models import BundleSummary  # noqa: E402
 from codex_session_toolkit.presenters.reports import print_batch_import_result  # noqa: E402
 from codex_session_toolkit.services.backups import delete_session_backup, list_session_backups, restore_session_backup  # noqa: E402
 from codex_session_toolkit.services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles  # noqa: E402
+from codex_session_toolkit.services.bundle_management import delete_bundle_summaries  # noqa: E402
 from codex_session_toolkit.services.clone import clone_to_provider  # noqa: E402
-from codex_session_toolkit.services.exporting import export_active_desktop_all, export_desktop_all, export_project_sessions, export_session  # noqa: E402
+from codex_session_toolkit.services.exporting import export_active_desktop_all, export_desktop_all, export_project_sessions, export_selected_sessions, export_session  # noqa: E402
 from codex_session_toolkit.services.github_sync import (  # noqa: E402
     _conflict_paths,
     _git_proxy_env,
@@ -39,7 +40,7 @@ from codex_session_toolkit.services.github_sync import (  # noqa: E402
     sync_bundles_to_github,
 )
 from codex_session_toolkit.services.archived_sessions import delete_archived_sessions  # noqa: E402
-from codex_session_toolkit.services.importing import import_desktop_all, import_session  # noqa: E402
+from codex_session_toolkit.services.importing import import_desktop_all, import_selected_bundles, import_session  # noqa: E402
 from codex_session_toolkit.services.provider import detect_provider  # noqa: E402
 from codex_session_toolkit.services.repair import repair_desktop  # noqa: E402
 from codex_session_toolkit.services.skills_transfer import delete_local_skill, delete_local_skills, export_skills, import_skill_bundle, list_skill_bundles, list_local_skills  # noqa: E402
@@ -1569,6 +1570,53 @@ class CoreWorkflowTests(unittest.TestCase):
         latest = latest_distinct_bundle_summaries(rows)
         self.assertEqual([item.bundle_dir for item in latest], [Path("/tmp/desktop-active")])
 
+    def test_delete_bundle_summaries_deletes_only_valid_known_bundle_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            paths = CodexPaths(home=home)
+            session_id = "11111111-2222-4333-8444-555555555555"
+            bundle_dir = (
+                workspace
+                / "codex_bundles"
+                / "machine-a"
+                / "sessions"
+                / "single"
+                / "20260411-100000"
+                / session_id
+            )
+            write_bundle_manifest(bundle_dir, session_id=session_id)
+            outside_dir = Path(tmpdir) / "outside-bundle"
+            outside_dir.mkdir()
+            write_bundle_manifest(outside_dir, session_id="22222222-3333-4444-8555-666666666666")
+
+            with pushd(workspace):
+                summary = collect_known_bundle_summaries(paths, limit=None)[0]
+                dry_run = delete_bundle_summaries(paths, [summary], dry_run=True)
+                self.assertFalse(dry_run[0].deleted)
+                self.assertTrue(bundle_dir.exists())
+
+                deleted = delete_bundle_summaries(paths, [summary])
+                self.assertTrue(deleted[0].deleted)
+                self.assertFalse(bundle_dir.exists())
+
+                outside_summary = BundleSummary(
+                    source_group="bundle",
+                    session_id="22222222-3333-4444-8555-666666666666",
+                    bundle_dir=outside_dir,
+                    relative_path="sessions/x",
+                    updated_at="2026-04-11T10:00:00Z",
+                    exported_at="2026-04-11T10:00:00Z",
+                    thread_name="outside",
+                    session_cwd="/tmp/project",
+                    session_kind="desktop",
+                )
+                outside_result = delete_bundle_summaries(paths, [outside_summary])
+                self.assertFalse(outside_result[0].deleted)
+                self.assertIn("outside known bundle workspaces", outside_result[0].error)
+                self.assertTrue(outside_dir.exists())
+
     def test_clone_to_provider_creates_lineage_preserving_clone(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
@@ -1827,6 +1875,71 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertEqual([row[0] for row in time_rows], [source_root_session, source_nested_session])
             self.assertTrue(all(isinstance(row[1], int) and row[1] > 0 for row in time_rows))
             self.assertTrue(all(isinstance(row[2], int) and row[2] >= row[1] for row in time_rows))
+
+    def test_import_selected_bundles_supports_multiple_paths_and_project_remap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            write_config(src_home, "source-provider")
+            write_config(dst_home, "target-provider")
+            write_state_file(dst_home)
+            create_threads_db(dst_home)
+
+            source_project = workspace / "source-project"
+            nested_project = source_project / "packages" / "ui"
+            target_project = workspace / "local-project"
+            nested_project.mkdir(parents=True)
+
+            root_session = "11111111-aaaa-4aaa-8aaa-111111111111"
+            nested_session = "22222222-bbbb-4bbb-8bbb-222222222222"
+            write_session(
+                src_home,
+                root_session,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=source_project,
+                timestamp="2026-04-10T10:00:00Z",
+            )
+            write_history(src_home, root_session, "root project history")
+            write_session(
+                src_home,
+                nested_session,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=nested_project,
+                timestamp="2026-04-10T10:05:00Z",
+            )
+            write_history(src_home, nested_session, "nested project history")
+
+            src_paths = CodexPaths(home=src_home)
+            dst_paths = CodexPaths(home=dst_home)
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "Work-Laptop"):
+                export_result = export_project_sessions(src_paths, str(source_project))
+
+            selected_bundle_dirs = [str(path) for path in sorted(export_result.export_root.iterdir()) if path.is_dir()]
+            with pushd(workspace):
+                result = import_selected_bundles(
+                    dst_paths,
+                    selected_bundle_dirs,
+                    project_filter="source-project",
+                    target_project_path=str(target_project),
+                    desktop_visible=True,
+                )
+
+            self.assertEqual(sorted(path.name for path in result.success_dirs), [root_session, nested_session])
+            self.assertEqual(result.project_filter, "source-project")
+            self.assertEqual(result.target_project_path, str(target_project))
+            self.assertTrue(target_project.is_dir())
+            self.assertTrue((target_project / "packages" / "ui").is_dir())
+
+            imported_sessions = list(iter_session_files(dst_paths, active_only=False))
+            payload_by_id = {read_session_payload(path)["id"]: read_session_payload(path) for path in imported_sessions}
+            self.assertEqual(payload_by_id[root_session]["cwd"], str(target_project))
+            self.assertEqual(payload_by_id[nested_session]["cwd"], str(target_project / "packages" / "ui"))
 
     def test_export_validate_and_import_roundtrip_updates_desktop_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3470,6 +3583,42 @@ class CoreWorkflowTests(unittest.TestCase):
                 f"sessions/2026/04/10/rollout-2026-04-10T10-00-00-{session_id}.jsonl",
             )
 
+    def test_export_selected_sessions_supports_multiple_targets_and_all(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "source-provider")
+
+            first_id = "aaaaaaaa-1111-4111-8111-111111111111"
+            second_id = "bbbbbbbb-2222-4222-8222-222222222222"
+            third_id = "cccccccc-3333-4333-8333-333333333333"
+            for session_id in (first_id, second_id, third_id):
+                write_session(
+                    home,
+                    session_id,
+                    provider="source-provider",
+                    source="vscode",
+                    originator="Codex Desktop",
+                    cwd=workspace,
+                )
+                write_history(home, session_id, f"history {session_id}")
+
+            paths = CodexPaths(home=home)
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "Studio-Mac"):
+                dry_run = export_selected_sessions(paths, [first_id, second_id], dry_run=True)
+                self.assertEqual(dry_run.session_ids, [first_id, second_id])
+                self.assertFalse(dry_run.export_root.exists())
+
+                result = export_selected_sessions(paths, [first_id, second_id])
+                self.assertEqual(result.success_ids, [first_id, second_id])
+                self.assertTrue((result.export_root / first_id / "manifest.env").is_file())
+                self.assertTrue((result.export_root / second_id / "manifest.env").is_file())
+                self.assertTrue(result.manifest_file and result.manifest_file.is_file())
+
+                export_all = export_selected_sessions(paths, all_sessions=True)
+                self.assertEqual(set(export_all.success_ids), {first_id, second_id, third_id})
+
     def test_import_and_validate_accept_windows_manifest_relative_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
@@ -4346,6 +4495,42 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertEqual(
                 (dst_home / ".agents" / "skills" / "solo-skill" / "SKILL.md").read_text(encoding="utf-8"),
                 "solo content",
+            )
+
+    def test_standalone_skills_selected_export_and_import_multiple_bundles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            first_home = Path(tmpdir) / "first_home"
+            second_home = Path(tmpdir) / "second_home"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+
+            first_skill = write_test_skill(first_home / ".agents" / "skills", "first-skill", "first content")
+            second_skill = write_test_skill(second_home / ".codex" / "skills", "second-skill", "second content")
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                first_export = export_skills(CodexPaths(home=first_home), input_values=[str(first_skill)])
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineB"):
+                second_export = export_skills(CodexPaths(home=second_home), input_values=[str(second_skill)])
+
+            self.assertIn("/skills/single/", first_export.bundle_dir.as_posix())
+            self.assertIn("/skills/single/", second_export.bundle_dir.as_posix())
+
+            with pushd(workspace):
+                import_result = import_skill_bundle(
+                    CodexPaths(home=dst_home),
+                    str(first_export.bundle_dir),
+                    str(second_export.bundle_dir),
+                )
+
+            self.assertEqual(import_result.restored_count, 2)
+            self.assertEqual(
+                (dst_home / ".agents" / "skills" / "first-skill" / "SKILL.md").read_text(encoding="utf-8"),
+                "first content",
+            )
+            self.assertEqual(
+                (dst_home / ".codex" / "skills" / "second-skill" / "SKILL.md").read_text(encoding="utf-8"),
+                "second content",
             )
 
     def test_standalone_skills_import_skips_conflicting_skill_across_roots(self) -> None:

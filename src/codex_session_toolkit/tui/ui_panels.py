@@ -6,7 +6,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
-from .navigation_state import apply_list_key, selection_window
+from .navigation_state import selection_window
 from .terminal import (
     Ansi,
     align_line,
@@ -16,10 +16,8 @@ from .terminal import (
     render_box,
     style_text,
 )
-from .terminal_io import read_key
 
 if TYPE_CHECKING:
-    from ..models import BundleSummary, SessionSummary
     from .app import ToolkitTuiApp
 
 
@@ -37,108 +35,6 @@ def show_detail_panel(
     input(style_text("按 Enter 返回...", Ansi.DIM))
 
 
-def session_action_center(app: "ToolkitTuiApp", summary: "SessionSummary") -> None:
-    pointer = glyphs().get("pointer", ">")
-    actions = [
-        {"key": "e", "label": "导出该会话为 Bundle", "color": Ansi.MAGENTA},
-        {"key": "q", "label": "返回", "color": Ansi.DIM},
-    ]
-    selected_index = 0
-
-    while True:
-        box_width = app._print_branded_header("会话详情 / 导出")
-        for line in render_box(app._session_detail_lines(summary), width=box_width, border_codes=(Ansi.DIM, Ansi.BLUE)):
-            print(line)
-        print("")
-
-        action_lines: List[str] = []
-        for idx, action in enumerate(actions):
-            label = f"[{action['key']}] {action['label']}"
-            if idx == selected_index:
-                action_lines.append(style_text(f"{pointer} {label}", Ansi.BOLD, Ansi.UNDERLINE, action["color"]))
-            else:
-                action_lines.append("  " + style_text(f"[{action['key']}]", Ansi.DIM, action["color"]) + f" {action['label']}")
-        for line in render_box(action_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.MAGENTA)):
-            print(line)
-        print("")
-        print(style_text("按键：↑/↓ 选择 · Enter 执行 · e 快捷 · q 返回", Ansi.DIM))
-
-        key = read_key()
-        if key is None:
-            raw = input("命令 [Enter/e/q]：").strip()
-            key = raw if raw else "ENTER"
-
-        transition = apply_list_key(key, selected_index=selected_index, item_count=len(actions), detail_keys=())
-        selected_index = transition.selected_index
-        if transition.exit_requested:
-            return
-        action_key = actions[selected_index]["key"] if transition.confirm_selected else transition.matched_hotkey
-        if action_key == "e":
-            app._run_action(
-                f"导出会话 {summary.session_id} 为 Bundle",
-                ["export", summary.session_id],
-                dry_run=False,
-                runner=lambda: app._run_toolkit(["export", summary.session_id]),
-                danger=False,
-            )
-
-
-def bundle_action_center(app: "ToolkitTuiApp", bundle: "BundleSummary") -> None:
-    pointer = glyphs().get("pointer", ">")
-    actions = [
-        {"key": "i", "label": "导入该 Bundle 为会话", "color": Ansi.GREEN},
-        {"key": "v", "label": "导入该 Bundle 为会话并自动创建工作目录", "color": Ansi.CYAN},
-        {"key": "q", "label": "返回", "color": Ansi.DIM},
-    ]
-    selected_index = 0
-
-    while True:
-        box_width = app._print_branded_header("Bundle 详情 / 导入")
-        for line in render_box(app._bundle_detail_lines(bundle), width=box_width, border_codes=(Ansi.DIM, Ansi.GREEN)):
-            print(line)
-        print("")
-
-        action_lines: List[str] = []
-        for idx, action in enumerate(actions):
-            label = f"[{action['key']}] {action['label']}"
-            if idx == selected_index:
-                action_lines.append(style_text(f"{pointer} {label}", Ansi.BOLD, Ansi.UNDERLINE, action["color"]))
-            else:
-                action_lines.append("  " + style_text(f"[{action['key']}]", Ansi.DIM, action["color"]) + f" {action['label']}")
-        for line in render_box(action_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.MAGENTA)):
-            print(line)
-        print("")
-        print(style_text("按键：↑/↓ 选择 · Enter 执行 · i/v 快捷 · q 返回", Ansi.DIM))
-
-        key = read_key()
-        if key is None:
-            raw = input("命令 [Enter/i/v/q]：").strip()
-            key = raw if raw else "ENTER"
-
-        transition = apply_list_key(key, selected_index=selected_index, item_count=len(actions), detail_keys=())
-        selected_index = transition.selected_index
-        if transition.exit_requested:
-            return
-        action_key = actions[selected_index]["key"] if transition.confirm_selected else transition.matched_hotkey
-        if action_key == "i":
-            app._run_action(
-                f"导入 Bundle {bundle.session_id} 为会话",
-                ["import", str(bundle.bundle_dir)],
-                dry_run=False,
-                runner=lambda: app._run_toolkit(["import", str(bundle.bundle_dir)]),
-                danger=False,
-            )
-            continue
-        if action_key == "v":
-            app._run_action(
-                f"导入 Bundle {bundle.session_id} 为会话（自动创建目录）",
-                ["import", "--desktop-visible", str(bundle.bundle_dir)],
-                dry_run=False,
-                runner=lambda: app._run_toolkit(["import", "--desktop-visible", str(bundle.bundle_dir)]),
-                danger=False,
-            )
-
-
 def tui_help_text(app: "ToolkitTuiApp") -> None:
     box_width = app._print_branded_header("帮助 / 使用说明")
     lines = [
@@ -148,8 +44,8 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         f"  {app.context.entry_command} --advanced-help   查看自动化/兼容 CLI 命令",
         "",
         style_text("菜单分组：", Ansi.BOLD),
-        "  Session / Browse   : 浏览本机会话、按项目路径筛会话、导出单个会话或整项目会话",
-        "  Bundle / Transfer  : 浏览 Bundle、校验 Bundle、批量导出与批量导入（project 分类支持按项目文件夹导入）",
+        "  Session / Browse   : 浏览并导出会话，支持单个、多选、全部和按项目导出",
+        "  Bundle / Transfer  : 浏览/删除 Bundle、校验 Bundle、导出与可选择导入（project 分类支持按项目文件夹导入）",
         "  Skills / Transfer  : 独立浏览、导出和导入 Skills Bundle",
         "  Repair / Maintenance : Provider 迁移、Desktop 显示修复、会话备份管理和旧副本清理",
         "  GitHub / Sync      : 查看本地/远端更新时间，连接独立仓库，Pull / Push ./codex_bundles",
@@ -184,18 +80,19 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         "",
         style_text("浏览器说明：", Ansi.BOLD),
         "  /                  在会话列表 / Bundle 列表 / 备份列表中搜索",
-        "  Enter              在浏览模式下进入单条操作面板，在选择模式下直接确认",
+        "  Enter              在浏览模式下打开详情，在选择模式下直接确认",
         "  d                  只打开详情面板，不执行导入/导出",
         "  e                  在会话列表直接导出为 Bundle",
         "  x                  在项目会话列表直接导出这个项目下的全部会话",
         "  p                  在项目会话列表重新输入项目路径",
-        "  s                  在 Bundle 列表切换导出方式",
-        "  m                  在 Bundle 列表按导出机器切换",
-        "  l                  在 Bundle 列表切换“全部历史 / 仅最新”",
-        "  i / v              在 Bundle 列表直接导入为会话 / 导入为会话并自动建目录",
+        "  s                  在 Bundle 列表按 Bundle 类别筛选",
+        "  m                  在 Bundle 列表按来源机器筛选",
+        "  l                  在 Bundle 列表切换历史范围（全部历史 / 仅最新）",
+        "  a                  在 Bundle 浏览页全选当前筛选结果；在导入页导入全部匹配",
+        "  i                  在 Bundle 浏览页删除选中/当前；在导入页导入选中/当前",
         "  g                  在 Skills 列表切换是否显示系统/运行时 Skills",
         "  r                  在 Skills 列表删除选中的自定义 Skill；在会话备份列表恢复选中备份",
-        "  x                  在 Skills 列表导出全部自定义 Skills；在会话备份列表删除选中备份",
+        "  x                  在删除类浏览器中删除选中/当前条目；在会话备份列表删除选中备份",
     ]
     for line in render_box(lines, width=box_width, border_codes=(Ansi.DIM,)):
         print(line)

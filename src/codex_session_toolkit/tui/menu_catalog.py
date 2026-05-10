@@ -29,7 +29,6 @@ SECTION_BORDER_CODES = {
 }
 
 TUI_ACTION_SECTION_OVERRIDES = {
-    "export_one": "session",
     "project_sessions": "session",
     "provider_migration": "repair",
     "desktop_repair": "repair",
@@ -50,36 +49,38 @@ TUI_ACTION_NOTES = {
         "支持勾选多条删除，也支持一键删除全部归档会话。",
         "会同步移除 Desktop 线程栏和本工具索引里的归档记录。",
     ],
-    "list_sessions": ["内置会话浏览器，支持搜索、预览和详情查看。"],
+    "list_sessions": [
+        "内置会话浏览器，支持搜索、预览、详情查看和导出。",
+        "支持勾选多条导出，也支持一键导出全部本机会话。",
+    ],
     "project_sessions": [
         "粘贴项目路径后，只查看这个项目下的全部会话。",
-        "可直接批量导出到 ./codex_bundles/<machine>/sessions/project/<project_name>/<timestamp>/。",
+        "支持当前会话、勾选多条导出，也支持一键导出该项目全部会话。",
     ],
-    "browse_bundles": ["独立浏览 Bundle 导出记录，而不是只在导入时顺手选择。", "默认显示全部历史，支持按导出方式、机器和最新视图切换。"],
+    "browse_bundles": ["独立浏览和管理 Bundle 记录，不在这里执行导入。", "支持按 Bundle 类别、来源机器和历史范围筛选，也支持勾选后删除本地 Bundle。"],
     "validate_bundles": ["扫描 Bundle 导出目录里的 manifest、session JSONL 和 history JSONL。", "适合在批量导入前先找出坏包。"],
-    "export_one": ["从会话列表中选择要导出的 session。", "默认归档到 ./codex_bundles/<machine>/sessions/single/<timestamp>/。"],
     "export_desktop_all": ["默认归档到 ./codex_bundles/<machine>/sessions/desktop/<timestamp>/。", "范围包含 active + archived 的 Desktop 会话，并分别生成 Bundle。"],
     "export_desktop_active": ["默认归档到 ./codex_bundles/<machine>/sessions/active/<timestamp>/。", "仅导出 ~/.codex/sessions/ 下的 Desktop 会话，不会扫描 ~/.codex/archived_sessions/。"],
     "export_cli_all": ["默认归档到 ./codex_bundles/<machine>/sessions/cli/<timestamp>/。", "范围包含 active + archived 的 CLI 会话，并分别生成 Bundle。"],
-    "import_one": [
-        "从 Bundle 列表中选择要导入为会话的条目。",
-        "可先按导出机器和导出方式筛选。",
-        "导入时会同步修复 history / index / Desktop 线程表和侧栏状态。",
+    "import_bundles": [
+        "进入 Bundle 列表后可搜索、筛选、勾选再导入。",
+        "支持当前 Bundle、勾选多条和全部匹配 Bundle 导入；删除请回到浏览 Bundle。",
+        "导入会同步修复 history / index / Desktop 线程表和侧栏状态。",
     ],
-    "import_desktop_all": [
-        "先选择设备文件夹，再选择该设备下的分类文件夹，然后批量导入。",
-        "分类文件夹会显示为 desktop / active / cli / project / single。",
-        "如果选择 project，还会继续选择项目文件夹，并显示本机是否已有同名/同路径项目。",
-        "导入线程会写入 Desktop 侧栏顺序并提升到最近线程池前部，避免只在 TUI 可见。",
+    "list_skills": [
+        "浏览本机已安装的 Skills，默认只显示自定义 Skills。",
+        "支持当前 Skill、勾选多条和全部自定义 Skills 导出。",
     ],
-    "list_skills": ["浏览本机已安装的 Skills，默认只显示自定义 Skills。"],
     "export_skill_one": ["从本机 Skills 列表中选择一个自定义 Skill 单独导出。"],
     "export_skills_all": ["将本机自定义 Skills 独立导出，适合跨设备同步 Skill 库。"],
-    "browse_skill_bundles": ["浏览 standalone Skills Bundle，和会话 Bundle 分开管理。"],
+    "browse_skill_bundles": [
+        "浏览 standalone Skills Bundle，和会话 Bundle 分开管理。",
+        "支持当前 Bundle、勾选多条和全部匹配 Skills Bundle 导入。",
+    ],
     "import_skill_bundle": ["选择一个 Skills Bundle 导入；同内容复用，冲突默认跳过。"],
     "import_skill_bundles": ["批量导入 standalone Skills Bundle，可按来源机器过滤。"],
     "delete_skill": [
-        "删除本机自定义 Skill。只允许删除 .agents/.codex 下的 custom Skill。",
+        "删除本机自定义 Skills。只允许删除 .agents/.codex 下的 custom Skill。",
         "支持勾选多条删除，也支持一键删除全部自定义 Skills。",
     ],
     "github_status": [
@@ -116,12 +117,12 @@ TUI_ACTION_NOTES = {
 
 SECTION_NOTES = {
     "session": [
-        "聚焦本机会话浏览与单会话操作。",
-        "适合先定位会话，再做单会话导出或查看详情。",
+        "聚焦本机会话浏览、筛选和导出。",
+        "适合先定位会话，再按当前、勾选或全部范围导出。",
     ],
     "bundle": [
         "聚焦 Bundle 导出记录与跨设备迁移。",
-        "包含浏览、校验、批量导出与批量导入。",
+        "包含浏览、校验、导出全部与可选择导入。",
     ],
     "skills": [
         "聚焦 Skills 的独立同步。",
@@ -168,23 +169,17 @@ def _menu_action(
 
 def build_tui_menu_actions() -> List[TuiMenuAction]:
     return [
-        _menu_action("list_sessions", "l", "浏览最近会话", ("list", "--limit", "20")),
-        _menu_action("export_one", "e", "导出单个会话为 Bundle", ("export", "<session_id>")),
+        _menu_action("list_sessions", "l", "浏览并导出会话", ("list", "--limit", "20")),
         _menu_action("project_sessions", "p", "按项目路径查看并导出会话"),
         _menu_action("browse_bundles", "o", "浏览 Bundle", ("list-bundles", "--limit", "20")),
         _menu_action("validate_bundles", "y", "校验 Bundle", ("validate-bundles", "--source", "all")),
-        _menu_action("export_desktop_all", "b", "批量导出全部 Desktop 会话为 Bundle", ("export-desktop-all",)),
-        _menu_action("export_desktop_active", "a", "批量导出全部 Active Desktop 会话为 Bundle", ("export-active-desktop-all",)),
-        _menu_action("export_cli_all", "c", "批量导出全部 CLI 会话为 Bundle", ("export-cli-all",)),
-        _menu_action("import_one", "i", "导入单个 Bundle 为会话", ("import", "<session_id|bundle_dir>")),
-        _menu_action("import_desktop_all", "m", "批量导入 Bundle 为会话", ("import-desktop-all",)),
-        _menu_action("list_skills", "s", "浏览本机 Skills", ("list-skills",)),
-        _menu_action("export_skill_one", "e", "导出单个 Skill", ("export-skills", "<skill_name>")),
-        _menu_action("export_skills_all", "x", "导出全部自定义 Skills", ("export-skills",)),
-        _menu_action("browse_skill_bundles", "o", "浏览 Skills Bundle", ("list-skill-bundles",)),
-        _menu_action("import_skill_bundle", "i", "导入单个 Skills Bundle", ("import-skill-bundle", "<bundle_dir|skill_name>")),
-        _menu_action("import_skill_bundles", "m", "批量导入 Skills Bundle", ("import-skill-bundles",)),
-        _menu_action("delete_skill", "d", "删除本机 Skill", ("delete-skill", "<skill_name>"), is_dangerous=True),
+        _menu_action("export_desktop_all", "b", "导出全部 Desktop 会话为 Bundle", ("export-desktop-all",)),
+        _menu_action("export_desktop_active", "a", "导出全部 Active Desktop 会话为 Bundle", ("export-active-desktop-all",)),
+        _menu_action("export_cli_all", "c", "导出全部 CLI 会话为 Bundle", ("export-cli-all",)),
+        _menu_action("import_bundles", "i", "导入 Bundle 为会话", ("import", "<bundle_dir...>")),
+        _menu_action("list_skills", "s", "浏览并导出本机 Skills", ("list-skills",)),
+        _menu_action("browse_skill_bundles", "i", "浏览并导入 Skills Bundle", ("list-skill-bundles",)),
+        _menu_action("delete_skill", "d", "删除本机 Skills", ("delete-skill", "<skill_name>"), is_dangerous=True),
         _menu_action("connect_github", "c", "连接独立 GitHub 仓库", ("connect-github", "<repo_url>")),
         _menu_action("github_proxy", "x", "连接/断开代理", ("github-proxy", "<proxy_url>")),
         _menu_action("github_status", "s", "查看 GitHub 同步状态"),
