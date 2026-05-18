@@ -69,8 +69,8 @@ def export_session(
         raise ToolkitError(f"Unexpected session path: {session_file}") from exc
 
     final_bundle_dir = bundle_root / session_id
-    stage_root = Path(tempfile.mkdtemp(prefix=f".{session_id}.tmp.", dir=str(bundle_root)))
-    stage_bundle_dir = stage_root / session_id
+    stage_root = Path(tempfile.mkdtemp(prefix=".tmp.", dir=str(bundle_root)))
+    stage_bundle_dir = stage_root
     old_bundle_backup: Optional[Path] = None
 
     try:
@@ -180,7 +180,11 @@ def export_session(
             old_bundle_backup = bundle_root / f".{session_id}.bak.{int(datetime.now().timestamp())}"
             final_bundle_dir.rename(old_bundle_backup)
 
-        stage_bundle_dir.rename(final_bundle_dir)
+        try:
+            _promote_stage_bundle(stage_bundle_dir, final_bundle_dir)
+        except Exception:
+            shutil.rmtree(final_bundle_dir, ignore_errors=True)
+            raise
         shutil.rmtree(stage_root, ignore_errors=True)
 
         if old_bundle_backup and old_bundle_backup.exists():
@@ -323,6 +327,23 @@ def _selected_session_ids(
         selected_ids.append(session_id)
         seen.add(session_id)
     return selected_ids
+
+
+def _promote_stage_bundle(stage_bundle_dir: Path, final_bundle_dir: Path) -> None:
+    try:
+        stage_bundle_dir.rename(final_bundle_dir)
+        return
+    except OSError:
+        pass
+
+    if final_bundle_dir.exists():
+        shutil.rmtree(final_bundle_dir, ignore_errors=True)
+    try:
+        shutil.copytree(stage_bundle_dir, final_bundle_dir)
+    except Exception:
+        shutil.rmtree(final_bundle_dir, ignore_errors=True)
+        raise
+    shutil.rmtree(stage_bundle_dir, ignore_errors=True)
 
 
 def export_sessions_for_kind(

@@ -62,14 +62,15 @@ __all__ = [
 
 
 def infer_skill_source_root(skill_file_path: str) -> Tuple[str, str]:
-    if _AGENTS_MARKER in skill_file_path:
-        idx = skill_file_path.index(_AGENTS_MARKER) + len(_AGENTS_MARKER)
-        relative = skill_file_path[idx:]
+    normalized_path = (skill_file_path or "").replace("\\", "/")
+    if _AGENTS_MARKER in normalized_path:
+        idx = normalized_path.index(_AGENTS_MARKER) + len(_AGENTS_MARKER)
+        relative = normalized_path[idx:]
         relative = relative.rsplit("/", 1)[0] if "/" in relative else relative
         return "agents", relative
-    if _CODEX_MARKER in skill_file_path:
-        idx = skill_file_path.index(_CODEX_MARKER) + len(_CODEX_MARKER)
-        relative = skill_file_path[idx:]
+    if _CODEX_MARKER in normalized_path:
+        idx = normalized_path.index(_CODEX_MARKER) + len(_CODEX_MARKER)
+        relative = normalized_path[idx:]
         relative = relative.rsplit("/", 1)[0] if "/" in relative else relative
         return "codex", relative
     return "unknown", ""

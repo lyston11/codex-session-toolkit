@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -44,6 +45,29 @@ def iter_bundle_directories_under_root(bundle_root: Path) -> List[Path]:
     return bundle_dirs
 
 
+def is_standalone_skills_bundle_dir(bundle_dir: Path) -> bool:
+    manifest_file = bundle_dir / "manifest.env"
+    if not manifest_file.is_file():
+        return False
+    try:
+        with manifest_file.open("r", encoding="utf-8") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw or raw.startswith("#") or "=" not in raw:
+                    continue
+                key, value = raw.split("=", 1)
+                if key == "BUNDLE_TYPE":
+                    try:
+                        return shlex.split(value, posix=True) == ["skills"]
+                    except ValueError:
+                        return False
+                if key in {"SESSION_ID", "RELATIVE_PATH"}:
+                    return False
+    except OSError:
+        return False
+    return False
+
+
 def bundle_directory_sort_key(bundle_dir: Path) -> Tuple[int, int, str]:
     manifest_file = bundle_dir / "manifest.env"
     exported_epoch = 0
@@ -76,6 +100,8 @@ def collect_bundle_summaries(
     summaries: List[BundleSummary] = []
     project_batch_cache: dict[Path, tuple[str, str]] = {}
     for bundle_dir in iter_bundle_directories_under_root(bundle_root):
+        if is_standalone_skills_bundle_dir(bundle_dir):
+            continue
         try:
             relative_parts = bundle_dir.relative_to(bundle_root).parts
         except ValueError:
@@ -254,6 +280,8 @@ def iter_known_bundle_directories(
             continue
         seen_roots.add(root)
         for path in iter_bundle_directories_under_root(root):
+            if is_standalone_skills_bundle_dir(path):
+                continue
             try:
                 relative_parts = path.relative_to(root).parts
             except ValueError:

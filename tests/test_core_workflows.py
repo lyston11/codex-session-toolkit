@@ -57,8 +57,8 @@ from codex_session_toolkit.stores.desktop_state import (  # noqa: E402
     repair_blank_thread_sources,
 )
 from codex_session_toolkit.stores.session_files import iter_session_files, read_session_payload  # noqa: E402
-from codex_session_toolkit.stores.skills import SkillDescriptor, SkillsManifest, compute_skill_directory_hash, read_skills_manifest, write_skills_manifest  # noqa: E402
-from codex_session_toolkit.validation import load_manifest  # noqa: E402
+from codex_session_toolkit.stores.skills import SkillDescriptor, SkillsManifest, compute_skill_directory_hash, infer_skill_source_root, read_skills_manifest, write_skills_manifest  # noqa: E402
+from codex_session_toolkit.validation import load_manifest, write_manifest  # noqa: E402
 
 
 @contextmanager
@@ -3583,6 +3583,108 @@ class CoreWorkflowTests(unittest.TestCase):
                 f"sessions/2026/04/10/rollout-2026-04-10T10-00-00-{session_id}.jsonl",
             )
 
+    def test_export_session_uses_short_staging_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "source-provider")
+
+            session_id = "99999999-1111-4111-8111-999999999999"
+            write_session(
+                home,
+                session_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+            )
+            write_history(home, session_id, "short staging directory")
+
+            mkdtemp_calls = []
+            real_mkdtemp = tempfile.mkdtemp
+
+            def capture_mkdtemp(*args, **kwargs):
+                mkdtemp_calls.append(kwargs.copy())
+                return real_mkdtemp(*args, **kwargs)
+
+            paths = CodexPaths(home=home)
+            with (
+                pushd(workspace),
+                env_override("CST_MACHINE_LABEL", "Win-Machine"),
+                patch("codex_session_toolkit.services.exporting.tempfile.mkdtemp", side_effect=capture_mkdtemp),
+            ):
+                result = export_session(paths, session_id)
+
+            self.assertEqual(mkdtemp_calls[0]["prefix"], ".tmp.")
+            self.assertNotIn(session_id, mkdtemp_calls[0]["prefix"])
+            self.assertTrue((result.bundle_dir / "manifest.env").is_file())
+            self.assertFalse(any(path.name.startswith(".tmp.") for path in result.bundle_dir.parent.iterdir()))
+
+    def test_export_session_falls_back_when_stage_rename_is_denied(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "source-provider")
+
+            session_id = "99999999-3333-4333-8333-999999999999"
+            write_session(
+                home,
+                session_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+            )
+            write_history(home, session_id, "rename fallback")
+
+            real_rename = Path.rename
+
+            def rename_side_effect(self, target):
+                if self.name.startswith(".tmp."):
+                    raise PermissionError("simulated rename denial")
+                return real_rename(self, target)
+
+            paths = CodexPaths(home=home)
+            with (
+                pushd(workspace),
+                env_override("CST_MACHINE_LABEL", "Win-Machine"),
+                patch("pathlib.Path.rename", rename_side_effect),
+            ):
+                result = export_session(paths, session_id)
+
+            self.assertTrue((result.bundle_dir / "manifest.env").is_file())
+            self.assertFalse(any(path.name.startswith(".tmp.") for path in result.bundle_dir.parent.iterdir()))
+
+    def test_write_manifest_keeps_multiline_values_on_one_manifest_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manifest_file = Path(tmpdir) / "manifest.env"
+
+            write_manifest(
+                manifest_file,
+                {
+                    "SESSION_ID": "99999999-2222-4222-8222-999999999999",
+                    "RELATIVE_PATH": "sessions/2026/04/10/rollout-2026-04-10T10-00-00-99999999-2222-4222-8222-999999999999.jsonl",
+                    "FIRST_USER_MESSAGE": "line one\n\nline two",
+                },
+            )
+
+            lines = manifest_file.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(sum(1 for line in lines if line.startswith("FIRST_USER_MESSAGE=")), 1)
+            manifest = load_manifest(manifest_file)
+            self.assertEqual(manifest["FIRST_USER_MESSAGE"], "line one  line two")
+
+    def test_infer_skill_source_root_accepts_windows_paths(self) -> None:
+        self.assertEqual(
+            infer_skill_source_root(r"C:\Users\me\.agents\skills\demo-skill\SKILL.md"),
+            ("agents", "demo-skill"),
+        )
+        self.assertEqual(
+            infer_skill_source_root(r"C:\Users\me\.codex\skills\slides\SKILL.md"),
+            ("codex", "slides"),
+        )
+
     def test_export_selected_sessions_supports_multiple_targets_and_all(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
@@ -5752,6 +5854,31 @@ class CoreWorkflowTests(unittest.TestCase):
                 report = validate_bundles(paths)
 
             self.assertTrue(report.results[0].is_valid)
+
+    def test_validate_bundles_ignores_standalone_skills_bundles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            paths = CodexPaths()
+
+            skills_bundle = workspace / "codex_bundles" / "MachineA" / "skills" / "all" / "20260518-100000-000001"
+            write_manifest(
+                skills_bundle / "manifest.env",
+                {
+                    "BUNDLE_TYPE": "skills",
+                    "EXPORTED_AT": "2026-05-18T10:00:00Z",
+                    "EXPORT_MACHINE": "MachineA",
+                    "EXPORT_MACHINE_KEY": "MachineA",
+                    "EXPORT_GROUP": "all",
+                    "SKILL_COUNT": "1",
+                    "BUNDLED_SKILL_COUNT": "1",
+                },
+            )
+
+            with pushd(workspace):
+                report = validate_bundles(paths)
+
+            self.assertEqual(report.results, [])
 
 
 if __name__ == "__main__":

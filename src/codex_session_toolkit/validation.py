@@ -68,7 +68,14 @@ def write_manifest(manifest_file: Path, values: Mapping[str, str]) -> None:
     manifest_file.parent.mkdir(parents=True, exist_ok=True)
     with manifest_file.open("w", encoding="utf-8") as fh:
         for key, value in values.items():
-            fh.write(f"{key}={shlex.quote(str(value))}\n")
+            fh.write(f"{key}={shlex.quote(_manifest_line_value(value))}\n")
+
+
+def _manifest_line_value(value: object) -> str:
+    text = str(value)
+    if "\n" not in text and "\r" not in text:
+        return text
+    return " ".join(text.replace("\r\n", "\n").replace("\r", "\n").splitlines())
 
 
 def validate_jsonl_file(
