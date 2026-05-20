@@ -3609,12 +3609,12 @@ class CoreWorkflowTests(unittest.TestCase):
                 return real_mkdtemp(*args, **kwargs)
 
             paths = CodexPaths(home=home)
-            with (
-                pushd(workspace),
-                env_override("CST_MACHINE_LABEL", "Win-Machine"),
-                patch("codex_session_toolkit.services.exporting.tempfile.mkdtemp", side_effect=capture_mkdtemp),
-            ):
-                result = export_session(paths, session_id)
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "Win-Machine"):
+                with patch(
+                    "codex_session_toolkit.services.exporting.tempfile.mkdtemp",
+                    side_effect=capture_mkdtemp,
+                ):
+                    result = export_session(paths, session_id)
 
             self.assertEqual(mkdtemp_calls[0]["prefix"], ".tmp.")
             self.assertNotIn(session_id, mkdtemp_calls[0]["prefix"])
@@ -3647,12 +3647,9 @@ class CoreWorkflowTests(unittest.TestCase):
                 return real_rename(self, target)
 
             paths = CodexPaths(home=home)
-            with (
-                pushd(workspace),
-                env_override("CST_MACHINE_LABEL", "Win-Machine"),
-                patch("pathlib.Path.rename", rename_side_effect),
-            ):
-                result = export_session(paths, session_id)
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "Win-Machine"):
+                with patch("pathlib.Path.rename", rename_side_effect):
+                    result = export_session(paths, session_id)
 
             self.assertTrue((result.bundle_dir / "manifest.env").is_file())
             self.assertFalse(any(path.name.startswith(".tmp.") for path in result.bundle_dir.parent.iterdir()))
