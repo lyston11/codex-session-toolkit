@@ -21,6 +21,7 @@ from .models import (
     GitHubSyncResult,
     GitHubSyncStatus,
     ImportResult,
+    MigratedOriginalSessionDeleteResult,
     RepairResult,
     SessionBackupDeleteResult,
     SessionBackupRestoreResult,
@@ -43,6 +44,7 @@ from .presenters.reports import (
     print_github_pull_result,
     print_github_sync_result,
     print_import_result,
+    print_migrated_original_session_delete_result,
     print_repair_result,
     print_session_backup_delete_result,
     print_session_backup_restore_result,
@@ -53,7 +55,7 @@ from .presenters.reports import (
 from .services.archived_sessions import delete_archived_sessions
 from .services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles
 from .services.backups import delete_session_backup, list_session_backups, restore_session_backup
-from .services.clone import cleanup_clones, clone_to_provider
+from .services.clone import cleanup_clones, clone_to_provider, delete_migrated_original_sessions, list_migrated_original_sessions
 from .services.exporting import export_active_desktop_all, export_cli_all, export_desktop_all, export_project_sessions, export_selected_sessions, export_session
 from .services.importing import import_desktop_all, import_selected_bundles, import_session
 from .services.github_sync import configure_github_proxy, connect_bundles_to_github, get_github_sync_status, pull_bundles_from_github, sync_bundles_to_github
@@ -118,6 +120,7 @@ __all__ = [
     "GitHubSyncResult",
     "GitHubSyncStatus",
     "ImportResult",
+    "MigratedOriginalSessionDeleteResult",
     "RepairResult",
     "SessionBackupDeleteResult",
     "SessionBackupRestoreResult",
@@ -130,6 +133,7 @@ __all__ = [
     "configure_github_proxy",
     "create_parser",
     "delete_archived_sessions",
+    "delete_migrated_original_sessions",
     "delete_session_backup",
     "detect_provider",
     "export_active_desktop_all",
@@ -149,6 +153,7 @@ __all__ = [
     "import_session",
     "list_bundles",
     "list_project_sessions",
+    "list_migrated_original_sessions",
     "list_session_backups",
     "list_sessions",
     "main",
@@ -165,6 +170,7 @@ __all__ = [
     "print_github_pull_result",
     "print_github_sync_result",
     "print_import_result",
+    "print_migrated_original_session_delete_result",
     "print_repair_result",
     "print_session_backup_delete_result",
     "print_session_backup_restore_result",

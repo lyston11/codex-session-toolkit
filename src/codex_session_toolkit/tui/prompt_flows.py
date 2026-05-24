@@ -288,14 +288,14 @@ def prompt_execution_mode(
 def prompt_desktop_repair_scope(app: "ToolkitTuiApp") -> Optional[bool]:
     choice = prompt_choice(
         app,
-        title="修复会话在 Desktop 中显示",
-        prompt_label="选择修复范围",
+        title="迁移会话到当前 Provider",
+        prompt_label="选择迁移范围",
         help_lines=[
-            "默认修复 Desktop 已登记会话，并保留原始 source/originator。",
-            "也可额外把尚未登记的 CLI 会话写入 Desktop threads。",
+            "默认把 Desktop 已登记会话修正到当前 Provider，并修复显示状态。",
+            "也可额外把尚未登记的 CLI 会话纳入 Desktop threads。",
         ],
         choices=[
-            ("d", "仅修复已登记会话"),
+            ("d", "仅迁移已登记会话"),
             ("c", "同时纳入未登记 CLI"),
         ],
         default="d",

@@ -25,7 +25,7 @@ from codex_session_toolkit.presenters.reports import print_batch_import_result  
 from codex_session_toolkit.services.backups import delete_session_backup, list_session_backups, restore_session_backup  # noqa: E402
 from codex_session_toolkit.services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles  # noqa: E402
 from codex_session_toolkit.services.bundle_management import delete_bundle_summaries  # noqa: E402
-from codex_session_toolkit.services.clone import clone_to_provider  # noqa: E402
+from codex_session_toolkit.services.clone import clone_to_provider, delete_migrated_original_sessions, list_migrated_original_sessions  # noqa: E402
 from codex_session_toolkit.services.exporting import export_active_desktop_all, export_desktop_all, export_project_sessions, export_selected_sessions, export_session  # noqa: E402
 from codex_session_toolkit.services.github_sync import (  # noqa: E402
     _conflict_paths,
@@ -248,6 +248,40 @@ def write_session(
     with rollout.open("w", encoding="utf-8") as fh:
         for line in lines:
             fh.write(json.dumps(line, separators=(",", ":")) + "\n")
+    return rollout
+
+
+def write_cloned_session(
+    home: Path,
+    session_id: str,
+    *,
+    provider: str,
+    source: str,
+    originator: str,
+    cwd: Path,
+    cloned_from: str,
+    original_provider: str,
+) -> Path:
+    rollout = write_session(
+        home,
+        session_id,
+        provider=provider,
+        source=source,
+        originator=originator,
+        cwd=cwd,
+    )
+    records = []
+    with rollout.open("r", encoding="utf-8") as fh:
+        for raw in fh:
+            obj = json.loads(raw)
+            if obj.get("type") == "session_meta":
+                payload = obj.setdefault("payload", {})
+                payload["cloned_from"] = cloned_from
+                payload["original_provider"] = original_provider
+            records.append(obj)
+    with rollout.open("w", encoding="utf-8") as fh:
+        for obj in records:
+            fh.write(json.dumps(obj, separators=(",", ":")) + "\n")
     return rollout
 
 
@@ -1648,6 +1682,116 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertEqual(cloned_payload["model_provider"], "target-provider")
             self.assertEqual(cloned_payload["cloned_from"], original_id)
             self.assertEqual(cloned_payload["original_provider"], "old-provider")
+
+    def test_delete_migrated_original_sessions_removes_only_lineage_matched_old_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            workspace.mkdir()
+            write_config(home, "target-provider")
+            write_state_file(home)
+            db_path = create_threads_db(home)
+
+            original_id = "11111111-2222-4333-8444-555555555555"
+            cloned_id = "22222222-3333-4444-8555-666666666666"
+            untouched_old_id = "33333333-4444-4555-8666-777777777777"
+            target_native_id = "44444444-5555-4666-8777-888888888888"
+            original_file = write_session(
+                home,
+                original_id,
+                provider="old-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                user_message="old provider original",
+            )
+            cloned_file = write_cloned_session(
+                home,
+                cloned_id,
+                provider="target-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                cloned_from=original_id,
+                original_provider="old-provider",
+            )
+            untouched_old_file = write_session(
+                home,
+                untouched_old_id,
+                provider="old-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+            )
+            target_native_file = write_session(
+                home,
+                target_native_id,
+                provider="target-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+            )
+            (home / ".codex" / "session_index.jsonl").write_text(
+                "\n".join(
+                    json.dumps(
+                        {
+                            "id": session_id,
+                            "thread_name": session_id,
+                            "updated_at": "2026-04-10T10:06:00Z",
+                        },
+                        separators=(",", ":"),
+                    )
+                    for session_id in [original_id, cloned_id, untouched_old_id, target_native_id]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            conn = sqlite3.connect(db_path)
+            for session_id, rollout_path, provider in [
+                (original_id, original_file, "old-provider"),
+                (cloned_id, cloned_file, "target-provider"),
+                (untouched_old_id, untouched_old_file, "old-provider"),
+                (target_native_id, target_native_file, "target-provider"),
+            ]:
+                conn.execute(
+                    "insert into threads (id, rollout_path, source, model_provider, cwd) values (?, ?, ?, ?, ?)",
+                    (session_id, str(rollout_path), "vscode", provider, str(workspace)),
+                )
+            conn.commit()
+            conn.close()
+
+            paths = CodexPaths(home=home)
+            candidates = list_migrated_original_sessions(paths)
+            self.assertEqual([candidate.session_id for candidate in candidates], [original_id])
+            self.assertEqual(candidates[0].cloned_session_id, cloned_id)
+
+            dry_run = delete_migrated_original_sessions(paths, dry_run=True)
+            self.assertEqual([candidate.session_id for candidate in dry_run.candidates], [original_id])
+            self.assertEqual(dry_run.index_entries_removed, 1)
+            self.assertEqual(dry_run.thread_rows_removed, 1)
+            self.assertTrue(original_file.exists())
+
+            result = delete_migrated_original_sessions(paths)
+            self.assertEqual(result.deleted_files, [original_file])
+            self.assertEqual(result.session_ids, [original_id])
+            self.assertEqual(result.index_entries_removed, 1)
+            self.assertEqual(result.thread_rows_removed, 1)
+            self.assertFalse(original_file.exists())
+            self.assertTrue(cloned_file.exists())
+            self.assertTrue(untouched_old_file.exists())
+            self.assertTrue(target_native_file.exists())
+
+            index_ids = [
+                json.loads(raw)["id"]
+                for raw in (home / ".codex" / "session_index.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(index_ids, [cloned_id, untouched_old_id, target_native_id])
+
+            conn = sqlite3.connect(db_path)
+            thread_ids = [row[0] for row in conn.execute("select id from threads order by id").fetchall()]
+            conn.close()
+            self.assertEqual(thread_ids, [cloned_id, untouched_old_id, target_native_id])
 
     def test_project_session_listing_and_export_grouping(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

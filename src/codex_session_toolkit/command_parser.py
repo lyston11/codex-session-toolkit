@@ -73,6 +73,14 @@ def create_parser() -> argparse.ArgumentParser:
     clean_parser.add_argument("target_provider", nargs="?", default="", help="Optional provider override")
     clean_parser.add_argument("--dry-run", action="store_true")
 
+    delete_migrated_originals_parser = subparsers.add_parser(
+        "delete-migrated-originals",
+        help=command_help("delete-migrated-originals"),
+    )
+    delete_migrated_originals_parser.add_argument("session_ids", nargs="*", help="Optional original session ids to delete")
+    delete_migrated_originals_parser.add_argument("--provider", default="", help="Optional provider override")
+    delete_migrated_originals_parser.add_argument("--dry-run", action="store_true", help="Preview old-provider originals that would be deleted")
+
     export_parser = subparsers.add_parser("export", help=command_help("export"))
     export_parser.add_argument("session_ids", nargs="*", help="Session ids to export")
     export_parser.add_argument("--all", action="store_true", help="Export all local sessions")

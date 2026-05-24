@@ -39,13 +39,14 @@ COMMAND_CATALOG: tuple[CommandSpec, ...] = (
     CommandSpec("github-proxy", "github", "Connect or disconnect the GitHub sync proxy", "Configure proxy for GitHub sync"),
     CommandSpec("pull-github", "github", "Pull remote bundle updates from the connected GitHub repository", "Pull remote bundle updates into local codex_bundles"),
     CommandSpec("sync-github", "github", "Push local bundles to the connected GitHub repository", "Commit, merge remote updates, and push local bundles"),
-    CommandSpec("clone-provider", "repair", "Clone active sessions to the target provider", "Clone active sessions to the current provider"),
+    CommandSpec("clone-provider", "repair", "Copy active sessions to the target provider", "Copy active sessions to the current provider"),
     CommandSpec("repair-desktop", "repair", "Repair Desktop sidebar visibility", "Repair active Desktop visibility/index/provider"),
     CommandSpec("list-backups", "repair", "List session rollout backups", "Browse session overwrite backups"),
     CommandSpec("restore-backup", "repair", "Restore one session rollout backup", "Restore one session overwrite backup"),
     CommandSpec("delete-backup", "repair", "Delete one session rollout backup", "Delete one session overwrite backup"),
     CommandSpec("delete-archived-sessions", "repair", "Delete all archived session rollouts", "Delete archived sessions"),
-    CommandSpec("clean-clones", "repair", "Delete legacy unmarked clone files", "Remove legacy unmarked clone files"),
+    CommandSpec("delete-migrated-originals", "repair", "Delete old-provider originals after provider copy", "Delete old-provider originals after provider copy"),
+    CommandSpec("clean-clones", "repair", "Delete legacy unmarked duplicate copies", "Remove legacy unmarked duplicate copies"),
 )
 
 COMMAND_DOMAIN_ORDER = ("session", "bundle", "skills", "repair", "github")

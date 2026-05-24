@@ -134,18 +134,21 @@ codex-session-toolkit
 
 ### Repair / Maintenance
 
-用于修复和恢复。
+用于 Provider 复制/迁移、Desktop 显示修复和安全清理。
 
-- 迁移到当前 Provider
-- 修复会话在 Codex Desktop 中显示
+- 复制会话到当前 Provider：保留旧会话，创建一份带 `cloned_from` 关系的新 Provider 副本
+- 迁移会话到当前 Provider：直接修正现有会话的 Provider，并修复 Codex Desktop 显示
 - 修复 Desktop 有限最近线程池被旧记录占满、侧栏筛选/折叠状态遮挡、空 `thread_source` 和失效 `threads` 行
 - 删除归档会话
+- 删除已复制的旧 Provider 会话
 - 管理会话备份
-- 清理旧版无标记副本
+- 清理旧版重复副本
 - 可选把未登记 CLI 会话纳入 Desktop
 - 支持 Dry-run 预演
 
 Desktop 修复默认只处理 active 会话；需要 archived 会话时，从 Repair / Maintenance 的修复入口中选择对应范围。修复会备份被改动的 Desktop state、SQLite 和索引文件。
+
+删除已复制的旧 Provider 会话会先进入列表页。它只列出能通过新 Provider 副本里的 `cloned_from` 字段确认迁移关系的旧会话；没有对应新副本的旧会话不会被列出，也不会被删除。
 
 删除归档会话会先进入列表页：
 
@@ -314,6 +317,16 @@ socks5://127.0.0.1:7890
 5. 需要清空归档时按 `a` 选中全部匹配项，再按 `x` 确认删除选中归档会话。
 
 这个功能用来减轻跨设备同步和搬运负担。它只删除归档 rollout；如果本机还有同 ID 的 active rollout，会保留 active 索引和 Desktop 可见性。
+
+### 清理已复制的旧 Provider 会话
+
+1. 进入 `Repair / Maintenance`。
+2. 选择 `删除已复制的旧 Provider 会话`。
+3. 按 `Enter` 或 `d` 预览旧会话和对应的新 Provider 副本。
+4. 按 `Space` 勾选多条，或直接停在某条上按 `x` 删除当前条。
+5. 需要清空匹配项时按 `a` 选中全部匹配项，再按 `x` 确认删除。
+
+这个功能用于“复制会话到当前 Provider”之后，只保留新 Provider 记录。它不会根据 provider 名称粗暴删除旧记录，而是必须找到明确的 `cloned_from` 关系。
 
 ## Bundle 目录策略
 
@@ -508,7 +521,8 @@ codex-session-toolkit sync-github
 - 不修改对话正文内容
 - 不会悄悄覆盖原始 session
 - 导入覆盖前会自动备份旧 rollout
-- 清理操作只针对旧版无标记 clone
+- 清理旧版重复副本只针对旧版无标记 clone
+- 删除已复制的旧 Provider 会话只处理带 `cloned_from` 关系的新旧会话对
 - 删除归档会话只处理 `~/.codex/archived_sessions/`
 - 删除归档会话时，如果同 ID active 会话仍存在，会保留 active 索引和 Desktop 线程记录
 - 删除 Skill 和删除备份都需要确认

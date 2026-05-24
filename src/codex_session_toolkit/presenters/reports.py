@@ -19,6 +19,7 @@ from ..models import (
     GitHubSyncResult,
     ImportResult,
     LocalSkillSummary,
+    MigratedOriginalSessionDeleteResult,
     OperationWarning,
     RepairResult,
     SessionBackupDeleteResult,
@@ -214,6 +215,30 @@ def print_cleanup_result(result: CleanupResult) -> int:
             print(f"[Error] Deleting {target_path}: {reason}", file=sys.stderr)
 
     print("\nCleanup scan complete.")
+    return 1 if result.errors else 0
+
+
+def print_migrated_original_session_delete_result(result: MigratedOriginalSessionDeleteResult) -> int:
+    action = "Would delete migrated old-provider sessions" if result.dry_run else "Deleted migrated old-provider sessions"
+    print(f"{action}: {len(result.candidates)}")
+    print(f"Target Provider: {result.provider}")
+    print(f"Index entries removed: {result.index_entries_removed}")
+    print(f"Desktop thread rows removed: {result.thread_rows_removed}")
+
+    if result.dry_run:
+        for candidate in result.candidates[:20]:
+            print(
+                f"[DRY-RUN] Would delete: {candidate.session_id} | "
+                f"{candidate.model_provider or '-'} -> {candidate.cloned_provider or result.provider} | {candidate.path}"
+            )
+        if len(result.candidates) > 20:
+            print(f"[DRY-RUN] ... +{len(result.candidates) - 20} more")
+    else:
+        for deleted_file in result.deleted_files:
+            print(f"[Deleted] {deleted_file}")
+        for target_path, reason in result.errors:
+            print(f"[Error] Deleting {target_path}: {reason}", file=sys.stderr)
+
     return 1 if result.errors else 0
 
 

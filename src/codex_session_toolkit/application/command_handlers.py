@@ -19,6 +19,7 @@ from ..presenters.reports import (
     print_github_pull_result,
     print_github_sync_result,
     print_import_result,
+    print_migrated_original_session_delete_result,
     print_local_skill_rows,
     print_repair_result,
     print_session_backup_delete_result,
@@ -35,7 +36,7 @@ from ..presenters.reports import (
 from ..services.archived_sessions import delete_archived_sessions
 from ..services.backups import delete_session_backup, list_session_backups, restore_session_backup
 from ..services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles
-from ..services.clone import cleanup_clones, clone_to_provider
+from ..services.clone import cleanup_clones, clone_to_provider, delete_migrated_original_sessions
 from ..services.exporting import (
     export_active_desktop_all,
     export_cli_all,
@@ -105,6 +106,17 @@ def _handle_clone_provider(args: argparse.Namespace, paths: CodexPaths) -> int:
 
 def _handle_clean_clones(args: argparse.Namespace, paths: CodexPaths) -> int:
     return print_cleanup_result(cleanup_clones(paths, target_provider=args.target_provider, dry_run=args.dry_run))
+
+
+def _handle_delete_migrated_originals(args: argparse.Namespace, paths: CodexPaths) -> int:
+    return print_migrated_original_session_delete_result(
+        delete_migrated_original_sessions(
+            paths,
+            session_ids=set(args.session_ids),
+            target_provider=args.provider,
+            dry_run=args.dry_run,
+        )
+    )
 
 
 def _handle_export(args: argparse.Namespace, paths: CodexPaths) -> int:
@@ -397,6 +409,7 @@ COMMAND_HANDLERS: Mapping[str, CommandHandler] = {
     "validate-bundles": _handle_validate_bundles,
     "clone-provider": _handle_clone_provider,
     "clean-clones": _handle_clean_clones,
+    "delete-migrated-originals": _handle_delete_migrated_originals,
     "export": _handle_export,
     "export-project": _handle_export_project,
     "export-desktop-all": _handle_export_desktop_all,

@@ -71,7 +71,7 @@ def _tui_first_help() -> str:
         "  Session / Browse       Browse and export local Codex sessions",
         "  Bundle / Transfer      Validate, import, and transfer session bundles",
         "  Skills / Transfer      Export, import, and manage custom Skills",
-        "  Repair / Maintenance   Repair Desktop visibility and manage backups",
+        "  Repair / Maintenance   Copy/migrate provider sessions, repair visibility, and manage backups",
         "  GitHub / Sync          Sync ./codex_bundles with a dedicated Bundle repo",
         "",
         "Only a small stable automation surface is documented.",

@@ -47,7 +47,7 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         "  Session / Browse   : 浏览并导出会话，支持单个、多选、全部和按项目导出",
         "  Bundle / Transfer  : 浏览/删除 Bundle、校验 Bundle、导出与可选择导入（project 分类支持按项目文件夹导入）",
         "  Skills / Transfer  : 独立浏览、导出和导入 Skills Bundle",
-        "  Repair / Maintenance : Provider 迁移、Desktop 显示修复、会话备份管理和旧副本清理",
+        "  Repair / Maintenance : Provider 复制/迁移、Desktop 显示修复、备份管理和旧副本清理",
         "  GitHub / Sync      : 查看本地/远端更新时间，连接独立仓库，Pull / Push ./codex_bundles",
         "",
         style_text("交互原则：", Ansi.BOLD),

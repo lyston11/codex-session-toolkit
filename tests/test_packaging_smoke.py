@@ -850,15 +850,34 @@ class PackagingSmokeTests(unittest.TestCase):
                 raise AssertionError("dry-run loop should not execute the fallback runner in this test")
 
         app = RepairApp()
-        execute_menu_action(app, SimpleNamespace(action_id="desktop_repair", label="修复会话在 Desktop 中显示"))
+        execute_menu_action(app, SimpleNamespace(action_id="desktop_repair", label="迁移会话到当前 Provider"))
 
         self.assertEqual(app.scope_calls, 1)
         self.assertEqual(app.mode_calls, 2)
         self.assertEqual(len(app.run_calls), 1)
         action_name, cli_args, kwargs = app.run_calls[0]
-        self.assertEqual(action_name, "修复会话在 Desktop 中显示（Dry-run）")
+        self.assertEqual(action_name, "迁移会话到当前 Provider（Dry-run）")
         self.assertEqual(cli_args, ["repair-desktop", "demo-provider", "--dry-run"])
         self.assertTrue(kwargs["dry_run"])
+
+    def test_tui_delete_migrated_originals_opens_browser(self) -> None:
+        class DeleteMigratedOriginalsApp:
+            def __init__(self) -> None:
+                self.open_calls = 0
+
+            def _open_migrated_original_session_browser(self):
+                self.open_calls += 1
+
+            def _confirm_dangerous_action(self, *args, **kwargs):
+                raise AssertionError("main menu should open the migrated-original browser before destructive confirmation")
+
+            def _run_action(self, action_name, cli_args, **kwargs):
+                raise AssertionError("main menu should not delete migrated originals directly")
+
+        app = DeleteMigratedOriginalsApp()
+        execute_menu_action(app, SimpleNamespace(action_id="delete_migrated_originals", label="删除已复制的旧 Provider 会话"))
+
+        self.assertEqual(app.open_calls, 1)
 
     def test_tui_delete_archived_sessions_opens_browser(self) -> None:
         class DeleteArchivedApp:
@@ -1092,6 +1111,7 @@ class PackagingSmokeTests(unittest.TestCase):
                 "desktop_repair",
                 "browse_backups",
                 "delete_archived_sessions",
+                "delete_migrated_originals",
                 "clean_legacy",
             },
         )
@@ -1103,11 +1123,12 @@ class PackagingSmokeTests(unittest.TestCase):
                 "delete_skill",
             },
         )
-        self.assertEqual(labels_by_action["provider_migration"], "迁移到当前 Provider")
-        self.assertEqual(labels_by_action["desktop_repair"], "修复会话在 Desktop 中显示")
+        self.assertEqual(labels_by_action["provider_migration"], "复制会话到当前 Provider")
+        self.assertEqual(labels_by_action["desktop_repair"], "迁移会话到当前 Provider")
         self.assertEqual(labels_by_action["browse_backups"], "管理会话备份")
         self.assertEqual(labels_by_action["delete_archived_sessions"], "删除归档会话")
-        self.assertEqual(labels_by_action["clean_legacy"], "清理旧版无标记副本")
+        self.assertEqual(labels_by_action["delete_migrated_originals"], "删除已复制的旧 Provider 会话")
+        self.assertEqual(labels_by_action["clean_legacy"], "清理旧版重复副本")
         self.assertEqual(labels_by_action["list_sessions"], "浏览并导出会话")
         self.assertEqual(labels_by_action["project_sessions"], "按项目路径查看并导出会话")
         self.assertEqual(labels_by_action["export_desktop_all"], "导出全部 Desktop 会话为 Bundle")

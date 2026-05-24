@@ -12,8 +12,8 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in os.sys.path:
     os.sys.path.insert(0, str(SRC_DIR))
 
-from codex_session_toolkit.models import BundleSummary, LocalSkillSummary, SessionSummary, SkillBundleSummary  # noqa: E402
-from codex_session_toolkit.tui.browser_flows import open_archived_session_browser, open_bundle_browser, open_local_skill_browser, open_project_session_browser, open_session_browser, open_skill_bundle_browser, render_browser_frame  # noqa: E402
+from codex_session_toolkit.models import BundleSummary, LocalSkillSummary, MigratedOriginalSessionSummary, SessionSummary, SkillBundleSummary  # noqa: E402
+from codex_session_toolkit.tui.browser_flows import open_archived_session_browser, open_bundle_browser, open_local_skill_browser, open_migrated_original_session_browser, open_project_session_browser, open_session_browser, open_skill_bundle_browser, render_browser_frame  # noqa: E402
 from codex_session_toolkit.tui.bundle_flows import bundle_detail_lines  # noqa: E402
 from codex_session_toolkit.tui.progress_flows import _render_progress  # noqa: E402
 from codex_session_toolkit.tui.prompt_flows import prompt_choice, render_prompt_choice  # noqa: E402
@@ -57,6 +57,11 @@ class FakeArchivedBrowserApp:
 
     def _session_detail_lines(self, summary):
         return [summary.session_id]
+
+
+class FakeMigratedOriginalBrowserApp(FakeArchivedBrowserApp):
+    paths = SimpleNamespace()
+    context = SimpleNamespace(target_provider="target-provider")
 
 
 class FakeSkillDeleteBrowserApp:
@@ -260,6 +265,21 @@ def active_summary(session_id: str) -> SessionSummary:
     )
 
 
+def migrated_original_summary(session_id: str, *, cloned_id: str = "") -> MigratedOriginalSessionSummary:
+    cloned_id = cloned_id or session_id.replace("1111", "2222", 1)
+    return MigratedOriginalSessionSummary(
+        session_id=session_id,
+        path=Path(f"/tmp/home/.codex/sessions/rollout-2026-04-10T10-00-00-{session_id}.jsonl"),
+        model_provider="old-provider",
+        cloned_session_id=cloned_id,
+        cloned_path=Path(f"/tmp/home/.codex/sessions/rollout-2026-04-10T10-00-00-{cloned_id}.jsonl"),
+        cloned_provider="target-provider",
+        kind="desktop",
+        cwd="/tmp/project",
+        preview=f"Preview {session_id}",
+    )
+
+
 def skill_summary(name: str, *, source_root: str = "agents", location_kind: str = "custom") -> LocalSkillSummary:
     return LocalSkillSummary(
         name=name,
@@ -456,6 +476,49 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         action_name, cli_args, kwargs = app.run_calls[0]
         self.assertEqual(action_name, "删除 2 个归档会话")
         self.assertEqual(cli_args, ["delete-archived-sessions", first_id, second_id])
+        self.assertTrue(kwargs["danger"])
+
+    def test_migrated_original_browser_can_delete_selected_session(self) -> None:
+        session_id = "11111111-2222-4333-8444-555555555555"
+        app = FakeMigratedOriginalBrowserApp()
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["x", "q"]))
+            stack.enter_context(
+                patch(
+                    "codex_session_toolkit.tui.browser_flows.list_migrated_original_sessions",
+                    return_value=[migrated_original_summary(session_id)],
+                )
+            )
+            stack.enter_context(redirect_stdout(TtyStringIO()))
+            open_migrated_original_session_browser(app)
+
+        self.assertEqual(app.confirm_calls[0][0], ["delete-migrated-originals", session_id])
+        action_name, cli_args, kwargs = app.run_calls[0]
+        self.assertEqual(action_name, f"删除旧 Provider 会话 {session_id}")
+        self.assertEqual(cli_args, ["delete-migrated-originals", session_id])
+        self.assertTrue(kwargs["danger"])
+
+    def test_migrated_original_browser_can_select_all_matching_sessions_then_delete(self) -> None:
+        app = FakeMigratedOriginalBrowserApp()
+        first_id = "11111111-2222-4333-8444-555555555555"
+        second_id = "22222222-3333-4444-8555-666666666666"
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["a", "x", "q"]))
+            stack.enter_context(
+                patch(
+                    "codex_session_toolkit.tui.browser_flows.list_migrated_original_sessions",
+                    return_value=[migrated_original_summary(first_id), migrated_original_summary(second_id)],
+                )
+            )
+            stack.enter_context(redirect_stdout(TtyStringIO()))
+            open_migrated_original_session_browser(app)
+
+        self.assertEqual(app.confirm_calls[0][0], ["delete-migrated-originals", first_id, second_id])
+        action_name, cli_args, kwargs = app.run_calls[0]
+        self.assertEqual(action_name, "删除 2 个旧 Provider 会话")
+        self.assertEqual(cli_args, ["delete-migrated-originals", first_id, second_id])
         self.assertTrue(kwargs["danger"])
 
     def test_session_browser_can_export_checked_sessions(self) -> None:

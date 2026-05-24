@@ -32,6 +32,7 @@ TUI_ACTION_SECTION_OVERRIDES = {
     "project_sessions": "session",
     "provider_migration": "repair",
     "desktop_repair": "repair",
+    "delete_migrated_originals": "repair",
     "github_status": "github",
     "github_proxy": "github",
     "exit": "system",
@@ -39,10 +40,17 @@ TUI_ACTION_SECTION_OVERRIDES = {
 
 TUI_ACTION_NOTES = {
     "provider_migration": [
-        "为当前会话创建一份适配当前 Provider 的副本。",
+        "为旧 Provider 会话创建一份适配当前 Provider 的新副本。",
+        "原始会话会保留，后续可用“删除已复制的旧 Provider 会话”清理。",
     ],
     "clean_legacy": [
-        "清理旧版本遗留的无标记副本文件。",
+        "清理旧版本遗留的重复副本文件。",
+        "这个功能只处理旧版无标记副本，不删除带 cloned_from 关系的原始会话。",
+    ],
+    "delete_migrated_originals": [
+        "删除已经复制到当前 Provider 的旧 Provider 原始会话。",
+        "只会列出能通过 cloned_from 找到新 Provider 副本的旧会话。",
+        "进入列表后可预览、勾选、全选，再二次确认删除。",
     ],
     "delete_archived_sessions": [
         "进入归档会话列表，先预览再删除。",
@@ -105,7 +113,7 @@ TUI_ACTION_NOTES = {
         "如果本地未提交变更会被远端更新覆盖，工具会停止并提示先处理本地变更。",
     ],
     "desktop_repair": [
-        "修复会话在 Desktop 中的显示、索引和登记信息。",
+        "把现有会话修正到当前 Provider，并修复 Desktop 显示、索引和登记信息。",
         "会处理侧栏筛选/折叠、线程池排序、pin 状态、空 thread_source 和失效 threads 行。",
     ],
     "browse_backups": [
@@ -129,7 +137,7 @@ SECTION_NOTES = {
         "会话导入导出只携带实际依赖的 Skills，全量同步放在这里处理。",
     ],
     "repair": [
-        "按目标处理 Provider 迁移、Desktop 显示修复与旧副本清理。",
+        "按目标处理 Provider 复制、Provider 迁移、Desktop 显示修复与旧副本清理。",
         "动作内部只保留必要选项，避免把底层实现细节直接摊给使用者。",
     ],
     "github": [
@@ -185,11 +193,12 @@ def build_tui_menu_actions() -> List[TuiMenuAction]:
         _menu_action("github_status", "s", "查看 GitHub 同步状态"),
         _menu_action("pull_github", "p", "从 GitHub 拉取更新", ("pull-github",)),
         _menu_action("sync_github", "g", "推送本机更新到 GitHub", ("sync-github",)),
-        _menu_action("provider_migration", "1", "迁移到当前 Provider"),
-        _menu_action("desktop_repair", "2", "修复会话在 Desktop 中显示"),
+        _menu_action("provider_migration", "1", "复制会话到当前 Provider"),
+        _menu_action("desktop_repair", "2", "迁移会话到当前 Provider"),
         _menu_action("browse_backups", "3", "管理会话备份", ("list-backups",)),
         _menu_action("delete_archived_sessions", "4", "删除归档会话", ("delete-archived-sessions",), is_dangerous=True),
-        _menu_action("clean_legacy", "5", "清理旧版无标记副本", ("clean-clones",), is_dangerous=True),
+        _menu_action("delete_migrated_originals", "5", "删除已复制的旧 Provider 会话", ("delete-migrated-originals",), is_dangerous=True),
+        _menu_action("clean_legacy", "6", "清理旧版重复副本", ("clean-clones",), is_dangerous=True),
         _menu_action("exit", "0", "退出"),
     ]
 

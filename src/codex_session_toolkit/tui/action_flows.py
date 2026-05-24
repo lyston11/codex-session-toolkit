@@ -424,7 +424,7 @@ def execute_menu_action(app: "ToolkitTuiApp", chosen_action: "TuiMenuAction") ->
     if choice_id == "provider_migration":
         while True:
             dry_run = app._prompt_execution_mode(
-                title="迁移到当前 Provider",
+                title="复制会话到当前 Provider",
                 default_dry_run=False,
             )
             if dry_run is None:
@@ -433,7 +433,7 @@ def execute_menu_action(app: "ToolkitTuiApp", chosen_action: "TuiMenuAction") ->
             cli_args = ["clone-provider"]
             if dry_run:
                 cli_args.append("--dry-run")
-            action_name = "迁移到当前 Provider（保留原会话，创建副本）"
+            action_name = "复制会话到当前 Provider（保留原会话，创建副本）"
             if dry_run:
                 action_name += "（Dry-run）"
             app._run_action(
@@ -457,7 +457,7 @@ def execute_menu_action(app: "ToolkitTuiApp", chosen_action: "TuiMenuAction") ->
 
         while True:
             dry_run = app._prompt_execution_mode(
-                title="修复会话在 Desktop 中显示",
+                title="迁移会话到当前 Provider",
                 default_dry_run=True,
             )
             if dry_run is None:
@@ -468,7 +468,7 @@ def execute_menu_action(app: "ToolkitTuiApp", chosen_action: "TuiMenuAction") ->
                 include_cli=include_cli,
                 dry_run=dry_run,
             )
-            action_name = "修复会话在 Desktop 中显示"
+            action_name = "迁移会话到当前 Provider"
             if include_cli:
                 action_name += "并纳入 CLI 会话"
             if dry_run:
@@ -484,17 +484,21 @@ def execute_menu_action(app: "ToolkitTuiApp", chosen_action: "TuiMenuAction") ->
                 return
         return
 
+    if choice_id == "delete_migrated_originals":
+        app._open_migrated_original_session_browser()
+        return
+
     if choice_id == "clean_legacy":
         while True:
             dry_run = app._prompt_execution_mode(
-                title="清理旧版无标记副本",
+                title="清理旧版重复副本",
                 default_dry_run=True,
             )
             if dry_run is None:
                 return
 
             cli_args = ["clean-clones"]
-            action_name = "清理旧版无标记副本"
+            action_name = "清理旧版重复副本"
             if dry_run:
                 cli_args.append("--dry-run")
                 action_name += "（Dry-run）"

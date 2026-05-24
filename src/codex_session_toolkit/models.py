@@ -117,6 +117,31 @@ class CleanupResult:
 
 
 @dataclass(frozen=True)
+class MigratedOriginalSessionSummary:
+    session_id: str
+    path: Path
+    model_provider: str
+    cloned_session_id: str
+    cloned_path: Path
+    cloned_provider: str
+    kind: str = ""
+    cwd: str = ""
+    preview: str = ""
+
+
+@dataclass(frozen=True)
+class MigratedOriginalSessionDeleteResult:
+    provider: str
+    dry_run: bool
+    candidates: List[MigratedOriginalSessionSummary]
+    deleted_files: List[Path] = field(default_factory=list)
+    session_ids: List[str] = field(default_factory=list)
+    index_entries_removed: int = 0
+    thread_rows_removed: int = 0
+    errors: List[Tuple[Path, str]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class OperationWarning:
     code: str
     session_id: str = ""
