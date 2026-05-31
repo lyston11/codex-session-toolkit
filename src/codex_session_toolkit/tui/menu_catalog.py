@@ -114,7 +114,7 @@ TUI_ACTION_NOTES = {
     ],
     "desktop_repair": [
         "把现有会话修正到当前 Provider，并修复 Desktop 显示、索引和登记信息。",
-        "会处理侧栏筛选/折叠、线程池排序、pin 状态、空 thread_source 和失效 threads 行。",
+        "会处理侧栏筛选/折叠、线程池排序、空 thread_source 和失效 threads 行，不会自动置顶。",
     ],
     "browse_backups": [
         "浏览、恢复或删除导入覆盖前自动保留的会话备份。",

@@ -4,7 +4,7 @@
 
 ### Desktop Visibility
 
-- Import and batch import now update Desktop sidebar state, including workspace hints, project thread order, workspace roots, expanded sidebar sections, and pin state
+- Import and batch import now update Desktop sidebar state, including workspace hints, project thread order, workspace roots, and expanded sidebar sections, without automatically pinning imported threads
 - Imported Desktop-visible threads are promoted in Desktop SQLite so they appear inside Desktop's limited recent thread pool even when many old conversations exist
 - `repair-desktop` now repairs blank managed `thread_source` values and prunes stale managed Desktop `threads` rows that point to missing or archived rollout files
 

@@ -16,7 +16,7 @@ Codex 的会话数据、Desktop 索引、CLI rollout、history、项目路径、
 - **会话和 Skills 的关系需要可控**：会话 Bundle 只携带实际依赖的自定义 Skills；全量自定义 Skills 通过 standalone Skills Bundle 独立迁移。
 - **多设备 Bundle 需要同步机制**：`./codex_bundles/` 可以连接到一个独立 GitHub Bundle 仓库，支持状态检查、Pull、Push、远端更新时间检测和冲突保护。
 - **GitHub 网络慢需要可控代理**：同步中心可以连接或断开本机代理接口，让状态检查、Pull 和 Push 走代理线路。
-- **导入后 Desktop 状态需要修复**：导入和修复流程会维护 `session_index.jsonl`、Desktop `threads` 表、workspace roots、侧栏顺序、pin 状态、provider 和线程标题。
+- **导入后 Desktop 状态需要修复**：导入和修复流程会维护 `session_index.jsonl`、Desktop `threads` 表、workspace roots、侧栏顺序、provider 和线程标题，并把目标线程提升到最近线程池前部。
 - **归档会话过多会拖慢搬运**：可以在 TUI 中预览、勾选并删除归档会话；删除时会保护同 ID 的 active 会话索引和 Desktop 线程记录。
 - **写入操作需要可预演、可回退**：导出、导入、修复、清理、GitHub 同步等关键动作支持 Dry-run；导入覆盖前会备份，备份可在 TUI 中恢复。
 
@@ -114,7 +114,7 @@ codex-session-toolkit
 - 导入 project 分类时，把源机器 cwd 映射到当前机器项目目录
 - 导入时维护 `session_index.jsonl`、Desktop `threads` 表、workspace roots 和侧栏状态
 - 多选/全部导入会把导入线程写入 Desktop 侧栏顺序和 workspace hint，并提升到 Desktop 最近线程池前部
-- 导入到 Desktop 时会自动 pin 导入线程，避免历史会话过多时只在 TUI 可见
+- 导入到 Desktop 时会提升导入线程的最近排序，但不会自动置顶，避免把批量导入的会话全部变成 pinned
 - 选择显示到 Desktop 时，归档来源的 Bundle 会导入为 active 会话，避免只在 TUI 可见而不出现在 Desktop 主线程栏
 
 导入如果会覆盖本地 rollout，会先生成 `.bak.<timestamp>` 备份。
@@ -444,7 +444,7 @@ Codex Desktop 左侧线程栏不只是读取 rollout 文件。它还依赖 Deskt
 - 写入 workspace roots、`thread-workspace-root-hints` 和 `sidebar-project-thread-orders`
 - 展开 chats / pinned / threads 分区，清除会挡住目标项目的折叠组，并把 workspace filter 切回全部
 - 将导入或修复的线程提升到 Desktop 最近线程池前部
-- pin 导入或修复的目标线程，让它们在会话很多时仍能出现在侧栏
+- 导入或修复不会自动写入 pinned 列表，已有置顶会话会保持原样
 
 Provider 识别顺序：
 

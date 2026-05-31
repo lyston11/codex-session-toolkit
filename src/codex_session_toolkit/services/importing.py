@@ -21,7 +21,6 @@ from ..stores.bundle_repository import (
 )
 from ..stores.desktop_state import (
     ensure_desktop_sidebar_thread_state,
-    ensure_desktop_thread_pins,
     ensure_desktop_workspace_root,
     load_thread_metadata,
     promote_desktop_thread_ids_for_sidebar,
@@ -258,7 +257,6 @@ def import_session(
             )
         )
         promoted_thread_ids: list[str] = []
-        desktop_pinned_count = 0
         desktop_sidebar_visible_count = 0
         if desktop_visible and thread_row_upserted and state_db and session_cwd:
             promoted_thread_ids = promote_desktop_thread_ids_for_sidebar(
@@ -266,20 +264,12 @@ def import_session(
                 [session_id],
                 managed_roots=(paths.sessions_dir, paths.archived_sessions_dir),
             )
-            desktop_sidebar_visible_count, desktop_pinned_count = ensure_desktop_sidebar_thread_state(
+            desktop_sidebar_visible_count, _ = ensure_desktop_sidebar_thread_state(
                 paths.state_file,
                 [(session_id, session_cwd)],
                 reset_workspace_filter=True,
-                pin_threads=pin_sidebar_workspace,
+                pin_threads=False,
             )
-            if pin_sidebar_workspace:
-                desktop_pinned_count = max(
-                    desktop_pinned_count,
-                    ensure_desktop_thread_pins(
-                        paths.state_file,
-                        promoted_thread_ids or [session_id],
-                    ),
-                )
 
         skills_restore_summary = restore_bundle_skills_sidecar(
             home=paths.home,
@@ -317,7 +307,7 @@ def import_session(
             skills_missing_count=skills_missing_count,
             skills_failed_count=skills_failed_count,
             desktop_sidebar_promoted_count=desktop_sidebar_visible_count or len(promoted_thread_ids),
-            desktop_pinned_count=desktop_pinned_count,
+            desktop_pinned_count=0,
         )
     finally:
         Path(prepared_path).unlink(missing_ok=True)
@@ -535,7 +525,6 @@ def _execute_batch_import_plan(
             failed_imports.append((summary.bundle_dir, str(exc)))
 
     desktop_sidebar_promoted_count = 0
-    desktop_pinned_count = 0
     state_db = paths.latest_state_db()
     if desktop_visible and imported_workspaces and state_db:
         visible_thread_ids = promote_desktop_thread_ids_for_sidebar(
@@ -543,22 +532,17 @@ def _execute_batch_import_plan(
             imported_thread_ids,
             managed_roots=(paths.sessions_dir, paths.archived_sessions_dir),
         )
-        representative_thread_ids = promote_workspace_threads_for_sidebar(
+        promote_workspace_threads_for_sidebar(
             state_db,
             imported_workspaces,
             managed_roots=(paths.sessions_dir, paths.archived_sessions_dir),
         )
-        desktop_sidebar_promoted_count, desktop_pinned_count = ensure_desktop_sidebar_thread_state(
+        desktop_sidebar_promoted_count, _ = ensure_desktop_sidebar_thread_state(
             paths.state_file,
             imported_thread_workspaces,
             reset_workspace_filter=True,
-            pin_threads=True,
+            pin_threads=False,
         )
-        if representative_thread_ids:
-            desktop_pinned_count = max(
-                desktop_pinned_count,
-                ensure_desktop_thread_pins(paths.state_file, representative_thread_ids),
-            )
         if not desktop_sidebar_promoted_count:
             desktop_sidebar_promoted_count = len(visible_thread_ids)
 
@@ -590,6 +574,6 @@ def _execute_batch_import_plan(
         total_skills_failed=total_skills_failed,
         skills_restore_report_path=skills_restore_report_path,
         desktop_sidebar_promoted_count=desktop_sidebar_promoted_count,
-        desktop_pinned_count=desktop_pinned_count,
+        desktop_pinned_count=0,
         warnings=warnings,
     )

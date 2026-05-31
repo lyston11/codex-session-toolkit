@@ -18,7 +18,6 @@ from ..stores.desktop_state import (
     load_thread_session_ids,
     load_desktop_state_data,
     merge_workspace_root,
-    pin_desktop_thread_ids,
     promote_workspace_threads_for_sidebar,
     prune_threads_rows,
     repair_blank_thread_sources,
@@ -244,14 +243,12 @@ def repair_desktop(
         for entry in entries
         if entry["desktop_visible"] and entry["cwd"]
     ]
-    desktop_sidebar_state_count, desktop_pinned_count = ensure_sidebar_thread_state(
+    desktop_sidebar_state_count, _ = ensure_sidebar_thread_state(
         state_data,
         visible_thread_workspaces,
         reset_workspace_filter=True,
-        pin_threads=True,
+        pin_threads=False,
     )
-    if promoted_thread_ids:
-        desktop_pinned_count = max(desktop_pinned_count, pin_desktop_thread_ids(state_data, promoted_thread_ids))
 
     if not dry_run:
         backup_file(paths.code_dir, backup_root, backed_up, paths.state_file, enabled=True)
@@ -271,7 +268,7 @@ def repair_desktop(
         thread_sources_repaired=thread_sources_repaired,
         threads_pruned=threads_pruned,
         desktop_sidebar_promoted_count=desktop_sidebar_state_count or len(promoted_thread_ids),
-        desktop_pinned_count=desktop_pinned_count,
+        desktop_pinned_count=0,
         backup_root=(None if dry_run else backup_root),
         changed_sessions=changed_sessions,
         warnings=warnings,

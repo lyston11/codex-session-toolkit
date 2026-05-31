@@ -2828,7 +2828,7 @@ class CoreWorkflowTests(unittest.TestCase):
                 )
 
             self.assertEqual(import_result.desktop_sidebar_promoted_count, 1)
-            self.assertEqual(import_result.desktop_pinned_count, 1)
+            self.assertEqual(import_result.desktop_pinned_count, 0)
             state_data = json.loads((dst_home / ".codex" / ".codex-global-state.json").read_text(encoding="utf-8"))
             self.assertEqual(
                 state_data["thread-workspace-root-hints"][imported_session_id],
@@ -2838,7 +2838,7 @@ class CoreWorkflowTests(unittest.TestCase):
                 state_data["sidebar-project-thread-orders"][str(workspace_dir)]["threadIds"][0],
                 imported_session_id,
             )
-            self.assertEqual(state_data["pinned-thread-ids"][0], imported_session_id)
+            self.assertNotIn(imported_session_id, state_data.get("pinned-thread-ids", []))
             conn = sqlite3.connect(db_path)
             rows = conn.execute(
                 "select id, updated_at, updated_at_ms from threads where id in (?, ?) order by updated_at desc",
@@ -3338,7 +3338,7 @@ class CoreWorkflowTests(unittest.TestCase):
                 state_data["sidebar-project-thread-orders"][str(project_dir)]["threadIds"][0],
                 session_id,
             )
-            self.assertEqual(state_data["pinned-thread-ids"][0], session_id)
+            self.assertNotIn(session_id, state_data.get("pinned-thread-ids", []))
             persisted_state = state_data["electron-persisted-atom-state"]
             self.assertEqual(
                 persisted_state["sidebar-collapsed-sections-v1"],
@@ -4161,7 +4161,7 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertEqual(validated_ids, visible_ids)
             self.assertEqual(imported_ids, visible_ids)
 
-    def test_import_desktop_all_promotes_each_imported_thread_and_pins_one_per_workspace(self) -> None:
+    def test_import_desktop_all_promotes_each_imported_thread_without_pinning(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
             dst_home = Path(tmpdir) / "dst_home"
@@ -4221,12 +4221,11 @@ class CoreWorkflowTests(unittest.TestCase):
 
             self.assertEqual(len(result.success_dirs), 61)
             self.assertEqual(result.desktop_sidebar_promoted_count, 61)
-            self.assertEqual(result.desktop_pinned_count, 61)
+            self.assertEqual(result.desktop_pinned_count, 0)
 
             state_data = json.loads((dst_home / ".codex" / ".codex-global-state.json").read_text(encoding="utf-8"))
-            pinned_ids = state_data["pinned-thread-ids"]
-            self.assertEqual(len(pinned_ids), 61)
-            self.assertIn(hidden_session_id, pinned_ids)
+            pinned_ids = state_data.get("pinned-thread-ids", [])
+            self.assertEqual(pinned_ids, [])
             self.assertEqual(
                 state_data["sidebar-project-thread-orders"][str(bulk_project)]["threadIds"],
                 list(reversed(bulk_session_ids)),
