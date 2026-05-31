@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import os
+import re
+import shlex
+import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -20,6 +24,20 @@ DEFAULT_GITHUB_SYNC_MESSAGE = "Sync Codex bundles"
 DEFAULT_GITHUB_REMOTE_NAME = "origin"
 PROXY_CONFIG_KEY = "codex-session-toolkit.proxy.url"
 SSH_PROXY_CONFIG_KEY = "codex-session-toolkit.proxy.sshCommand"
+GITHUB_CLI_CREDENTIAL_HELPER = "!gh auth git-credential"
+GIT_CREDENTIAL_MANAGER_HELPERS = ("manager", "manager-core")
+GIT_CREDENTIAL_HELPER_ALIASES = {
+    "cache",
+    "manager",
+    "manager-core",
+    "osxkeychain",
+    "store",
+    "wincred",
+}
+GH_CREDENTIAL_HELPER_RE = re.compile(r"(?i)(?:^|[\\/\s\"'])gh(?:\.exe)?[\"']?\s+auth\s+git-credential(?:\s|$)")
+GIT_CREDENTIAL_HELPER_RE = re.compile(
+    r"(?i)(?:^|[\\/\s\"'])(?:git-credential-)?(manager-core|manager|osxkeychain|wincred|store|cache)(?:\.exe)?[\"']?(?:\s|$)"
+)
 
 
 @dataclass(frozen=True)
@@ -1001,8 +1019,9 @@ def _git_process(
     env.setdefault("GIT_COMMITTER_EMAIL", "codex-session-toolkit@example.local")
     if apply_proxy:
         env.update(_git_proxy_env(bundle_root))
+    credential_overrides = _portable_credential_helper_overrides(bundle_root)
     result = subprocess.run(
-        ["git", "-C", str(bundle_root), *args],
+        ["git", *credential_overrides, "-C", str(bundle_root), *args],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -1014,6 +1033,159 @@ def _git_process(
         command = _format_git_command(bundle_root, args)
         raise ToolkitError(f"Git command failed: {command}\n{detail}")
     return result
+
+
+def _portable_credential_helper_overrides(bundle_root: Path) -> list[str]:
+    helpers = _configured_credential_helpers(bundle_root)
+    if not helpers:
+        return []
+
+    portable_helpers = _portable_credential_helpers(helpers)
+    if portable_helpers == helpers:
+        return []
+
+    overrides = ["-c", "credential.helper="]
+    for helper in portable_helpers:
+        overrides.extend(["-c", f"credential.helper={helper}"])
+    return overrides
+
+
+def _configured_credential_helpers(bundle_root: Path) -> list[str]:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(bundle_root), "config", "--get-all", "credential.helper"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return []
+    if result.returncode not in {0, 1}:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def _portable_credential_helpers(helpers: list[str]) -> list[str]:
+    portable_helpers = []
+    for helper in helpers:
+        portable_helper = _portable_credential_helper(helper)
+        if portable_helper and portable_helper not in portable_helpers:
+            portable_helpers.append(portable_helper)
+    return portable_helpers
+
+
+def _portable_credential_helper(helper: str) -> str:
+    value = (helper or "").strip()
+    if not value:
+        return ""
+
+    github_cli_helper = _portable_github_cli_credential_helper(value)
+    if github_cli_helper:
+        return github_cli_helper
+
+    known_helper = _known_git_credential_helper_name(value)
+    portable_known_helper = _portable_known_credential_helper(known_helper)
+    if portable_known_helper:
+        return portable_known_helper
+
+    if value.startswith("!"):
+        command = value[1:].strip()
+        if not command:
+            return ""
+        command_name = _helper_command_name(command)
+        return value if command_name and _command_is_available(command_name) else _preferred_fallback_credential_helper()
+
+    if " " in value or "/" in value or "\\" in value:
+        command_name = _helper_command_name(value)
+        return value if command_name and _command_is_available(command_name) else _preferred_fallback_credential_helper()
+
+    return value if _git_credential_helper_is_available(value) else _preferred_fallback_credential_helper()
+
+
+def _is_supported_credential_helper(helper: str) -> bool:
+    return bool(_portable_credential_helper(helper))
+
+
+def _portable_github_cli_credential_helper(value: str) -> str:
+    if not GH_CREDENTIAL_HELPER_RE.search(value):
+        return ""
+    return _available_default_credential_helper()
+
+
+def _portable_known_credential_helper(helper_name: str) -> str:
+    if not helper_name:
+        return ""
+    if helper_name in GIT_CREDENTIAL_MANAGER_HELPERS:
+        return _available_git_credential_manager_helper(preferred=helper_name) or _available_default_credential_helper()
+    if helper_name in {"store", "cache"}:
+        return helper_name if _git_credential_helper_is_available(helper_name) else _available_default_credential_helper()
+    if helper_name == "osxkeychain":
+        return helper_name if sys.platform == "darwin" and _git_credential_helper_is_available(helper_name) else _available_default_credential_helper()
+    if helper_name == "wincred":
+        return helper_name if os.name == "nt" and _git_credential_helper_is_available(helper_name) else _available_default_credential_helper()
+    return _available_default_credential_helper()
+
+
+def _available_default_credential_helper() -> str:
+    return _available_github_cli_credential_helper() or _available_git_credential_manager_helper() or _preferred_fallback_credential_helper()
+
+
+def _available_github_cli_credential_helper() -> str:
+    return GITHUB_CLI_CREDENTIAL_HELPER if _command_is_available("gh") else ""
+
+
+def _available_git_credential_manager_helper(*, preferred: str = "") -> str:
+    candidates = []
+    if preferred:
+        candidates.append(preferred)
+    candidates.extend(candidate for candidate in GIT_CREDENTIAL_MANAGER_HELPERS if candidate not in candidates)
+    for candidate in candidates:
+        if _git_credential_helper_is_available(candidate):
+            return candidate
+    return ""
+
+
+def _preferred_fallback_credential_helper() -> str:
+    for helper in ("store", "cache"):
+        if _git_credential_helper_is_available(helper):
+            return helper
+    return ""
+
+
+def _known_git_credential_helper_name(value: str) -> str:
+    stripped = value.strip()
+    if stripped in GIT_CREDENTIAL_HELPER_ALIASES:
+        return stripped
+    match = GIT_CREDENTIAL_HELPER_RE.search(stripped)
+    return match.group(1).lower() if match else ""
+
+
+def _helper_command_name(helper: str) -> str:
+    try:
+        parts = shlex.split(helper, posix=(os.name != "nt"))
+    except ValueError:
+        return ""
+    return parts[0].strip() if parts else ""
+
+
+def _command_is_available(command_name: str) -> bool:
+    if not command_name:
+        return False
+    if os.path.isabs(command_name):
+        return Path(command_name).exists()
+    return shutil.which(command_name) is not None
+
+
+def _git_credential_helper_is_available(helper_name: str) -> bool:
+    result = subprocess.run(
+        ["git", f"credential-{helper_name}"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    return result.returncode in {0, 129}
 
 
 def _planned_commands(

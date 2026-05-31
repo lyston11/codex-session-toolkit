@@ -1,24 +1,23 @@
 # Codex Session Toolkit
 
-`Codex Session Toolkit` 是一个 TUI 优先的 Codex 会话工具箱。它围绕本地 `./codex_bundles/` 工作区，把 Codex Desktop / CLI 会话和自定义 Skills 做成可浏览、可校验、可导入、可同步的 Bundle。
+`Codex Session Toolkit` 是一个 TUI 优先的 Codex 工具箱。它围绕本地 `./codex_bundles/` 工作区，把 Codex Desktop / CLI 会话和自定义 Skills 组织成可浏览、可导出、可导入、可修复、可同步的 Bundle。
 
-项目的核心不是“直接操作 GitHub”或“替代 Codex”，而是把跨设备会话迁移这件事工程化：先在本地形成 Bundle，再按需要导入、修复、备份或同步到一个独立的 GitHub Bundle 仓库。
+这个项目要解决的，是会话管理、Skills 管理、跨设备迁移和 GitHub 同步这些实际需求。它把分散在 `~/.codex/`、Desktop 索引、CLI rollout、history、项目路径和 Skills 里的内容，统一整理成一套可落地的工作流：先在本地形成 Bundle，再按需要导入、修复、备份，或同步到一个独立的 GitHub Bundle 仓库。
 
 ![Codex Session Toolkit 界面预览](./assets/123456.png)
 
 ## 解决什么问题
 
-Codex 的会话数据、Desktop 索引、CLI rollout、history、项目路径、自定义 Skills 和跨设备文件，天然分散在不同位置。这个工具解决的不是某一个单点命令，而是把这些分散内容变成一套可浏览、可导出、可导入、可修复、可同步的工程化工作流。
+Codex 的会话数据、Desktop 索引、CLI rollout、history、项目路径、自定义 Skills 和跨设备文件，天然分散在不同位置。这个工具把这些分散内容变成一套围绕实际需求的工作流：
 
-- **会话管理缺少统一入口**：在 TUI 中浏览 Desktop / CLI 会话，查看标题、provider、cwd、rollout 路径、history 和详情，不需要手动翻 `~/.codex/`。
-- **跨设备迁移缺少稳定中间层**：把会话导出为 Bundle，按机器、分类、项目和时间归档；目标机器再从 Bundle 导入，而不是直接复制散落的原始状态文件。
-- **项目级会话迁移容易混乱**：支持按项目路径筛选和批量导出，导入时可以把源机器 cwd 映射到当前机器的项目路径。
-- **会话和 Skills 的关系需要可控**：会话 Bundle 只携带实际依赖的自定义 Skills；全量自定义 Skills 通过 standalone Skills Bundle 独立迁移。
-- **多设备 Bundle 需要同步机制**：`./codex_bundles/` 可以连接到一个独立 GitHub Bundle 仓库，支持状态检查、Pull、Push、远端更新时间检测和冲突保护。
-- **GitHub 网络慢需要可控代理**：同步中心可以连接或断开本机代理接口，让状态检查、Pull 和 Push 走代理线路。
-- **导入后 Desktop 状态需要修复**：导入和修复流程会维护 `session_index.jsonl`、Desktop `threads` 表、workspace roots、侧栏顺序、provider 和线程标题，并把目标线程提升到最近线程池前部。
-- **归档会话过多会拖慢搬运**：可以在 TUI 中预览、勾选并删除归档会话；删除时会保护同 ID 的 active 会话索引和 Desktop 线程记录。
-- **写入操作需要可预演、可回退**：导出、导入、修复、清理、GitHub 同步等关键动作支持 Dry-run；导入覆盖前会备份，备份可在 TUI 中恢复。
+- **会话管理**：在 TUI 中浏览、搜索和筛选 Desktop / CLI 会话，查看标题、provider、cwd、rollout 路径、history 和详情，不需要手动翻 `~/.codex/`。
+- **Skills 管理**：把自定义 Skills 独立打包、导出、导入、恢复和清理，避免和会话数据混在一起。
+- **跨设备迁移**：把会话导出为 Bundle，按机器、分类、项目和时间归档；目标机器再从 Bundle 导入，而不是直接复制散落的原始状态文件。
+- **项目级会话迁移**：支持按项目路径筛选和批量导出，导入时可以把源机器 cwd 映射到当前机器的项目路径。
+- **GitHub 同步**：`./codex_bundles/` 可以连接到一个独立 GitHub Bundle 仓库，支持状态检查、Pull、Push、远端更新时间检测和冲突保护。
+- **代理同步**：同步中心可以连接或断开本机代理接口，让状态检查、Pull 和 Push 走代理线路。
+- **导入后修复**：导入和修复流程会维护 `session_index.jsonl`、Desktop `threads` 表、workspace roots、侧栏顺序、provider 和线程标题，并把目标线程提升到最近线程池前部。
+- **清理和回退**：可以在 TUI 中预览、勾选并删除归档会话；删除时会保护同 ID 的 active 会话索引和 Desktop 线程记录。导出、导入、修复、清理、GitHub 同步等关键动作支持 Dry-run；导入覆盖前会备份，备份可在 TUI 中恢复。
 
 ## 项目定位
 
@@ -196,6 +195,7 @@ git@github.com:you/codex-bundles.git
 然后在 TUI 中进入 `GitHub / Sync -> 连接独立 GitHub 仓库` 填写仓库地址。工具会拒绝连接到当前项目源码仓库 remote。
 
 同步对象是 `./codex_bundles/` 工作区，范围包含会话 Bundle 和 standalone Skills Bundle。它不会把 `~/.codex/` 原始会话目录直接提交到 GitHub，也不会把 Bundle 混进本项目源码仓库。
+工具会在 bundle 仓库自身的 git 命令里归一 credential helper，例如 Windows 记录的 `gh.exe auth git-credential` 会在 macOS/Linux 上转成可执行的 `gh auth git-credential` 或当前平台可用的 helper。
 
 ### 状态页
 

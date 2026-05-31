@@ -29,9 +29,17 @@ from codex_session_toolkit.services.clone import clone_to_provider, delete_migra
 from codex_session_toolkit.services.exporting import export_active_desktop_all, export_desktop_all, export_project_sessions, export_selected_sessions, export_session  # noqa: E402
 from codex_session_toolkit.services.github_sync import (  # noqa: E402
     _conflict_paths,
+    _available_default_credential_helper,
+    _available_github_cli_credential_helper,
+    _available_git_credential_manager_helper,
+    _git_process,
     _git_proxy_env,
     _git_status_paths,
     _group_bundle_changes,
+    _portable_credential_helper_overrides,
+    _portable_credential_helper,
+    _portable_credential_helpers,
+    _is_supported_credential_helper,
     _normalize_git_relative_path,
     configure_github_proxy,
     connect_bundles_to_github,
@@ -951,6 +959,97 @@ class CoreWorkflowTests(unittest.TestCase):
 
             self.assertEqual(status.branch, "bundle-main")
             self.assertTrue(status.proxy_enabled)
+
+    def test_github_sync_normalizes_cross_platform_credential_helpers(self) -> None:
+        if os.name == "nt":
+            self.skipTest("cross-platform helper test targets non-Windows hosts")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            bundle_root = workspace / "codex_bundles"
+            workspace.mkdir()
+            bundle_root.mkdir(parents=True)
+
+            subprocess.run(["git", "init"], cwd=bundle_root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(
+                ["git", "config", "--local", "--add", "credential.helper", r"C:\Program Files\GitHub CLI\gh.exe auth git-credential"],
+                cwd=bundle_root,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            subprocess.run(
+                ["git", "config", "--local", "--add", "credential.helper", "manager"],
+                cwd=bundle_root,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            subprocess.run(
+                ["git", "config", "--local", "--add", "credential.helper", "store"],
+                cwd=bundle_root,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+            with patch("codex_session_toolkit.services.github_sync._command_is_available", return_value=True), patch(
+                "codex_session_toolkit.services.github_sync._git_credential_helper_is_available",
+                side_effect=lambda name: name in {"manager-core", "store"},
+            ):
+                self.assertTrue(_is_supported_credential_helper(r"C:\Program Files\GitHub CLI\gh.exe auth git-credential"))
+                self.assertEqual(_portable_credential_helper("manager"), "manager-core")
+                self.assertEqual(
+                    _portable_credential_helpers([r"C:\Program Files\GitHub CLI\gh.exe auth git-credential", "manager", "store"]),
+                    ["!gh auth git-credential", "manager-core", "store"],
+                )
+
+                overrides = _portable_credential_helper_overrides(bundle_root)
+                self.assertEqual(overrides[:2], ["-c", "credential.helper="])
+                self.assertIn("credential.helper=!gh auth git-credential", overrides)
+                self.assertIn("credential.helper=manager-core", overrides)
+                self.assertIn("credential.helper=store", overrides)
+                self.assertNotIn(r"credential.helper=C:\Program Files\GitHub CLI\gh.exe auth git-credential", overrides)
+
+                captured: dict[str, object] = {}
+
+                def fake_run(cmd, **kwargs):
+                    if cmd[-3:] == ["config", "--get-all", "credential.helper"]:
+                        return subprocess.CompletedProcess(
+                            cmd,
+                            0,
+                            stdout="C:\\Program Files\\GitHub CLI\\gh.exe auth git-credential\nmanager\nstore\n",
+                            stderr="",
+                        )
+                    if cmd[:2] == ["git", "credential-manager-core"]:
+                        return subprocess.CompletedProcess(cmd, 129, stdout="", stderr="usage: git credential-manager-core <action>")
+                    if cmd[:2] == ["git", "credential-store"]:
+                        return subprocess.CompletedProcess(cmd, 129, stdout="", stderr="usage: git credential-store <action>")
+                    captured["cmd"] = list(cmd)
+                    captured["env"] = dict(kwargs["env"])
+                    return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+                with patch("codex_session_toolkit.services.github_sync.subprocess.run", side_effect=fake_run):
+                    _git_process(bundle_root, ["status", "--porcelain"], check=False)
+
+                captured_cmd = captured["cmd"]
+                self.assertEqual(captured_cmd[:3], ["git", "-c", "credential.helper="])
+                self.assertIn("credential.helper=!gh auth git-credential", captured_cmd)
+                self.assertIn("credential.helper=manager-core", captured_cmd)
+                self.assertIn("credential.helper=store", captured_cmd)
+                self.assertNotIn(r"credential.helper=C:\Program Files\GitHub CLI\gh.exe auth git-credential", captured_cmd)
+                self.assertEqual(captured_cmd[-4:], ["-C", str(bundle_root), "status", "--porcelain"])
+
+    def test_github_sync_defaults_to_platform_credential_helper(self) -> None:
+        with patch("codex_session_toolkit.services.github_sync._command_is_available", return_value=True), patch(
+            "codex_session_toolkit.services.github_sync._git_credential_helper_is_available", side_effect=lambda name: name == "manager-core"
+        ):
+            self.assertEqual(_available_github_cli_credential_helper(), "!gh auth git-credential")
+            self.assertEqual(_available_git_credential_manager_helper(), "manager-core")
+            self.assertEqual(_available_default_credential_helper(), "!gh auth git-credential")
 
     def test_github_sync_normalizes_windows_relative_paths(self) -> None:
         raw_status = "\n".join(

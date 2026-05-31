@@ -34,6 +34,7 @@
 - `import` now accepts multiple bundle inputs plus project remap options, while legacy `import-desktop-all` remains available for scripts
 - TUI Bundle import browsing now reuses cached scan results while navigating and uses import-oriented source/category labels
 - Bundle browsing is now separated from importing; the browse page manages local Bundle records and can delete selected filtered Bundles after confirmation
+- GitHub sync now normalizes bundle repo credential helpers across macOS, Windows, and Linux instead of carrying platform-specific absolute helper paths into another system
 
 ### TUI Selection Shortcuts
 
