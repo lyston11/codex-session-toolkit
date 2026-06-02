@@ -35,10 +35,12 @@
 - TUI Bundle import browsing now reuses cached scan results while navigating and uses import-oriented source/category labels
 - Bundle browsing is now separated from importing; the browse page manages local Bundle records and can delete selected filtered Bundles after confirmation
 - GitHub sync now normalizes bundle repo credential helpers across macOS, Windows, and Linux instead of carrying platform-specific absolute helper paths into another system
+- GitHub status and pull prompts now clarify that remote/local ahead counts are commit counts, and explain when local uncommitted Bundle changes block pull
 
 ### TUI Selection Shortcuts
 
 - The `a` key now has one standard meaning across multi-select feature pages: select every item matching the current filter
+- `e`, `i`, and `x` now keep stable action meanings in selection pages: export, import, and delete
 - Export, import, and delete actions remain explicit through `e`, `i`, or `x` after selection
 - README and in-app help now document the unified select-all workflow
 

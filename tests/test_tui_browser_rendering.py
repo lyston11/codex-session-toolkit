@@ -527,7 +527,7 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         app = FakeSessionBrowserApp()
 
         with ExitStack() as stack:
-            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=[" ", "DOWN", " ", "x", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=[" ", "DOWN", " ", "e", "q"]))
             stack.enter_context(
                 patch(
                     "codex_session_toolkit.tui.browser_flows.get_session_summaries",
@@ -548,7 +548,7 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         app = FakeSessionBrowserApp()
 
         with ExitStack() as stack:
-            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["x", "a", "e", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["e", "a", "e", "q"]))
             stack.enter_context(
                 patch(
                     "codex_session_toolkit.tui.browser_flows.get_session_summaries",
@@ -563,12 +563,29 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         self.assertEqual(app.run_calls[1][0], "导出 2 个会话为 Bundle")
         self.assertEqual(app.run_calls[1][1], ["export", first_id, second_id])
 
+    def test_session_browser_does_not_export_on_delete_key(self) -> None:
+        session_id = "11111111-2222-4333-8444-555555555555"
+        app = FakeSessionBrowserApp()
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["x", "q"]))
+            stack.enter_context(
+                patch(
+                    "codex_session_toolkit.tui.browser_flows.get_session_summaries",
+                    return_value=[active_summary(session_id)],
+                )
+            )
+            stack.enter_context(redirect_stdout(TtyStringIO()))
+            open_session_browser(app, mode="view")
+
+        self.assertFalse(app.run_calls)
+
     def test_project_session_browser_can_export_current_session(self) -> None:
         session_id = "11111111-2222-4333-8444-555555555555"
         app = FakeProjectSessionBrowserApp()
 
         with ExitStack() as stack:
-            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["x", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["e", "q"]))
             stack.enter_context(
                 patch(
                     "codex_session_toolkit.tui.browser_flows.get_project_session_summaries",
@@ -713,7 +730,7 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         ]
 
         with ExitStack() as stack:
-            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["a", "i", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["a", "x", "q"]))
             delete_mock = stack.enter_context(
                 patch("codex_session_toolkit.tui.browser_flows.delete_bundle_summaries", return_value=delete_results)
             )
@@ -740,6 +757,27 @@ class TuiBrowserRenderingTests(unittest.TestCase):
 
         with ExitStack() as stack:
             stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["i", "q"]))
+            delete_mock = stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.delete_bundle_summaries"))
+            stack.enter_context(redirect_stdout(TtyStringIO()))
+            open_bundle_browser(app, mode="browse")
+
+        self.assertFalse(app.run_calls)
+        self.assertFalse(app.confirm_calls)
+        delete_mock.assert_not_called()
+
+    def test_bundle_browse_browser_deletes_on_x(self) -> None:
+        first_id = "11111111-2222-4333-8444-555555555555"
+        app = FakeBundleBrowserApp()
+        app.snapshot = SimpleNamespace(
+            entries=[bundle_summary(first_id)],
+            current_export_group_label="全部类别",
+            current_machine_label="全部机器",
+            export_group_options=[("", "全部类别")],
+            machine_options=[("", "全部机器")],
+        )
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["x", "q"]))
             stack.enter_context(
                 patch(
                     "codex_session_toolkit.tui.browser_flows.delete_bundle_summaries",

@@ -613,6 +613,47 @@ class PackagingSmokeTests(unittest.TestCase):
         self.assertEqual(cli_args, ["pull-github", "--branch", "main"])
         self.assertEqual(app.prompt_calls, 1)
 
+    def test_tui_github_pull_explains_local_changes_block(self) -> None:
+        test_case = self
+
+        class PullApp:
+            def _github_sync_status(self):
+                return GitHubSyncStatus(
+                    bundle_root=Path("/tmp/codex_bundles"),
+                    remote_name="origin",
+                    remote_url="git@github.com:example/codex-bundles.git",
+                    branch="main",
+                    bundle_root_exists=True,
+                    is_git_repo=True,
+                    is_connected=True,
+                    remote_checked=True,
+                    remote_branch_exists=True,
+                    remote_ahead_count=3,
+                    changed_files=["machine-a/sessions/demo/manifest.env"],
+                )
+
+            def _github_sync_status_lines(self, status):
+                return ["远端领先提交 : 3", "待同步变更 : 1"]
+
+            def _prompt_choice(self, **kwargs):
+                joined_help = "\n".join(kwargs["help_lines"])
+                test_case.assertIn("远端领先表示当前分支上的提交数，不是远端分支数量。", joined_help)
+                test_case.assertIn("当前本地待处理变更：1 个", joined_help)
+                return "q"
+
+            def _show_detail_panel(self, *args, **kwargs):
+                raise AssertionError("connected pull should not show a missing-connection panel")
+
+        app = PullApp()
+        with patch("codex_session_toolkit.tui.action_flows.run_callable_with_progress", side_effect=lambda _app, task, **kwargs: task()):
+            action_name, cli_args = resolve_menu_action_request(
+                app,
+                SimpleNamespace(action_id="pull_github", label="从 GitHub 拉取更新", cli_args=("pull-github",)),
+            )
+
+        self.assertIsNone(action_name)
+        self.assertIsNone(cli_args)
+
     def test_tui_github_pull_dry_run_returns_to_pull_choice(self) -> None:
         test_case = self
 

@@ -231,8 +231,11 @@ def _prompt_github_pull_dry_run(app: "ToolkitTuiApp", status) -> Optional[bool]:
         "",
         f"{style_text('拉取来源', Ansi.DIM)} : {status.remote_name}/{branch}",
         f"{style_text('同步范围', Ansi.DIM)} : 会话 Bundle 和 Skills Bundle",
-        "本地未提交变更如果会被覆盖，工具会停止并提示先处理本地变更。",
+        "远端领先表示当前分支上的提交数，不是远端分支数量。",
+        "本地有未提交 Bundle 变更时，工具会先停止拉取，避免远端合并覆盖本地文件。",
     ]
+    if status.changed_files:
+        summary_lines.append(f"当前本地待处理变更：{len(status.changed_files)} 个。建议先推送，或清理不需要的本地变更后再拉取。")
     confirm = app._prompt_choice(
         title="从 GitHub 拉取更新",
         prompt_label="选择拉取方式",

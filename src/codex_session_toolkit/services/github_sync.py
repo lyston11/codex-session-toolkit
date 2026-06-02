@@ -114,6 +114,8 @@ def get_github_sync_status(
         message = "Bundle GitHub sync is connected, but remote update check failed."
     elif check_remote and remote_snapshot.remote_checked and not remote_snapshot.remote_branch_exists:
         message = "Bundle GitHub sync is connected, but the remote branch has no bundle commits yet."
+    elif check_remote and remote_snapshot.remote_ahead_count and changed_files:
+        message = "Remote has newer bundle updates, but local uncommitted bundle changes must be handled before pulling."
     elif check_remote and remote_snapshot.remote_ahead_count and remote_snapshot.local_ahead_count:
         message = "Local and remote both have bundle updates. Pull will merge or report conflicts before push."
     elif check_remote and remote_snapshot.remote_ahead_count:

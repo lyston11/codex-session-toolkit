@@ -1480,6 +1480,43 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertEqual(result.changed_files, [session_path])
             self.assertEqual(session_file.read_text(encoding="utf-8"), "SESSION_ID=local-uncommitted\n")
 
+    def test_github_sync_status_explains_remote_ahead_with_local_changes(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git executable is not available")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            home = Path(tmpdir) / "home"
+            remote = Path(tmpdir) / "remote.git"
+            other_clone = Path(tmpdir) / "other"
+            bundle_root = workspace / "codex_bundles"
+            session_path = "machine-a/sessions/single/20260502/demo-session/manifest.env"
+            session_file = bundle_root / session_path
+            workspace.mkdir()
+            session_file.parent.mkdir(parents=True)
+            session_file.write_text("SESSION_ID=v1\n", encoding="utf-8")
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            with pushd(workspace):
+                connect_bundles_to_github(CodexPaths(home=home), str(remote), branch="main")
+                sync_bundles_to_github(CodexPaths(home=home), branch="main", message="Initial bundles")
+
+            subprocess.run(["git", "clone", str(remote), str(other_clone)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            (other_clone / session_path).write_text("SESSION_ID=remote-v2\n", encoding="utf-8")
+            subprocess.run(["git", "config", "user.name", "Remote Device"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "config", "user.email", "remote-device@example.local"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "add", "-A"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "commit", "-m", "Remote bundle update"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            subprocess.run(["git", "push", "origin", "main"], cwd=other_clone, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            session_file.write_text("SESSION_ID=local-uncommitted\n", encoding="utf-8")
+            with pushd(workspace):
+                status = get_github_sync_status(CodexPaths(home=home), check_remote=True)
+
+            self.assertEqual(status.remote_ahead_count, 1)
+            self.assertEqual(status.changed_files, [session_path])
+            self.assertIn("local uncommitted bundle changes", status.message)
+
     def test_collect_known_bundle_summaries_infers_export_groups(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"

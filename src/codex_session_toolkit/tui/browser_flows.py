@@ -100,7 +100,7 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
 
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
-        subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · x/e 导出选中/当前 · a 选中全部 · / 搜索 · p 修改路径 · q 返回"
+        subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · e 导出选中/当前 · a 选中全部 · / 搜索 · p 修改路径 · q 返回"
 
         info_lines = [
             f"{style_text('项目名', Ansi.DIM)} : {project_label}",
@@ -154,7 +154,7 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
 
         key = read_key()
         if key is None:
-            raw = input("命令 [Enter/空格/x/e/a/\\/d/p/q]：").strip()
+            raw = input("命令 [Enter/空格/e/a/\\/d/p/q]：").strip()
             key = raw if raw else "ENTER"
 
         if key == " " and entries:
@@ -201,10 +201,7 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
             selected_session_ids.clear()
             needs_reload = True
             continue
-        if key_str in {" ", "m"} and entries:
-            _toggle_selected_session(selected_session_ids, entries[selected_index])
-            continue
-        if key_str in {"x", "e"} and entries:
+        if key_str == "e" and entries:
             selected_entries = _selected_or_current_sessions(entries, selected_index, selected_session_ids)
             _run_selected_session_export(app, selected_entries)
             selected_session_ids.clear()
@@ -242,7 +239,7 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
         subtitle = (
-            "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · x/e 导出选中/当前 · a 选中全部 · q 返回"
+            "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · e 导出选中/当前 · a 选中全部 · q 返回"
             if mode == "view"
             else "↑/↓ 选择 · Enter 确认 · / 搜索 · d 查看详情 · q 返回"
         )
@@ -298,7 +295,7 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
 
         key = read_key()
         if key is None:
-            raw_prompt = "命令 [Enter/空格/x/e/a/\\/d/q]：" if mode == "view" else "命令 [Enter/\\/d/q]："
+            raw_prompt = "命令 [Enter/空格/e/a/\\/d/q]：" if mode == "view" else "命令 [Enter/\\/d/q]："
             raw = input(raw_prompt).strip()
             key = raw if raw else "ENTER"
 
@@ -344,10 +341,7 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
             selected_session_ids.clear()
             needs_reload = True
             continue
-        if key_str in {" ", "m"} and entries and mode == "view":
-            _toggle_selected_session(selected_session_ids, entries[selected_index])
-            continue
-        if key_str in {"e", "x"} and entries and mode == "view":
+        if key_str == "e" and entries and mode == "view":
             selected_entries = _selected_or_current_sessions(entries, selected_index, selected_session_ids)
             _run_selected_session_export(app, selected_entries)
             selected_session_ids.clear()
@@ -588,13 +582,6 @@ def open_archived_session_browser(app: "ToolkitTuiApp") -> None:
             selected_session_ids.clear()
             needs_reload = True
             continue
-        if key_str in {" ", "m"} and entries:
-            selected = entries[selected_index]
-            if selected.session_id in selected_session_ids:
-                selected_session_ids.remove(selected.session_id)
-            else:
-                selected_session_ids.add(selected.session_id)
-            continue
         if key_str == "x" and entries:
             selected_ids = [entry.session_id for entry in entries if entry.session_id in selected_session_ids]
             if not selected_ids:
@@ -759,13 +746,6 @@ def open_migrated_original_session_browser(app: "ToolkitTuiApp") -> None:
             selected_session_ids.clear()
             needs_reload = True
             continue
-        if key_str in {" ", "m"} and entries:
-            selected = entries[selected_index]
-            if selected.session_id in selected_session_ids:
-                selected_session_ids.remove(selected.session_id)
-            else:
-                selected_session_ids.add(selected.session_id)
-            continue
         if key_str == "x" and entries:
             selected_ids = [entry.session_id for entry in entries if entry.session_id in selected_session_ids]
             if not selected_ids:
@@ -886,7 +866,7 @@ def open_session_backup_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional[
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
         subtitle = (
-            "↑/↓ 选择 · Enter 查看详情 · / 搜索 · r 恢复选中 · x 删除选中 · d 查看详情 · q 返回"
+            "↑/↓ 选择 · Enter 查看详情 · / 搜索 · r 恢复当前 · x 删除当前 · d 查看详情 · q 返回"
             if mode == "view"
             else "↑/↓ 选择 · Enter 确认 · / 搜索 · d 查看详情 · q 返回"
         )
@@ -1054,7 +1034,7 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
         if browse_mode:
-            subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · a 选中全部 · i 删除选中/当前 · / 搜索 · s 类别 · m 机器 · l 历史 · q 返回"
+            subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · x 删除选中/当前 · a 选中全部 · / 搜索 · s 类别 · m 机器 · l 历史 · q 返回"
             title = "浏览 Bundle"
         elif import_mode:
             subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · i 导入选中/当前 · a 选中全部 · / 搜索 · s 类别 · m 机器 · l 历史 · q 返回"
@@ -1113,7 +1093,7 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
         key = read_key()
         if key is None:
             raw_prompt = (
-                "命令 [Enter/空格/a/i/\\/s/m/l/d/q]："
+                "命令 [Enter/空格/x/a/\\/s/m/l/d/q]："
                 if browse_mode
                 else "命令 [Enter/空格/i/a/\\/s/m/l/d/q]："
                 if import_mode
@@ -1182,9 +1162,6 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
             selected_bundle_dirs.clear()
             needs_reload = True
             continue
-        if key_str in {" ", "x"} and entries and (browse_mode or import_mode):
-            _toggle_selected_bundle(selected_bundle_dirs, entries[selected_index])
-            continue
         if key_str == "a" and (browse_mode or import_mode):
             all_entries = _all_bundle_entries_for_current_filters(
                 app,
@@ -1198,7 +1175,7 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
             if all_entries:
                 entries = all_entries
             continue
-        if key_str == "i" and entries and browse_mode:
+        if key_str == "x" and entries and browse_mode:
             selected_entries = _selected_or_current_bundles(entries, selected_index, selected_bundle_dirs)
             if _delete_selected_bundles(app, selected_entries):
                 selected_bundle_dirs.clear()
@@ -1679,21 +1656,10 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
             selected_index = 0
             selected_skills.clear()
             continue
-        if key_str == "g":
+        if key_str == "g" and mode != "delete":
             include_system = not include_system
             selected_index = 0
             selected_skills.clear()
-            continue
-        if key_str in {" ", "m"} and entries and mode in {"view", "delete"}:
-            selected = entries[selected_index]
-            if selected.location_kind != "custom":
-                app._show_detail_panel(
-                    "Skill 选择",
-                    ["系统/运行时 Skills 不能在这里选择。"],
-                    border_codes=(Ansi.DIM, Ansi.YELLOW),
-                )
-                continue
-            _toggle_selected_skill(selected_skills, selected)
             continue
         if key_str == "e" and entries and mode == "view":
             selected_entries = _selected_or_current_skills(entries, selected_index, selected_skills)
@@ -1706,31 +1672,6 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
                 continue
             _run_skill_export(app, selected_entries)
             selected_skills.clear()
-            continue
-        if key_str == "r" and entries and mode == "view":
-            selected = entries[selected_index]
-            if selected.location_kind != "custom":
-                app._show_detail_panel(
-                    "删除 Skill",
-                    ["系统/运行时 Skills 不能在这里删除。"],
-                    border_codes=(Ansi.DIM, Ansi.YELLOW),
-                )
-                continue
-            cli_args = ["delete-skill", selected.relative_dir, "--source-root", selected.source_root]
-            if not app._confirm_dangerous_action(
-                cli_args,
-                warning=f"将删除本机 Skill：{selected.source_root}/{selected.relative_dir}。",
-                impact=str(selected.skill_dir),
-            ):
-                continue
-            app._run_action(
-                f"删除本机 Skill {selected.relative_dir}",
-                cli_args,
-                dry_run=False,
-                runner=lambda args=cli_args: app._run_toolkit(args),
-                danger=True,
-            )
-            selected_index = 0
             continue
         if key_str == "x" and entries and mode == "delete":
             selected_entries = [
@@ -1993,9 +1934,6 @@ def open_skill_bundle_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["S
             filter_text = new_filter or ""
             selected_index = 0
             selected_bundle_dirs.clear()
-            continue
-        if key_str in {" ", "m"} and entries and mode == "view":
-            _toggle_selected_skill_bundle(selected_bundle_dirs, entries[selected_index])
             continue
         if key_str == "i" and entries and mode == "view":
             selected_entries = _selected_or_current_skill_bundles(entries, selected_index, selected_bundle_dirs)

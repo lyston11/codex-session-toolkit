@@ -82,17 +82,17 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         "  /                  在会话列表 / Bundle 列表 / 备份列表中搜索",
         "  Enter              在浏览模式下打开详情，在选择模式下直接确认",
         "  d                  只打开详情面板，不执行导入/导出",
-        "  e                  在会话列表直接导出为 Bundle",
-        "  x                  在项目会话列表直接导出这个项目下的全部会话",
+        "  e                  在会话 / Skills 列表导出当前或已勾选条目",
+        "  i                  在 Bundle / Skills Bundle 导入页导入当前或已勾选条目",
+        "  x                  在删除类浏览器或 Bundle 浏览页删除当前或已勾选条目",
         "  p                  在项目会话列表重新输入项目路径",
         "  s                  在 Bundle 列表按 Bundle 类别筛选",
         "  m                  在 Bundle 列表按来源机器筛选",
         "  l                  在 Bundle 列表切换历史范围（全部历史 / 仅最新）",
         "  a                  在支持多选的功能页选中当前筛选结果的全部匹配项",
-        "  i                  在 Bundle 浏览页删除选中/当前；在导入页导入选中/当前",
         "  g                  在 Skills 列表切换是否显示系统/运行时 Skills",
-        "  r                  在 Skills 列表删除选中的自定义 Skill；在会话备份列表恢复选中备份",
-        "  x                  在删除类浏览器中删除选中/当前条目；在会话备份列表删除选中备份",
+        "  r                  在会话备份列表恢复当前备份",
+        "  操作键语义：a=全选匹配项，e=导出，i=导入，x=删除",
     ]
     for line in render_box(lines, width=box_width, border_codes=(Ansi.DIM,)):
         print(line)

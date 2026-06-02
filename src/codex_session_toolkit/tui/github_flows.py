@@ -44,8 +44,8 @@ def github_sync_status_lines(
         f"{style_text('远端检查', Ansi.DIM)} : {'已检查' if status.remote_checked else '未检查'}",
         f"{style_text('远端最新提交', Ansi.DIM)} : {status.remote_commit_hash or '（无）'}",
         f"{style_text('远端更新时间', Ansi.DIM)} : {status.remote_updated_at or '（无）'}",
-        f"{style_text('本地领先', Ansi.DIM)} : {status.local_ahead_count}",
-        f"{style_text('远端领先', Ansi.DIM)} : {status.remote_ahead_count}",
+        f"{style_text('本地领先提交', Ansi.DIM)} : {status.local_ahead_count}",
+        f"{style_text('远端领先提交', Ansi.DIM)} : {status.remote_ahead_count}",
         f"{style_text('待同步变更', Ansi.DIM)} : {len(status.changed_files)}",
         f"{style_text('会话 Bundle 变更', Ansi.DIM)} : {len(status.session_changed_files)}",
         f"{style_text('Skills Bundle 变更', Ansi.DIM)} : {len(status.skill_changed_files)}",
@@ -62,7 +62,10 @@ def github_sync_status_lines(
     else:
         lines.append("同步范围：会话 Bundle 和 Skills Bundle 一起同步；不触碰 ~/.codex 原始会话目录。")
         lines.append("代理：GitHub 拉取/推送较慢时，可在同步中心选择“连接/断开代理”。")
-        lines.append("Pull：远端领先时先拉取；Push：本地领先或有工作区变更时再推送。")
+        lines.append("领先数量表示当前目标分支上的提交差异，不是远端分支数量。")
+        lines.append("Pull：远端领先且本地没有未提交 Bundle 变更时可拉取；Push：本地领先或有工作区变更时再推送。")
+        if status.remote_ahead_count and status.changed_files:
+            lines.append("当前拉取会被保护性停止：请先推送本地 Bundle 变更，或清理不需要的本地变更后再拉取。")
         lines.append("冲突策略：拉取/推送前会检查远端更新时间；可自动合并则合并，文件冲突时停止并列出冲突文件。")
 
     for changed_path in status.changed_files[:8]:

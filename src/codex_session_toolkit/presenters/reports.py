@@ -456,11 +456,26 @@ def print_github_pull_result(result: GitHubPullResult) -> int:
         print(f"... and {len(result.conflict_files) - 20} more conflict files")
     if result.skipped_reason:
         print(f"Skipped: {result.skipped_reason}")
+        detail = _github_pull_skip_detail(result.skipped_reason)
+        if detail:
+            print(f"Reason: {detail}")
     if result.commands:
         print("Git commands:")
         for command in result.commands:
             print(command)
     return 1 if result.conflict or result.skipped_reason == "local_changes_block_pull" else 0
+
+
+def _github_pull_skip_detail(skipped_reason: str) -> str:
+    if skipped_reason == "local_changes_block_pull":
+        return "Remote has newer bundle commits, but the local bundle workspace has uncommitted changes. Push or clean local changes before pulling."
+    if skipped_reason == "remote_branch_missing":
+        return "The configured remote branch does not exist yet."
+    if skipped_reason == "already_up_to_date":
+        return "The local bundle workspace already has the latest commit for this branch."
+    if skipped_reason == "merge_conflict":
+        return "Remote and local bundle changes conflict. Resolve the listed files before retrying."
+    return ""
 
 
 def print_batch_export_result(result: BatchExportResult) -> int:
