@@ -21,6 +21,7 @@ from .bundle_layout import (
     source_group_allows_export_group,
 )
 from .skills_manifest import SKILLS_MANIFEST_FILENAME, read_skills_manifest
+from .thread_history import THREAD_HISTORY_FILENAME
 
 
 def iter_bundle_directories_under_root(bundle_root: Path) -> List[Path]:
@@ -149,6 +150,7 @@ def collect_bundle_summaries(
             has_skills_manifest=has_skills_manifest,
             bundled_skill_count=bundled_skill_count,
             used_skill_count=used_skill_count,
+            has_thread_history=(bundle_dir / THREAD_HISTORY_FILENAME).is_file(),
         )
         if pattern:
             combined = " ".join(

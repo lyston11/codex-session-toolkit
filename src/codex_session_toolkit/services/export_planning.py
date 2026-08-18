@@ -60,6 +60,7 @@ class BatchExportPlan:
         failed_exports: list[tuple[str, str]] | None = None,
         manifest_file: Optional[Path] = None,
         total_skills_bundled: int = 0,
+        total_thread_history_rows_exported: int = 0,
         warnings: list[OperationWarning] | None = None,
     ) -> BatchExportResult:
         return BatchExportResult(
@@ -80,6 +81,7 @@ class BatchExportPlan:
             selection_path=self.selection_path,
             export_group=self.export_group,
             total_skills_bundled=total_skills_bundled,
+            total_thread_history_rows_exported=total_thread_history_rows_exported,
             warnings=warnings or [],
         )
 

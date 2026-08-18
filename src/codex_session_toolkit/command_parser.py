@@ -85,29 +85,24 @@ def create_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("session_ids", nargs="*", help="Session ids to export")
     export_parser.add_argument("--all", action="store_true", help="Export all local sessions")
     export_parser.add_argument("--dry-run", action="store_true", help="Preview selected sessions without exporting")
-    _add_skills_mode(export_parser, action="export")
 
     export_project_parser = subparsers.add_parser("export-project", help=command_help("export-project"))
     export_project_parser.add_argument("project_path", help="Project root path used to match session cwd")
     export_project_parser.add_argument("--dry-run", action="store_true")
     export_project_parser.add_argument("--active-only", action="store_true", help="Only export active sessions")
-    _add_skills_mode(export_project_parser, action="export")
 
     export_all_parser = subparsers.add_parser("export-desktop-all", help=command_help("export-desktop-all"))
     export_all_parser.add_argument("--dry-run", action="store_true")
     export_all_parser.add_argument("--active-only", action="store_true", help="Legacy compatibility flag")
-    _add_skills_mode(export_all_parser, action="export")
 
     export_active_desktop_parser = subparsers.add_parser(
         "export-active-desktop-all",
         help=command_help("export-active-desktop-all"),
     )
     export_active_desktop_parser.add_argument("--dry-run", action="store_true")
-    _add_skills_mode(export_active_desktop_parser, action="export")
 
     export_cli_parser = subparsers.add_parser("export-cli-all", help=command_help("export-cli-all"))
     export_cli_parser.add_argument("--dry-run", action="store_true")
-    _add_skills_mode(export_cli_parser, action="export")
 
     import_parser = subparsers.add_parser("import", help=command_help("import"))
     import_parser.add_argument("input_values", nargs="*", help="Session ids or bundle directories")
@@ -118,7 +113,6 @@ def create_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--export-group", default="", help="Only search bundles from this export folder (desktop/active/cli/project/single)")
     import_parser.add_argument("--project", default="", help="Project folder key for project bundle imports")
     import_parser.add_argument("--target-project-path", default="", help="Remap imported project cwd values to this local project path")
-    _add_skills_mode(import_parser, action="import")
 
     import_all_parser = subparsers.add_parser("import-desktop-all", help=command_help("import-desktop-all"))
     import_all_parser.add_argument("--desktop-visible", action="store_true")
@@ -128,7 +122,6 @@ def create_parser() -> argparse.ArgumentParser:
     import_all_parser.add_argument("--project", default="", help="Only import one project folder under project exports")
     import_all_parser.add_argument("--target-project-path", default="", help="Remap imported project cwd values to this local project path")
     import_all_parser.add_argument("--latest-only", action="store_true", help="Only import the latest bundle per machine and session id")
-    _add_skills_mode(import_all_parser, action="import")
 
     list_skills_parser = subparsers.add_parser("list-skills", help=command_help("list-skills"))
     _add_optional_pattern(list_skills_parser)

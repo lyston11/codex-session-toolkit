@@ -62,6 +62,18 @@ class PackagingSmokeTests(unittest.TestCase):
         parser = create_arg_parser()
         self.assertEqual(parser.prog, APP_COMMAND)
 
+    def test_session_commands_do_not_expose_skills_mode(self) -> None:
+        parser = create_parser()
+        export_args = parser.parse_args(["export", "aaa00032-0000-7000-8000-000000000032"])
+        import_args = parser.parse_args(["import", "aaa00032-0000-7000-8000-000000000032"])
+        skill_args = parser.parse_args(["export-skills", "--skills-mode", "strict"])
+
+        self.assertFalse(hasattr(export_args, "skills_mode"))
+        self.assertFalse(hasattr(import_args, "skills_mode"))
+        self.assertEqual(skill_args.skills_mode, "strict")
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+            parser.parse_args(["export", "aaa00032-0000-7000-8000-000000000032", "--skills-mode", "skip"])
+
     def test_canonical_cli_commands_have_registered_handlers(self) -> None:
         parser = create_parser()
         command_names = set()

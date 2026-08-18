@@ -41,8 +41,8 @@ def bundle_detail_lines(app: "ToolkitTuiApp", bundle: BundleSummary) -> List[str
         lines.append(f"{style_text('项目文件夹', Ansi.DIM)} : {bundle.project_label or bundle.project_key}")
     if bundle.project_path:
         lines.append(f"{style_text('项目原路径', Ansi.DIM)} : {bundle.project_path}")
-    if bundle.has_skills_manifest:
-        lines.append(f"{style_text('Skills', Ansi.DIM)}       : 已打包 {bundle.bundled_skill_count} / 已使用 {bundle.used_skill_count}")
+    if bundle.has_thread_history:
+        lines.append(f"{style_text('Thread 历史', Ansi.DIM)} : 已随 Bundle 打包")
     return lines
 
 

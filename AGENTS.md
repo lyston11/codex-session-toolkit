@@ -29,11 +29,13 @@
 - 面向用户的主流程优先在 TUI 中提供完整体验；新增 CLI 能力时，应同步评估是否需要 TUI 状态页、确认页或专用 flow，避免只把 CLI 命令挂进菜单。
 - Skills manifest 数据结构、sidecar 读写和恢复报告归 `stores/skills_manifest.py`。
 - Skills 发现、打包、恢复行为归 `stores/skills.py`；保留必要 re-export 兼容旧调用。
-- Session bundle 中的 Skills sidecar 恢复编排归 `services/skill_sidecars.py`。
+- 会话 Bundle 不得携带或恢复 Skills；Skills 只通过 standalone Skills Bundle 迁移。
+- `thread_history_*.sqlite` 的单 thread 投影导出和事务式合并归 `stores/thread_history.py`；不得复制或覆盖包含其他 thread 的整库。
+- `sqlite_home`、`CODEX_SQLITE_HOME` 和 SQLite 状态库定位归 `paths.py`。
 - `./codex_bundles` 到 GitHub 的连接和同步编排归 `services/github_sync.py`；不要让 TUI 或 CLI 直接拼 git 命令。GitHub 同步必须使用独立 Bundle 仓库，不能连接到当前项目源码仓库 remote。只有 `connect-github <repo_url>` 可以接收仓库地址，`pull-github` / `sync-github` 必须只使用已经连接好的仓库。同步范围是整个 `./codex_bundles` 工作区，包括会话 Bundle 和 Skills Bundle；TUI 状态页应先渲染本地快照，再用进度检测远端更新时间；连接、拉取、推送等慢 git 动作必须在 TUI 中显示进度，不能空白阻塞。其他功能只能显示本地同步提示或在导出完成后提供可选推送入口，不能自动联网检查远端，不能在导入前弹出强制拉取提示；用户直接拷贝 Bundle 到本机后应能顺畅导入。拉取/推送前必须考虑远端更新和冲突，不能静默覆盖。GitHub 同步内部和结果展示统一使用 POSIX 风格相对路径，必须兼容 macOS `/` 与 Windows `\` 输入。父项目源码仓库必须在 `.gitignore` 中忽略 `codex_bundles/`。
 - `tui/sync_prompts.py` 负责 TUI 中的同步提示和导出后快捷入口。首页、Bundle、Skills 相关页面只允许读取带缓存的本地状态；远端检查只允许在用户明确进入 GitHub / Sync 状态页、Pull 或 Push 时发生。
 - 批量导出选择和元数据计划归 `services/export_planning.py`；实际导出执行归 `services/exporting.py`。
-- 批量导入筛选、latest-only、project remap 和 report path 计划归 `services/import_planning.py`；实际导入执行归 `services/importing.py`。
+- 批量导入筛选、latest-only 和 project remap 计划归 `services/import_planning.py`；实际导入执行归 `services/importing.py`。
 - `manifest.env` 写入统一使用 `validation.write_manifest()`，不要在 service 中手写 shell quoting。
 - 批量导出 manifest 文本写入统一使用 `stores/bundle_repository.write_batch_export_manifest()`。
 

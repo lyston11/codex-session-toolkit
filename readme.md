@@ -371,8 +371,9 @@ export CST_MACHINE_LABEL=My-MacBook
 - `codex/<relative rollout path>.jsonl`
 - `history.jsonl`
 - `manifest.env`
-- `skills_manifest.json`，可选
-- `skills/`，可选，只包含本会话实际依赖的自定义 Skill 文件
+- `thread_history_1.sqlite`，可选，只包含当前 thread 的投影数据
+
+会话 Bundle 不再携带或恢复 Skill。这样可以避免当前 Codex 的 Skill root alias、插件和运行时目录被误判为可跨机器复制的本地文件。
 
 standalone Skills Bundle 默认包含：
 
@@ -388,35 +389,13 @@ project 分类额外记录：
 
 ## Skills 搬运规则
 
-会话导出时，工具会读取会话上下文中的 `<skills_instructions>`，区分“可用 Skill”和“实际使用过的 Skill”。
+Skills 只通过 standalone Skills Bundle 搬运，与会话导入导出解耦。`export-skills`、`import-skill-bundle` 和 TUI 的 Skills 区仍支持 `best-effort`、`strict`、`skip`、`overwrite` 模式。
 
-- 实际使用过的自定义 Skill 会完整打包到 `skills/`
-- 可用但未使用的 Skill 只记录元数据
-- 系统 Skill 和运行时 Skill 只记录元数据
+## SQLite 状态位置
 
-导入时默认是 `best-effort`：
+工具读取 `~/.codex/config.toml` 顶层的 `sqlite_home`，并用它定位 `state_*.sqlite` 和 `thread_history_*.sqlite`。如果未配置，则按官方优先级读取 `CODEX_SQLITE_HOME`，最后回退到 `~/.codex/`。相对路径按当前工作目录解析。
 
-| 状态 | 行为 |
-|---|---|
-| 本机不存在 | 从 Bundle 恢复 |
-| 本机已存在且内容一致 | 直接复用 |
-| 本机已存在但内容不同 | 跳过，不覆盖 |
-| 会话依赖但 Bundle 未携带 | 记录 missing，不阻塞 |
-
-`--skills-mode` 可选：
-
-| 模式 | 行为 |
-|---|---|
-| `best-effort` | 默认模式，尽量恢复，冲突和缺失记录为 warning |
-| `strict` | 缺失、冲突或异常时中止 |
-| `skip` | 完全不处理 Skills |
-| `overwrite` | 允许覆盖本机已有 Skill |
-
-批量导入会生成 Skills 恢复报告，通常位于：
-
-```text
-./codex_bundles/_skills_restore_report.<timestamp>.<id>.json
-```
+导出投影数据时只选择当前 session id 对应的 `thread_history_projection_state`、`thread_turns` 和 `thread_items` 行，不会把其他会话的 SQLite 数据带入 Bundle。导入已有数据库时也只替换当前 thread 的投影行。
 
 ## Provider 和 Desktop 标题
 

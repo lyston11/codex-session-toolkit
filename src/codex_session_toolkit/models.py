@@ -57,6 +57,7 @@ class BundleSummary:
     has_skills_manifest: bool = False
     bundled_skill_count: int = 0
     used_skill_count: int = 0
+    has_thread_history: bool = False
 
 
 @dataclass(frozen=True)
@@ -179,6 +180,8 @@ class ExportResult:
     skills_bundled_count: int = 0
     skills_available_count: int = 0
     skills_manifest_path: Optional[Path] = None
+    thread_history_rows_exported: int = 0
+    thread_history_sidecar_path: Optional[Path] = None
     warnings: List[OperationWarning] = field(default_factory=list)
 
 
@@ -376,6 +379,7 @@ class BatchExportResult:
     selection_path: str = ""
     export_group: str = ""
     total_skills_bundled: int = 0
+    total_thread_history_rows_exported: int = 0
     warnings: List[OperationWarning] = field(default_factory=list)
 
 
@@ -403,6 +407,9 @@ class ImportResult:
     skills_failed_count: int = 0
     desktop_sidebar_promoted_count: int = 0
     desktop_pinned_count: int = 0
+    thread_history_action: str = "missing"
+    thread_history_rows_imported: int = 0
+    thread_history_db_path: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -429,6 +436,7 @@ class BatchImportResult:
     skills_restore_report_path: Optional[Path] = None
     desktop_sidebar_promoted_count: int = 0
     desktop_pinned_count: int = 0
+    total_thread_history_rows_imported: int = 0
     warnings: List[OperationWarning] = field(default_factory=list)
 
 

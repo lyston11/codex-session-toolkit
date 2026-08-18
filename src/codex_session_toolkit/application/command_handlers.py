@@ -127,14 +127,12 @@ def _handle_export(args: argparse.Namespace, paths: CodexPaths) -> int:
                 args.session_ids,
                 all_sessions=args.all,
                 dry_run=args.dry_run,
-                skills_mode=args.skills_mode,
             )
         )
     return print_export_result(
         export_session(
             paths,
             args.session_ids[0],
-            skills_mode=args.skills_mode,
         )
     )
 
@@ -146,23 +144,22 @@ def _handle_export_project(args: argparse.Namespace, paths: CodexPaths) -> int:
             args.project_path,
             dry_run=args.dry_run,
             active_only=args.active_only,
-            skills_mode=args.skills_mode,
         )
     )
 
 
 def _handle_export_desktop_all(args: argparse.Namespace, paths: CodexPaths) -> int:
     return print_batch_export_result(
-        export_desktop_all(paths, dry_run=args.dry_run, active_only=args.active_only, skills_mode=args.skills_mode)
+        export_desktop_all(paths, dry_run=args.dry_run, active_only=args.active_only)
     )
 
 
 def _handle_export_active_desktop_all(args: argparse.Namespace, paths: CodexPaths) -> int:
-    return print_batch_export_result(export_active_desktop_all(paths, dry_run=args.dry_run, skills_mode=args.skills_mode))
+    return print_batch_export_result(export_active_desktop_all(paths, dry_run=args.dry_run))
 
 
 def _handle_export_cli_all(args: argparse.Namespace, paths: CodexPaths) -> int:
-    return print_batch_export_result(export_cli_all(paths, dry_run=args.dry_run, skills_mode=args.skills_mode))
+    return print_batch_export_result(export_cli_all(paths, dry_run=args.dry_run))
 
 
 def _handle_import(args: argparse.Namespace, paths: CodexPaths) -> int:
@@ -178,7 +175,6 @@ def _handle_import(args: argparse.Namespace, paths: CodexPaths) -> int:
                 target_project_path=args.target_project_path,
                 desktop_visible=args.desktop_visible,
                 create_missing_workspace=args.desktop_visible and not args.no_create_workspace,
-                skills_mode=args.skills_mode,
             )
         )
     return print_import_result(
@@ -190,7 +186,6 @@ def _handle_import(args: argparse.Namespace, paths: CodexPaths) -> int:
             export_group_filter=args.export_group,
             desktop_visible=args.desktop_visible,
             create_missing_workspace=args.desktop_visible and not args.no_create_workspace,
-            skills_mode=args.skills_mode,
         )
     )
 
@@ -206,7 +201,6 @@ def _handle_import_desktop_all(args: argparse.Namespace, paths: CodexPaths) -> i
             latest_only=args.latest_only,
             desktop_visible=args.desktop_visible,
             create_missing_workspace=args.desktop_visible and not args.no_create_workspace,
-            skills_mode=args.skills_mode,
         )
     )
 

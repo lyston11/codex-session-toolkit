@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-from uuid import uuid4
 
 from ..errors import ToolkitError
 from ..models import BundleSummary
@@ -41,7 +39,6 @@ class BatchImportPlan:
     project_label: str
     project_source_path: str
     target_project_path: str
-    skills_restore_report_candidate_path: Optional[Path]
 
     @property
     def bundle_dirs(self) -> list[Path]:
@@ -66,7 +63,6 @@ def build_batch_import_plan(
     project_filter: str,
     target_project_path: str,
     latest_only: bool,
-    skills_mode: str,
 ) -> BatchImportPlan:
     default_bundle_root = normalize_bundle_root(paths, None, paths.default_desktop_bundle_root)
     resolved_bundle_root = normalize_bundle_root(paths, bundle_root, paths.default_desktop_bundle_root)
@@ -108,11 +104,6 @@ def build_batch_import_plan(
         project_label=_project_label_for_filter(bundle_summaries, normalized_project_filter),
         project_source_path=_project_source_path_for_filter(bundle_summaries, normalized_project_filter),
         target_project_path=normalized_target_project_path,
-        skills_restore_report_candidate_path=_skills_restore_report_candidate_path(
-            paths,
-            resolved_bundle_root,
-            skills_mode=skills_mode,
-        ),
     )
 
 
@@ -127,7 +118,6 @@ def build_selected_import_plan(
     project_filter: str,
     target_project_path: str,
     latest_only: bool,
-    skills_mode: str,
 ) -> BatchImportPlan:
     if not input_values:
         raise ToolkitError("Bundle input is required.")
@@ -198,11 +188,6 @@ def build_selected_import_plan(
         project_label=_project_label_for_filter(selected_summaries, normalized_project_filter),
         project_source_path=_project_source_path_for_filter(selected_summaries, normalized_project_filter),
         target_project_path=normalized_target_project_path,
-        skills_restore_report_candidate_path=_skills_restore_report_candidate_path(
-            paths,
-            resolved_bundle_root,
-            skills_mode=skills_mode,
-        ),
     )
 
 
@@ -335,15 +320,3 @@ def _project_source_path_for_filter(bundle_summaries: list[BundleSummary], proje
         if summary.project_key == project_filter:
             return summary.project_path
     return ""
-
-
-def _skills_restore_report_candidate_path(
-    paths: CodexPaths,
-    bundle_root: Path,
-    *,
-    skills_mode: str,
-) -> Optional[Path]:
-    if skills_mode == "skip":
-        return None
-    report_root = bundle_root if bundle_root.is_dir() else paths.legacy_session_bundle_root
-    return report_root / f"_skills_restore_report.{int(time.time())}.{uuid4().hex}.json"

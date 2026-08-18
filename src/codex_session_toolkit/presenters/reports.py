@@ -150,6 +150,16 @@ def _format_operation_warning(warning: OperationWarning) -> str:
         return f"Skipped invalid session file: {warning.detail}"
     if warning.code == "skipped_session_without_id":
         return f"Skipped session without payload.id: {warning.path}"
+    if warning.code == "export_thread_history_failed":
+        return f"Warning: failed to export thread history projection from {warning.path}: {warning.detail}"
+    if warning.code == "import_thread_history_failed":
+        return f"Warning: failed to import thread history projection from {warning.path}: {warning.detail}"
+    if warning.code == "thread_history_skipped_newer_local":
+        return "Warning: local session is newer; skipped the imported thread history projection."
+    if warning.code == "thread_history_missing_migrations":
+        return "Warning: thread history sidecar has no migration metadata; target database was not created."
+    if warning.code == "thread_history_tables_skipped":
+        return f"Warning: incompatible thread history tables were skipped: {warning.detail}"
     return warning.detail or warning.code
 
 
@@ -251,11 +261,9 @@ def print_export_result(result: ExportResult) -> int:
     print(f"Session file: {result.relative_path}")
     print(f"Session kind: {result.session_kind or 'unknown'}")
     print(f"Session cwd: {result.session_cwd or 'unknown'}")
-    if result.skills_available_count > 0:
-        print(f"Skills available: {result.skills_available_count}")
-        print(f"Skills bundled:   {result.skills_bundled_count}")
-    if result.skills_manifest_path:
-        print(f"Skills manifest:  {result.skills_manifest_path}")
+    print(f"Thread history rows: {result.thread_history_rows_exported}")
+    if result.thread_history_sidecar_path:
+        print(f"Thread history DB:   {result.thread_history_sidecar_path}")
     return 0
 
 
@@ -505,6 +513,7 @@ def print_batch_export_result(result: BatchExportResult) -> int:
     if result.manifest_file is not None:
         print(f"Exported {result.summary_label} sessions: {len(result.success_ids)}")
         print(f"Manifest: {result.manifest_file}")
+        print(f"Thread history rows: {result.total_thread_history_rows_exported}")
 
     if result.failed_exports:
         print("Batch export completed with partial failures.")
@@ -540,18 +549,10 @@ def print_import_result(result: ImportResult) -> int:
     print(f"Desktop threads pinned: {result.desktop_pinned_count}")
     if result.target_desktop_model_provider:
         print(f"Desktop model provider: {result.target_desktop_model_provider}")
-    if (
-        result.skills_restored_count
-        or result.skills_already_present_count
-        or result.skills_conflict_skipped_count
-        or result.skills_missing_count
-        or result.skills_failed_count
-    ):
-        print(f"Skills restored:          {result.skills_restored_count}")
-        print(f"Skills already present:   {result.skills_already_present_count}")
-        print(f"Skills conflict skipped:  {result.skills_conflict_skipped_count}")
-        print(f"Skills missing:           {result.skills_missing_count}")
-        print(f"Skills failed:            {result.skills_failed_count}")
+    print(f"Thread history action: {result.thread_history_action}")
+    print(f"Thread history rows:   {result.thread_history_rows_imported}")
+    if result.thread_history_db_path:
+        print(f"Thread history DB:     {result.thread_history_db_path}")
     return 0
 
 
@@ -572,6 +573,7 @@ def print_batch_import_result(result: BatchImportResult) -> int:
     print(f"History view: {'仅最新' if result.latest_only else '全部历史'}")
     print(f"Bundle directories found: {len(result.bundle_dirs)}")
     print(f"Imported bundle directories: {len(result.success_dirs)}")
+    print(f"Thread history rows imported: {result.total_thread_history_rows_imported}")
     print(f"Desktop sidebar threads promoted: {result.desktop_sidebar_promoted_count}")
     print(f"Desktop threads pinned: {result.desktop_pinned_count}")
     if result.failed_imports:
@@ -582,20 +584,6 @@ def print_batch_import_result(result: BatchImportResult) -> int:
             print(str(failed_dir), file=sys.stderr)
             print(f"  reason: {reason}", file=sys.stderr)
         return 1
-    if (
-        result.total_skills_restored
-        or result.total_skills_already_present
-        or result.total_skills_conflict_skipped
-        or result.total_skills_missing
-        or result.total_skills_failed
-    ):
-        print(f"Total skills restored:          {result.total_skills_restored}")
-        print(f"Total skills already present:   {result.total_skills_already_present}")
-        print(f"Total skills conflict skipped:  {result.total_skills_conflict_skipped}")
-        print(f"Total skills missing:           {result.total_skills_missing}")
-        print(f"Total skills failed:            {result.total_skills_failed}")
-    if result.skills_restore_report_path:
-        print(f"Skills restore report: {result.skills_restore_report_path}")
     return 0
 
 

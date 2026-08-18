@@ -134,7 +134,7 @@ SECTION_NOTES = {
     ],
     "skills": [
         "聚焦 Skills 的独立同步。",
-        "会话导入导出只携带实际依赖的 Skills，全量同步放在这里处理。",
+        "会话 Bundle 不携带 Skills；Skill 迁移和同步统一在这里独立处理。",
     ],
     "repair": [
         "按目标处理 Provider 复制、Provider 迁移、Desktop 显示修复与旧副本清理。",

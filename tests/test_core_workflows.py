@@ -18,10 +18,10 @@ if str(SRC_DIR) not in os.sys.path:
     os.sys.path.insert(0, str(SRC_DIR))
 
 from codex_session_toolkit.paths import CodexPaths  # noqa: E402
+import codex_session_toolkit.paths as paths_module  # noqa: E402
 from codex_session_toolkit.commands import run_cli  # noqa: E402
 from codex_session_toolkit.errors import ToolkitError  # noqa: E402
 from codex_session_toolkit.models import BundleSummary  # noqa: E402
-from codex_session_toolkit.presenters.reports import print_batch_import_result  # noqa: E402
 from codex_session_toolkit.services.backups import delete_session_backup, list_session_backups, restore_session_backup  # noqa: E402
 from codex_session_toolkit.services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles  # noqa: E402
 from codex_session_toolkit.services.bundle_management import delete_bundle_summaries  # noqa: E402
@@ -65,7 +65,8 @@ from codex_session_toolkit.stores.desktop_state import (  # noqa: E402
     repair_blank_thread_sources,
 )
 from codex_session_toolkit.stores.session_files import iter_session_files, read_session_payload  # noqa: E402
-from codex_session_toolkit.stores.skills import SkillDescriptor, SkillsManifest, compute_skill_directory_hash, infer_skill_source_root, read_skills_manifest, write_skills_manifest  # noqa: E402
+from codex_session_toolkit.stores.skills import SkillDescriptor, SkillsManifest, compute_skill_directory_hash, infer_skill_source_root, write_skills_manifest  # noqa: E402
+from codex_session_toolkit.stores.thread_history import export_thread_history, import_thread_history  # noqa: E402
 from codex_session_toolkit.validation import load_manifest, write_manifest  # noqa: E402
 
 
@@ -153,6 +154,79 @@ def create_threads_db_file(db_path: Path) -> Path:
         )
         """
     )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def create_thread_history_db_file(db_path: Path, thread_ids: list[str]) -> Path:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        create table _sqlx_migrations (
+            version integer primary key,
+            description text not null,
+            installed_on text not null default current_timestamp,
+            success integer not null,
+            checksum blob not null,
+            execution_time integer not null
+        );
+        create table thread_history_projection_state (
+            thread_id text primary key,
+            next_rollout_byte_offset integer not null,
+            next_rollout_ordinal integer not null
+        );
+        create table thread_turns (
+            thread_id text not null,
+            turn_id text not null,
+            rollout_ordinal integer not null,
+            status text not null,
+            error_json text,
+            started_at integer,
+            completed_at integer,
+            duration_ms integer,
+            first_user_item_id text,
+            final_agent_item_id text,
+            rollout_byte_offset integer,
+            rollout_end_ordinal integer,
+            rollout_end_byte_offset integer,
+            primary key (thread_id, turn_id)
+        );
+        create unique index idx_thread_turns_page on thread_turns(thread_id, rollout_ordinal);
+        create table thread_items (
+            thread_id text not null,
+            turn_id text not null,
+            item_id text not null,
+            rollout_ordinal integer not null,
+            created_at_ms integer not null,
+            item_json text not null,
+            item_type text not null default '',
+            updated_at_ordinal integer not null default 0,
+            primary key (thread_id, turn_id, item_id)
+        );
+        create unique index idx_thread_items_page on thread_items(thread_id, rollout_ordinal);
+        """
+    )
+    conn.execute(
+        "insert into _sqlx_migrations (version, description, success, checksum, execution_time) values (1, 'thread history', 1, ?, 1)",
+        (b"test",),
+    )
+    for ordinal, thread_id in enumerate(thread_ids, start=1):
+        turn_id = f"turn-{ordinal}"
+        item_id = f"item-{ordinal}"
+        conn.execute(
+            "insert into thread_history_projection_state values (?, ?, ?)",
+            (thread_id, ordinal * 100, ordinal * 10),
+        )
+        conn.execute(
+            "insert into thread_turns (thread_id, turn_id, rollout_ordinal, status) values (?, ?, ?, 'completed')",
+            (thread_id, turn_id, ordinal * 10),
+        )
+        conn.execute(
+            "insert into thread_items (thread_id, turn_id, item_id, rollout_ordinal, created_at_ms, item_json, item_type, updated_at_ordinal) values (?, ?, ?, ?, ?, ?, 'userMessage', ?)",
+            (thread_id, turn_id, item_id, ordinal * 10, ordinal * 1000, json.dumps({"id": item_id}), ordinal * 10),
+        )
     conn.commit()
     conn.close()
     return db_path
@@ -548,6 +622,54 @@ class CoreWorkflowTests(unittest.TestCase):
 
             self.assertEqual(CodexPaths(home=home).latest_state_db(), latest_db)
             self.assertLess(latest_db.name, older_db.name)
+
+    def test_sqlite_home_config_takes_precedence_for_all_sqlite_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            home = root / "home"
+            configured = root / "configured-sqlite"
+            environment = root / "environment-sqlite"
+            write_config(home, "test-provider")
+            with (home / ".codex" / "config.toml").open("a", encoding="utf-8") as fh:
+                fh.write(f'sqlite_home = "{configured}"\n')
+            state_db = create_threads_db_file(configured / "state_0010.sqlite")
+            history_db = create_thread_history_db_file(
+                configured / "thread_history_1.sqlite",
+                ["aaa00028-0000-7000-8000-000000000028"],
+            )
+
+            with env_override("CODEX_SQLITE_HOME", str(environment)):
+                paths = CodexPaths(home=home)
+                self.assertEqual(paths.sqlite_dir, configured)
+                self.assertEqual(paths.latest_state_db(), state_db)
+                self.assertEqual(paths.latest_thread_history_db(), history_db)
+
+    def test_relative_sqlite_home_and_python38_fallback_parser(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            home = root / "home"
+            workspace = root / "workspace"
+            workspace.mkdir()
+            code_dir = home / ".codex"
+            code_dir.mkdir(parents=True)
+            (code_dir / "config.toml").write_text(
+                'sqlite_home = "state-files" # current working directory\n[features]\napps = true\n',
+                encoding="utf-8",
+            )
+
+            with pushd(workspace), patch.object(paths_module, "tomllib", None):
+                self.assertEqual(CodexPaths(home=home).sqlite_dir.resolve(), (workspace / "state-files").resolve())
+
+    def test_sqlite_home_environment_falls_back_to_codex_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            home = root / "home"
+            workspace = root / "workspace"
+            workspace.mkdir()
+            with pushd(workspace), env_override("CODEX_SQLITE_HOME", "env-state"):
+                self.assertEqual(CodexPaths(home=home).sqlite_dir.resolve(), (workspace / "env-state").resolve())
+            with patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(CodexPaths(home=home).sqlite_dir, home / ".codex")
 
     def test_iso_to_epoch_ms_preserves_desktop_millisecond_precision(self) -> None:
         self.assertEqual(
@@ -2018,6 +2140,333 @@ class CoreWorkflowTests(unittest.TestCase):
 
                 sibling_target, sibling_status = default_local_project_target("project-a", str(workspace / "missing-project-a"))
                 self.assertEqual((str(Path(sibling_target).resolve()), sibling_status), (str(sibling_project.resolve()), "same_name"))
+
+    def test_session_bundle_exports_and_merges_only_its_thread_history_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            workspace = root / "workspace"
+            src_home = root / "src-home"
+            dst_home = root / "dst-home"
+            src_sqlite = root / "src-sqlite"
+            dst_sqlite = root / "dst-sqlite"
+            workspace.mkdir()
+            write_config(src_home, "source-provider")
+            write_config(dst_home, "target-provider")
+            with (src_home / ".codex" / "config.toml").open("a", encoding="utf-8") as fh:
+                fh.write(f'sqlite_home = "{src_sqlite}"\n')
+            with (dst_home / ".codex" / "config.toml").open("a", encoding="utf-8") as fh:
+                fh.write(f'sqlite_home = "{dst_sqlite}"\n')
+
+            session_id = "aaa00029-0000-7000-8000-000000000029"
+            other_id = "aaa00030-0000-7000-8000-000000000030"
+            write_session(
+                src_home,
+                session_id,
+                provider="source-provider",
+                source="cli",
+                originator="Codex CLI",
+                cwd=workspace,
+            )
+            write_history(src_home, session_id, "projection history")
+            create_thread_history_db_file(
+                src_sqlite / "thread_history_1.sqlite",
+                [session_id, other_id],
+            )
+
+            target_db = create_thread_history_db_file(
+                dst_sqlite / "thread_history_1.sqlite",
+                [session_id, other_id],
+            )
+            conn = sqlite3.connect(target_db)
+            conn.execute(
+                "update thread_history_projection_state set next_rollout_byte_offset = 999 where thread_id = ?",
+                (session_id,),
+            )
+            conn.execute(
+                "update thread_history_projection_state set next_rollout_byte_offset = 777 where thread_id = ?",
+                (other_id,),
+            )
+            conn.commit()
+            conn.close()
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                export_result = export_session(CodexPaths(home=src_home), session_id)
+                import_result = import_session(CodexPaths(home=dst_home), str(export_result.bundle_dir))
+
+            self.assertEqual(export_result.thread_history_rows_exported, 3)
+            self.assertIsNotNone(export_result.thread_history_sidecar_path)
+            assert export_result.thread_history_sidecar_path is not None
+            sidecar = sqlite3.connect(export_result.thread_history_sidecar_path)
+            try:
+                for table in ("thread_history_projection_state", "thread_turns", "thread_items"):
+                    self.assertEqual(
+                        sidecar.execute(f"select distinct thread_id from {table}").fetchall(),
+                        [(session_id,)],
+                    )
+                self.assertEqual(sidecar.execute("select count(*) from _sqlx_migrations").fetchone()[0], 1)
+            finally:
+                sidecar.close()
+
+            self.assertEqual(import_result.thread_history_action, "merged")
+            self.assertEqual(import_result.thread_history_rows_imported, 3)
+            conn = sqlite3.connect(target_db)
+            try:
+                self.assertEqual(
+                    conn.execute(
+                        "select next_rollout_byte_offset from thread_history_projection_state where thread_id = ?",
+                        (session_id,),
+                    ).fetchone()[0],
+                    100,
+                )
+                self.assertEqual(
+                    conn.execute(
+                        "select next_rollout_byte_offset from thread_history_projection_state where thread_id = ?",
+                        (other_id,),
+                    ).fetchone()[0],
+                    777,
+                )
+            finally:
+                conn.close()
+
+    def test_session_import_creates_thread_history_database_from_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            workspace = root / "workspace"
+            src_home = root / "src-home"
+            dst_home = root / "dst-home"
+            workspace.mkdir()
+            write_config(src_home, "source-provider")
+            write_config(dst_home, "target-provider")
+            session_id = "aaa00031-0000-7000-8000-000000000031"
+            write_session(
+                src_home,
+                session_id,
+                provider="source-provider",
+                source="cli",
+                originator="Codex CLI",
+                cwd=workspace,
+            )
+            create_thread_history_db_file(
+                src_home / ".codex" / "thread_history_1.sqlite",
+                [session_id],
+            )
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                export_result = export_session(CodexPaths(home=src_home), session_id)
+                import_result = import_session(CodexPaths(home=dst_home), str(export_result.bundle_dir))
+
+            target_db = dst_home / ".codex" / "thread_history_1.sqlite"
+            self.assertEqual(import_result.thread_history_action, "created")
+            self.assertEqual(import_result.thread_history_rows_imported, 3)
+            self.assertTrue(target_db.is_file())
+            conn = sqlite3.connect(target_db)
+            try:
+                self.assertEqual(
+                    conn.execute("select thread_id from thread_history_projection_state").fetchall(),
+                    [(session_id,)],
+                )
+                self.assertEqual(conn.execute("select count(*) from _sqlx_migrations").fetchone()[0], 1)
+            finally:
+                conn.close()
+
+    def test_session_import_skips_projection_when_local_rollout_is_newer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            workspace = root / "workspace"
+            src_home = root / "src-home"
+            dst_home = root / "dst-home"
+            workspace.mkdir()
+            session_id = "aaa00033-0000-7000-8000-000000000033"
+            write_session(
+                src_home,
+                session_id,
+                provider="source-provider",
+                source="cli",
+                originator="Codex CLI",
+                cwd=workspace,
+                timestamp="2026-04-10T10:00:00Z",
+            )
+            create_thread_history_db_file(
+                src_home / ".codex" / "thread_history_1.sqlite",
+                [session_id],
+            )
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                export_result = export_session(CodexPaths(home=src_home), session_id)
+
+            write_session(
+                dst_home,
+                session_id,
+                provider="target-provider",
+                source="cli",
+                originator="Codex CLI",
+                cwd=workspace,
+                timestamp="2027-04-10T10:00:00Z",
+            )
+            target_db = create_thread_history_db_file(
+                dst_home / ".codex" / "thread_history_1.sqlite",
+                [session_id],
+            )
+            conn = sqlite3.connect(target_db)
+            conn.execute(
+                "update thread_history_projection_state set next_rollout_byte_offset = 999 where thread_id = ?",
+                (session_id,),
+            )
+            conn.commit()
+            conn.close()
+
+            with pushd(workspace):
+                import_result = import_session(CodexPaths(home=dst_home), str(export_result.bundle_dir))
+
+            self.assertEqual(import_result.rollout_action, "preserved_newer_local")
+            self.assertEqual(import_result.thread_history_action, "skipped_newer_local")
+            conn = sqlite3.connect(target_db)
+            try:
+                self.assertEqual(
+                    conn.execute(
+                        "select next_rollout_byte_offset from thread_history_projection_state where thread_id = ?",
+                        (session_id,),
+                    ).fetchone()[0],
+                    999,
+                )
+            finally:
+                conn.close()
+
+    def test_thread_history_merge_uses_shared_columns_and_preserves_other_threads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            session_id = "aaa00034-0000-7000-8000-000000000034"
+            other_id = "aaa00035-0000-7000-8000-000000000035"
+            source_db = create_thread_history_db_file(root / "source.sqlite", [session_id, other_id])
+            target_db = create_thread_history_db_file(root / "target.sqlite", [session_id, other_id])
+            bundle_dir = root / "bundle"
+            bundle_dir.mkdir()
+
+            target = sqlite3.connect(target_db)
+            try:
+                target.execute(
+                    "alter table thread_history_projection_state add column future_value text default 'keep'"
+                )
+                target.execute(
+                    "update thread_history_projection_state set next_rollout_byte_offset = 999, future_value = 'stale' where thread_id = ?",
+                    (session_id,),
+                )
+                target.execute(
+                    "update thread_history_projection_state set next_rollout_byte_offset = 777, future_value = 'other-keep' where thread_id = ?",
+                    (other_id,),
+                )
+                target.commit()
+            finally:
+                target.close()
+
+            export_result = export_thread_history(source_db, bundle_dir, session_id)
+            self.assertIsNotNone(export_result.sidecar_path)
+            assert export_result.sidecar_path is not None
+
+            sidecar = sqlite3.connect(export_result.sidecar_path)
+            try:
+                sidecar.execute("alter table thread_turns add column extra_source_column text")
+                sidecar.execute("update thread_turns set extra_source_column = 'sidecar-only'")
+                sidecar.commit()
+            finally:
+                sidecar.close()
+
+            import_result = import_thread_history(export_result.sidecar_path, target_db, session_id)
+            self.assertEqual(import_result.action, "merged")
+            self.assertEqual(import_result.row_count, 3)
+
+            target = sqlite3.connect(target_db)
+            try:
+                self.assertEqual(
+                    target.execute(
+                        "select next_rollout_byte_offset, future_value from thread_history_projection_state where thread_id = ?",
+                        (session_id,),
+                    ).fetchone(),
+                    (100, "keep"),
+                )
+                self.assertEqual(
+                    target.execute(
+                        "select next_rollout_byte_offset, future_value from thread_history_projection_state where thread_id = ?",
+                        (other_id,),
+                    ).fetchone(),
+                    (777, "other-keep"),
+                )
+                self.assertEqual(
+                    target.execute(
+                        "select name from pragma_table_info('thread_turns') where name = 'extra_source_column'"
+                    ).fetchone(),
+                    None,
+                )
+            finally:
+                target.close()
+
+    def test_session_bundle_never_exports_or_restores_skills_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            workspace = root / "workspace"
+            src_home = root / "src-home"
+            dst_home = root / "dst-home"
+            workspace.mkdir()
+            agents_skills = src_home / ".agents" / "skills"
+            write_test_skill(agents_skills, "session-only-skill", "source content")
+            session_id = "aaa00032-0000-7000-8000-000000000032"
+            write_session_with_skills(
+                src_home,
+                session_id,
+                provider="source-provider",
+                source="cli",
+                originator="Codex CLI",
+                cwd=workspace,
+                skill_entries=[
+                    {
+                        "name": "session-only-skill",
+                        "file": str(agents_skills / "session-only-skill" / "SKILL.md"),
+                    }
+                ],
+            )
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                export_result = export_session(CodexPaths(home=src_home), session_id, skills_mode="strict")
+
+            self.assertEqual(export_result.skills_bundled_count, 0)
+            self.assertEqual(export_result.skills_available_count, 0)
+            self.assertFalse((export_result.bundle_dir / "skills_manifest.json").exists())
+            self.assertFalse((export_result.bundle_dir / "skills").exists())
+
+            legacy_skill = export_result.bundle_dir / "skills" / "agents" / "legacy-skill"
+            write_test_skill(legacy_skill.parent, legacy_skill.name, "legacy content")
+            write_skills_manifest(
+                SkillsManifest(
+                    available_skill_count=1,
+                    used_skill_count=1,
+                    bundled_skill_count=1,
+                    skills=(
+                        SkillDescriptor(
+                            name="legacy-skill",
+                            skill_file="/old/.agents/skills/legacy-skill/SKILL.md",
+                            source_root="agents",
+                            relative_dir="legacy-skill",
+                            location_kind="custom",
+                            used=True,
+                            usage_count=1,
+                            bundled=True,
+                            bundle_path="skills/agents/legacy-skill",
+                            content_hash=compute_skill_directory_hash(legacy_skill),
+                        ),
+                    ),
+                ),
+                export_result.bundle_dir,
+            )
+
+            with pushd(workspace):
+                import_result = import_session(
+                    CodexPaths(home=dst_home),
+                    str(export_result.bundle_dir),
+                    skills_mode="overwrite",
+                )
+
+            self.assertEqual(import_result.skills_restored_count, 0)
+            self.assertFalse((dst_home / ".agents" / "skills" / "legacy-skill").exists())
 
     def test_detect_provider_falls_back_to_latest_desktop_thread(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -4387,459 +4836,6 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertIn(hidden_session_id, {row[0] for row in top_rows[:2]})
             self.assertEqual(hidden_row[1], hidden_row[0] * 1000)
 
-    def test_import_desktop_all_writes_skills_restore_report(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-            write_state_file(dst_home)
-            create_threads_db(dst_home)
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "batch-skill", "batched skill")
-
-            session_id = "aaa00000-0000-7000-8000-000000000000"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="vscode",
-                originator="Codex Desktop",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "batch-skill", "file": str(agents_skills / "batch-skill" / "SKILL.md")},
-                ],
-            )
-            write_history(src_home, session_id, "desktop batch skills")
-
-            src_paths = CodexPaths(home=src_home)
-            dst_paths = CodexPaths(home=dst_home)
-
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_active_desktop_all(src_paths)
-
-            with pushd(workspace):
-                result = import_desktop_all(dst_paths)
-
-            self.assertIsNotNone(result.skills_restore_report_path)
-            assert result.skills_restore_report_path is not None
-            self.assertTrue(result.skills_restore_report_path.is_file())
-
-            report_data = json.loads(result.skills_restore_report_path.read_text(encoding="utf-8"))
-            self.assertEqual(report_data["total_sessions"], 1)
-            self.assertEqual(report_data["sessions"][0]["session_id"], session_id)
-            self.assertEqual(report_data["sessions"][0]["restored"], 1)
-            self.assertEqual(report_data["sessions"][0]["already_present"], 0)
-            self.assertEqual(report_data["sessions"][0]["conflict_skipped"], 0)
-            self.assertEqual(report_data["sessions"][0]["missing"], 0)
-
-            stdout = io.StringIO()
-            with redirect_stdout(stdout):
-                self.assertEqual(print_batch_import_result(result), 0)
-            self.assertIn("Skills restore report:", stdout.getvalue())
-            self.assertIn(str(result.skills_restore_report_path), stdout.getvalue())
-
-    def test_import_desktop_all_separates_restored_and_already_present_skill_totals(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-            write_state_file(dst_home)
-            create_threads_db(dst_home)
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "batch-skill", "batched skill")
-
-            session_id = "aaa00000-0000-7000-8000-000000000020"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="vscode",
-                originator="Codex Desktop",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "batch-skill", "file": str(agents_skills / "batch-skill" / "SKILL.md")},
-                ],
-            )
-            write_history(src_home, session_id, "desktop batch skills already present")
-
-            dst_agents_skills = dst_home / ".agents" / "skills"
-            write_test_skill(dst_agents_skills, "batch-skill", "batched skill")
-
-            src_paths = CodexPaths(home=src_home)
-            dst_paths = CodexPaths(home=dst_home)
-
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_active_desktop_all(src_paths)
-
-            with pushd(workspace):
-                result = import_desktop_all(dst_paths)
-
-            self.assertEqual(result.total_skills_restored, 0)
-            self.assertEqual(result.total_skills_already_present, 1)
-            self.assertEqual(result.total_skills_conflict_skipped, 0)
-
-            assert result.skills_restore_report_path is not None
-            report_data = json.loads(result.skills_restore_report_path.read_text(encoding="utf-8"))
-            self.assertEqual(report_data["sessions"][0]["restored"], 0)
-            self.assertEqual(report_data["sessions"][0]["already_present"], 1)
-
-            stdout = io.StringIO()
-            with redirect_stdout(stdout):
-                self.assertEqual(print_batch_import_result(result), 0)
-            self.assertIn("Total skills restored:          0", stdout.getvalue())
-            self.assertIn("Total skills already present:   1", stdout.getvalue())
-            self.assertIn("Total skills missing:           0", stdout.getvalue())
-
-    def test_import_desktop_all_aggregates_missing_skill_totals(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-            write_state_file(dst_home)
-            create_threads_db(dst_home)
-
-            missing_skill_path = src_home / ".agents" / "skills" / "missing-skill" / "SKILL.md"
-            session_id = "aaa00000-0000-7000-8000-000000000022"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="vscode",
-                originator="Codex Desktop",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "missing-skill", "file": str(missing_skill_path)},
-                ],
-            )
-            write_history(src_home, session_id, "desktop batch skills missing")
-
-            src_paths = CodexPaths(home=src_home)
-            dst_paths = CodexPaths(home=dst_home)
-
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_active_desktop_all(src_paths)
-
-            with pushd(workspace):
-                result = import_desktop_all(dst_paths)
-
-            self.assertEqual(result.total_skills_restored, 0)
-            self.assertEqual(result.total_skills_already_present, 0)
-            self.assertEqual(result.total_skills_conflict_skipped, 0)
-            self.assertEqual(result.total_skills_missing, 1)
-            self.assertTrue(any(warning.code == "missing_skill" and warning.session_id == session_id for warning in result.warnings))
-
-            assert result.skills_restore_report_path is not None
-            report_data = json.loads(result.skills_restore_report_path.read_text(encoding="utf-8"))
-            self.assertEqual(report_data["sessions"][0]["missing"], 1)
-
-            stdout = io.StringIO()
-            with redirect_stdout(stdout):
-                self.assertEqual(print_batch_import_result(result), 0)
-            self.assertIn("Total skills missing:           1", stdout.getvalue())
-
-    def test_import_desktop_all_counts_failed_skill_restores_in_report_and_summary(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-            write_state_file(dst_home)
-            create_threads_db(dst_home)
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "good-skill", "good content")
-            write_test_skill(agents_skills, "bad-skill", "bad content")
-
-            session_id = "aaa00000-0000-7000-8000-000000000023"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="vscode",
-                originator="Codex Desktop",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "good-skill", "file": str(agents_skills / "good-skill" / "SKILL.md")},
-                    {"name": "bad-skill", "file": str(agents_skills / "bad-skill" / "SKILL.md")},
-                ],
-            )
-            write_history(src_home, session_id, "desktop batch skills failed restore")
-
-            src_paths = CodexPaths(home=src_home)
-            dst_paths = CodexPaths(home=dst_home)
-
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_active_desktop_all(src_paths)
-
-            real_copytree = shutil.copytree
-
-            def copytree_side_effect(src, dst, *args, **kwargs):
-                if str(src).endswith("skills/agents/bad-skill"):
-                    raise OSError("simulated restore failure")
-                return real_copytree(src, dst, *args, **kwargs)
-
-            with patch("codex_session_toolkit.stores.skills.shutil.copytree", side_effect=copytree_side_effect):
-                with pushd(workspace):
-                    result = import_desktop_all(dst_paths)
-
-            self.assertEqual(result.total_skills_restored, 1)
-            self.assertEqual(result.total_skills_failed, 1)
-            self.assertTrue(any(warning.code == "restore_skill_failed" and warning.name == "bad-skill" for warning in result.warnings))
-
-            assert result.skills_restore_report_path is not None
-            report_data = json.loads(result.skills_restore_report_path.read_text(encoding="utf-8"))
-            self.assertEqual(report_data["sessions"][0]["restored"], 1)
-            self.assertEqual(report_data["sessions"][0]["failed"], 1)
-            self.assertEqual(
-                {skill["name"]: skill["status"] for skill in report_data["sessions"][0]["skills"]},
-                {"good-skill": "restored", "bad-skill": "failed"},
-            )
-
-            stdout = io.StringIO()
-            with redirect_stdout(stdout):
-                self.assertEqual(print_batch_import_result(result), 0)
-            self.assertIn("Total skills restored:          1", stdout.getvalue())
-            self.assertIn("Total skills failed:            1", stdout.getvalue())
-
-    def test_import_desktop_all_uses_distinct_skills_restore_report_per_run(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-            write_state_file(dst_home)
-            create_threads_db(dst_home)
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "batch-skill", "batched skill")
-
-            session_id = "aaa00000-0000-7000-8000-000000000021"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="vscode",
-                originator="Codex Desktop",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "batch-skill", "file": str(agents_skills / "batch-skill" / "SKILL.md")},
-                ],
-            )
-            write_history(src_home, session_id, "desktop batch skills repeated imports")
-
-            src_paths = CodexPaths(home=src_home)
-            dst_paths = CodexPaths(home=dst_home)
-
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_active_desktop_all(src_paths)
-
-            with pushd(workspace), patch("codex_session_toolkit.services.importing.time.time", return_value=1_776_123_456):
-                first_result = import_desktop_all(dst_paths)
-                second_result = import_desktop_all(dst_paths)
-
-            self.assertIsNotNone(first_result.skills_restore_report_path)
-            self.assertIsNotNone(second_result.skills_restore_report_path)
-            assert first_result.skills_restore_report_path is not None
-            assert second_result.skills_restore_report_path is not None
-            self.assertNotEqual(first_result.skills_restore_report_path, second_result.skills_restore_report_path)
-
-            first_report = json.loads(first_result.skills_restore_report_path.read_text(encoding="utf-8"))
-            second_report = json.loads(second_result.skills_restore_report_path.read_text(encoding="utf-8"))
-            self.assertEqual(first_report["total_sessions"], 1)
-            self.assertEqual(second_report["total_sessions"], 1)
-            self.assertEqual(first_report["sessions"][0]["restored"], 1)
-            self.assertEqual(first_report["sessions"][0]["already_present"], 0)
-            self.assertEqual(first_report["sessions"][0]["failed"], 0)
-            self.assertEqual(second_report["sessions"][0]["restored"], 0)
-            self.assertEqual(second_report["sessions"][0]["already_present"], 1)
-            self.assertEqual(second_report["sessions"][0]["failed"], 0)
-
-    def test_batch_export_and_import_aggregate_skill_warnings(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-            write_state_file(dst_home)
-            create_threads_db(dst_home)
-
-            missing_skill_path = src_home / ".agents" / "skills" / "missing-skill" / "SKILL.md"
-            session_id = "aaa10000-0000-7000-8000-000000000010"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="vscode",
-                originator="Codex Desktop",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "missing-skill", "file": str(missing_skill_path)},
-                ],
-            )
-            write_history(src_home, session_id, "batch warning flow")
-
-            src_paths = CodexPaths(home=src_home)
-            dst_paths = CodexPaths(home=dst_home)
-
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_result = export_active_desktop_all(src_paths)
-
-            self.assertTrue(
-                any(
-                    warning.code == "skill_not_bundled"
-                    and warning.session_id == session_id
-                    and warning.name == "missing-skill"
-                    for warning in export_result.warnings
-                )
-            )
-
-            with pushd(workspace):
-                import_result = import_desktop_all(dst_paths)
-
-            self.assertTrue(
-                any(
-                    warning.code == "missing_skill" and warning.session_id == session_id
-                    for warning in import_result.warnings
-                )
-            )
-
-    # --- Skill export/import tests ---
-
-    def test_session_export_bundles_only_required_custom_skills(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            workspace.mkdir()
-            write_config(src_home, "test-provider")
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "used-skill", "used content")
-            write_test_skill(agents_skills, "available-skill", "available content")
-
-            session_id = "aaa00025-0000-7000-8000-000000000025"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="test-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "used-skill", "file": str(agents_skills / "used-skill" / "SKILL.md")},
-                    {"name": "available-skill", "file": str(agents_skills / "available-skill" / "SKILL.md")},
-                ],
-                used_skill_names=["used-skill"],
-            )
-
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                result = export_session(CodexPaths(home=src_home), session_id)
-
-            self.assertEqual(result.skills_available_count, 2)
-            self.assertEqual(result.skills_bundled_count, 1)
-            self.assertTrue((result.bundle_dir / "skills" / "agents" / "used-skill" / "SKILL.md").is_file())
-            self.assertFalse((result.bundle_dir / "skills" / "agents" / "available-skill").exists())
-            manifest = read_skills_manifest(result.bundle_dir)
-            self.assertIsNotNone(manifest)
-            assert manifest is not None
-            levels = {skill.name: skill.dependency_level for skill in manifest.skills}
-            self.assertEqual(levels["used-skill"], "required")
-            self.assertEqual(levels["available-skill"], "available")
-
-    def test_session_import_does_not_report_missing_for_available_only_skills(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-
-            missing_skill_path = src_home / ".agents" / "skills" / "available-only" / "SKILL.md"
-            session_id = "aaa00026-0000-7000-8000-000000000026"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "available-only", "file": str(missing_skill_path)},
-                ],
-                used_skill_names=[],
-            )
-
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_result = export_session(CodexPaths(home=src_home), session_id)
-            with pushd(workspace):
-                import_result = import_session(CodexPaths(home=dst_home), str(export_result.bundle_dir))
-
-            self.assertEqual(import_result.skills_missing_count, 0)
-            self.assertFalse(any(warning.code == "missing_skill" for warning in import_result.warnings))
-
-    def test_session_export_does_not_treat_plain_skill_mentions_as_required(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            workspace.mkdir()
-            write_config(src_home, "test-provider")
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "plain-mentioned-skill", "plain content")
-
-            session_id = "aaa00027-0000-7000-8000-000000000027"
-            rollout = write_session_with_skills(
-                src_home,
-                session_id,
-                provider="test-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "plain-mentioned-skill", "file": str(agents_skills / "plain-mentioned-skill" / "SKILL.md")},
-                ],
-                used_skill_names=[],
-            )
-            with rollout.open("a", encoding="utf-8") as fh:
-                fh.write(
-                    json.dumps(
-                        {
-                            "timestamp": "2026-04-10T10:07:00Z",
-                            "type": "message",
-                            "payload": {
-                                "role": "assistant",
-                                "text": "This skill plain-mentioned-skill is only being described.",
-                            },
-                        },
-                        separators=(",", ":"),
-                    )
-                    + "\n"
-                )
-
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                result = export_session(CodexPaths(home=src_home), session_id)
-
-            self.assertEqual(result.skills_available_count, 1)
-            self.assertEqual(result.skills_bundled_count, 0)
-            self.assertFalse((result.bundle_dir / "skills" / "agents" / "plain-mentioned-skill").exists())
-
     def test_standalone_skills_export_import_restores_custom_skills(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
@@ -4994,1069 +4990,6 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertTrue(result.deleted)
             self.assertTrue((home / ".agents" / "skills" / "duplicate-delete").is_dir())
             self.assertFalse((home / ".codex" / "skills" / "duplicate-delete").exists())
-
-    def test_export_session_bundles_custom_skills(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            workspace.mkdir()
-            write_config(src_home, "test-provider")
-
-            agents_skills = src_home / ".agents" / "skills"
-            codex_skills = src_home / ".codex" / "skills"
-            write_test_skill(agents_skills, "my-skill", "my skill content")
-            write_test_skill(codex_skills, str(Path(".system") / "sys-skill"), "system skill")
-
-            session_id = "aaa00001-0000-7000-8000-000000000001"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="test-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "my-skill", "file": str(agents_skills / "my-skill" / "SKILL.md")},
-                    {"name": "sys-skill", "file": str(codex_skills / ".system" / "sys-skill" / "SKILL.md")},
-                ],
-            )
-            write_history(src_home, session_id, "test prompt")
-
-            paths = CodexPaths(home=src_home)
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "TestMachine"):
-                result = export_session(paths, session_id)
-
-            self.assertEqual(result.skills_available_count, 2)
-            self.assertEqual(result.skills_bundled_count, 1)
-            self.assertIsNotNone(result.skills_manifest_path)
-            assert result.skills_manifest_path is not None
-            self.assertTrue(result.skills_manifest_path.is_file())
-            self.assertTrue((result.bundle_dir / "skills_manifest.json").is_file())
-            self.assertTrue((result.bundle_dir / "skills" / "agents" / "my-skill" / "SKILL.md").is_file())
-            self.assertFalse((result.bundle_dir / "skills" / "codex" / ".system" / "sys-skill").exists())
-
-    def test_export_session_warns_when_custom_skill_cannot_be_bundled(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            workspace.mkdir()
-            write_config(src_home, "test-provider")
-
-            missing_skill_path = src_home / ".agents" / "skills" / "missing-skill" / "SKILL.md"
-            session_id = "aaa00011-0000-7000-8000-000000000011"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="test-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "missing-skill", "file": str(missing_skill_path)},
-                ],
-            )
-
-            paths = CodexPaths(home=src_home)
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "TestMachine"):
-                result = export_session(paths, session_id)
-
-            self.assertEqual(result.skills_available_count, 1)
-            self.assertEqual(result.skills_bundled_count, 0)
-            self.assertIsNotNone(result.skills_manifest_path)
-            assert result.skills_manifest_path is not None
-            self.assertTrue(result.skills_manifest_path.is_file())
-            self.assertTrue(
-                any(
-                    warning.code == "skill_not_bundled"
-                    and warning.name == "missing-skill"
-                    for warning in result.warnings
-                )
-            )
-
-    def test_export_session_warns_when_custom_skill_location_is_unrestorable(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            detached_skills = Path(tmpdir) / "detached_skills"
-            workspace.mkdir()
-            write_config(src_home, "test-provider")
-
-            write_test_skill(detached_skills, "detached-skill", "detached content")
-
-            session_id = "aaa00018-0000-7000-8000-000000000018"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="test-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "detached-skill", "file": str(detached_skills / "detached-skill" / "SKILL.md")},
-                ],
-            )
-
-            paths = CodexPaths(home=src_home)
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "TestMachine"):
-                result = export_session(paths, session_id)
-
-            self.assertEqual(result.skills_available_count, 1)
-            self.assertEqual(result.skills_bundled_count, 0)
-            self.assertFalse((result.bundle_dir / "skills" / "unknown").exists())
-            self.assertTrue(
-                any(
-                    warning.code == "skill_not_bundled"
-                    and warning.name == "detached-skill"
-                    and warning.detail == "unsupported skill location"
-                    for warning in result.warnings
-                )
-            )
-
-    def test_export_session_warns_when_skill_copy_raises_filesystem_error(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            workspace.mkdir()
-            write_config(src_home, "test-provider")
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "copy-fail-skill", "copy me")
-
-            session_id = "aaa00015-0000-7000-8000-000000000015"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="test-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "copy-fail-skill", "file": str(agents_skills / "copy-fail-skill" / "SKILL.md")},
-                ],
-            )
-
-            paths = CodexPaths(home=src_home)
-            real_copytree = shutil.copytree
-
-            def copytree_side_effect(src, dst, *args, **kwargs):
-                if str(src).endswith("copy-fail-skill"):
-                    raise OSError("simulated copy failure")
-                return real_copytree(src, dst, *args, **kwargs)
-
-            with patch("codex_session_toolkit.stores.skills.shutil.copytree", side_effect=copytree_side_effect):
-                with pushd(workspace), env_override("CST_MACHINE_LABEL", "TestMachine"):
-                    result = export_session(paths, session_id)
-
-            self.assertEqual(result.skills_available_count, 1)
-            self.assertEqual(result.skills_bundled_count, 0)
-            self.assertIsNotNone(result.skills_manifest_path)
-            assert result.skills_manifest_path is not None
-            self.assertTrue(result.skills_manifest_path.is_file())
-            self.assertTrue(
-                any(
-                    warning.code == "bundle_skill_failed"
-                    and warning.name == "copy-fail-skill"
-                    for warning in result.warnings
-                )
-            )
-
-    def test_export_session_keeps_partial_skill_results_when_hashing_one_skill_fails(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            workspace.mkdir()
-            write_config(src_home, "test-provider")
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "good-skill", "good content")
-            write_test_skill(agents_skills, "hash-fail-skill", "hash fail content")
-
-            session_id = "aaa00020-0000-7000-8000-000000000020"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="test-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "good-skill", "file": str(agents_skills / "good-skill" / "SKILL.md")},
-                    {"name": "hash-fail-skill", "file": str(agents_skills / "hash-fail-skill" / "SKILL.md")},
-                ],
-            )
-
-            paths = CodexPaths(home=src_home)
-            real_compute_hash = compute_skill_directory_hash
-
-            def compute_hash_side_effect(skill_dir):
-                if str(skill_dir).endswith("hash-fail-skill"):
-                    raise OSError("simulated hash failure")
-                return real_compute_hash(skill_dir)
-
-            with patch(
-                "codex_session_toolkit.stores.skills.compute_skill_directory_hash",
-                side_effect=compute_hash_side_effect,
-            ):
-                with pushd(workspace), env_override("CST_MACHINE_LABEL", "TestMachine"):
-                    result = export_session(paths, session_id)
-
-            self.assertEqual(result.skills_available_count, 2)
-            self.assertEqual(result.skills_bundled_count, 1)
-            self.assertTrue((result.bundle_dir / "skills" / "agents" / "good-skill" / "SKILL.md").is_file())
-            self.assertFalse((result.bundle_dir / "skills" / "agents" / "hash-fail-skill").exists())
-            self.assertTrue(
-                any(
-                    warning.code == "bundle_skill_failed"
-                    and warning.name == "hash-fail-skill"
-                    for warning in result.warnings
-                )
-            )
-
-    def test_export_session_strict_mode_raises_when_custom_skill_missing(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            workspace.mkdir()
-            write_config(src_home, "test-provider")
-
-            missing_skill_path = src_home / ".agents" / "skills" / "missing-skill" / "SKILL.md"
-            session_id = "aaa00012-0000-7000-8000-000000000012"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="test-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "missing-skill", "file": str(missing_skill_path)},
-                ],
-            )
-
-            paths = CodexPaths(home=src_home)
-            from codex_session_toolkit.errors import ToolkitError
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "TestMachine"), self.assertRaises(ToolkitError):
-                export_session(paths, session_id, skills_mode="strict")
-
-    def test_import_session_restores_bundled_skills(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-            write_state_file(dst_home)
-            create_threads_db(dst_home)
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "imp-skill", "imported skill")
-
-            session_id = "aaa00002-0000-7000-8000-000000000002"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "imp-skill", "file": str(agents_skills / "imp-skill" / "SKILL.md")},
-                ],
-            )
-
-            paths = CodexPaths(home=src_home)
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_result = export_session(paths, session_id)
-                bundle_dir = export_result.bundle_dir
-
-            dst_paths = CodexPaths(home=dst_home)
-            with pushd(workspace):
-                import_result = import_session(dst_paths, str(bundle_dir))
-
-            self.assertEqual(import_result.skills_restored_count, 1)
-            self.assertEqual(import_result.skills_already_present_count, 0)
-            self.assertTrue((dst_home / ".agents" / "skills" / "imp-skill" / "SKILL.md").is_file())
-            self.assertEqual(
-                (dst_home / ".agents" / "skills" / "imp-skill" / "SKILL.md").read_text(encoding="utf-8"),
-                "imported skill",
-            )
-
-    def test_import_session_skills_conflict_skipped(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "conflict-skill", "original content")
-
-            session_id = "aaa00003-0000-7000-8000-000000000003"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "conflict-skill", "file": str(agents_skills / "conflict-skill" / "SKILL.md")},
-                ],
-            )
-
-            paths = CodexPaths(home=src_home)
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_result = export_session(paths, session_id)
-                bundle_dir = export_result.bundle_dir
-
-            dst_agents_skills = dst_home / ".agents" / "skills"
-            write_test_skill(dst_agents_skills, "conflict-skill", "different content")
-
-            dst_paths = CodexPaths(home=dst_home)
-            with pushd(workspace):
-                import_result = import_session(dst_paths, str(bundle_dir))
-
-            self.assertEqual(import_result.skills_conflict_skipped_count, 1)
-            self.assertEqual(
-                (dst_home / ".agents" / "skills" / "conflict-skill" / "SKILL.md").read_text(encoding="utf-8"),
-                "different content",
-            )
-
-    def test_import_session_skills_already_present(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "same-skill", "identical content")
-
-            session_id = "aaa00004-0000-7000-8000-000000000004"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "same-skill", "file": str(agents_skills / "same-skill" / "SKILL.md")},
-                ],
-            )
-
-            paths = CodexPaths(home=src_home)
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_result = export_session(paths, session_id)
-                bundle_dir = export_result.bundle_dir
-
-            dst_agents_skills = dst_home / ".agents" / "skills"
-            write_test_skill(dst_agents_skills, "same-skill", "identical content")
-
-            dst_paths = CodexPaths(home=dst_home)
-            with pushd(workspace):
-                import_result = import_session(dst_paths, str(bundle_dir))
-
-            self.assertEqual(import_result.skills_already_present_count, 1)
-
-    def test_import_session_skips_skill_copy_when_same_skill_exists_in_other_root(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-
-            src_codex_skills = src_home / ".codex" / "skills"
-            write_test_skill(src_codex_skills, "cross-root-skill", "identical content")
-
-            session_id = "aaa00024-0000-7000-8000-000000000024"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "cross-root-skill", "file": str(src_codex_skills / "cross-root-skill" / "SKILL.md")},
-                ],
-            )
-
-            paths = CodexPaths(home=src_home)
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_result = export_session(paths, session_id)
-                bundle_dir = export_result.bundle_dir
-
-            dst_agents_skills = dst_home / ".agents" / "skills"
-            write_test_skill(dst_agents_skills, "cross-root-skill", "identical content")
-
-            dst_paths = CodexPaths(home=dst_home)
-            with pushd(workspace):
-                import_result = import_session(dst_paths, str(bundle_dir))
-
-            self.assertEqual(import_result.skills_restored_count, 0)
-            self.assertEqual(import_result.skills_already_present_count, 1)
-            self.assertTrue((dst_home / ".agents" / "skills" / "cross-root-skill" / "SKILL.md").is_file())
-            self.assertFalse((dst_home / ".codex" / "skills" / "cross-root-skill").exists())
-
-    def test_import_session_skips_conflicting_skill_in_other_root_without_creating_duplicate(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-
-            src_codex_skills = src_home / ".codex" / "skills"
-            write_test_skill(src_codex_skills, "cross-root-conflict", "source content")
-
-            session_id = "aaa00025-0000-7000-8000-000000000025"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "cross-root-conflict", "file": str(src_codex_skills / "cross-root-conflict" / "SKILL.md")},
-                ],
-            )
-
-            paths = CodexPaths(home=src_home)
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_result = export_session(paths, session_id)
-                bundle_dir = export_result.bundle_dir
-
-            dst_agents_skills = dst_home / ".agents" / "skills"
-            write_test_skill(dst_agents_skills, "cross-root-conflict", "local content")
-
-            dst_paths = CodexPaths(home=dst_home)
-            with pushd(workspace):
-                import_result = import_session(dst_paths, str(bundle_dir))
-
-            self.assertEqual(import_result.skills_restored_count, 0)
-            self.assertEqual(import_result.skills_conflict_skipped_count, 1)
-            self.assertEqual(
-                (dst_home / ".agents" / "skills" / "cross-root-conflict" / "SKILL.md").read_text(encoding="utf-8"),
-                "local content",
-            )
-            self.assertFalse((dst_home / ".codex" / "skills" / "cross-root-conflict").exists())
-
-    def test_import_session_skills_missing_in_bundle(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(dst_home, "dst-provider")
-
-            session_id = "aaa00005-0000-7000-8000-000000000005"
-            bundle_dir = workspace / "codex_sessions" / "test-machine" / session_id
-            bundle_dir.mkdir(parents=True)
-
-            manifest = SkillsManifest(
-                available_skill_count=1,
-                used_skill_count=1,
-                bundled_skill_count=0,
-                skills=(
-                    SkillDescriptor(
-                        name="missing-skill",
-                        skill_file="/home/user/.agents/skills/missing-skill/SKILL.md",
-                        source_root="agents",
-                        relative_dir="missing-skill",
-                        location_kind="custom",
-                        used=True,
-                        usage_count=1,
-                    ),
-                ),
-            )
-            write_skills_manifest(manifest, bundle_dir)
-
-            relative_path = f"sessions/2026/04/10/rollout-2026-04-10T10-00-00-{session_id}.jsonl"
-            write_bundle_manifest(bundle_dir, session_id=session_id, relative_path=relative_path)
-
-            codex_dir = bundle_dir / "codex" / "sessions" / "2026" / "04" / "10"
-            codex_dir.mkdir(parents=True)
-            session_file = codex_dir / f"rollout-2026-04-10T10-00-00-{session_id}.jsonl"
-            session_file.write_text(
-                json.dumps(
-                    {
-                        "timestamp": "2026-04-10T10:00:00Z",
-                        "type": "session_meta",
-                        "payload": {
-                            "id": session_id,
-                            "model_provider": "test",
-                            "source": "cli",
-                            "originator": "CLI",
-                            "cwd": str(workspace),
-                            "timestamp": "2026-04-10T10:00:00Z",
-                            "cli_version": "0.1.0",
-                        },
-                    },
-                    separators=(",", ":"),
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-
-            dst_paths = CodexPaths(home=dst_home)
-            with pushd(workspace):
-                import_result = import_session(dst_paths, str(bundle_dir))
-
-            self.assertEqual(import_result.skills_missing_count, 1)
-            self.assertTrue(any(warning.code == "missing_skill" and warning.name == "missing-skill" for warning in import_result.warnings))
-
-    def test_import_session_warns_when_manifest_points_to_missing_bundled_skill_dir(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(dst_home, "dst-provider")
-
-            session_id = "aaa00016-0000-7000-8000-000000000016"
-            bundle_dir = workspace / "codex_sessions" / "test-machine" / session_id
-            bundle_dir.mkdir(parents=True)
-
-            manifest = SkillsManifest(
-                available_skill_count=1,
-                used_skill_count=1,
-                bundled_skill_count=1,
-                skills=(
-                    SkillDescriptor(
-                        name="missing-bundled-skill",
-                        skill_file="/home/user/.agents/skills/missing-bundled-skill/SKILL.md",
-                        source_root="agents",
-                        relative_dir="missing-bundled-skill",
-                        location_kind="custom",
-                        used=True,
-                        usage_count=1,
-                        bundled=True,
-                        bundle_path="skills/agents/missing-bundled-skill",
-                        content_hash="abc123",
-                    ),
-                ),
-            )
-            write_skills_manifest(manifest, bundle_dir)
-
-            relative_path = f"sessions/2026/04/10/rollout-2026-04-10T10-00-00-{session_id}.jsonl"
-            write_bundle_manifest(bundle_dir, session_id=session_id, relative_path=relative_path)
-
-            codex_dir = bundle_dir / "codex" / "sessions" / "2026" / "04" / "10"
-            codex_dir.mkdir(parents=True)
-            session_file = codex_dir / f"rollout-2026-04-10T10-00-00-{session_id}.jsonl"
-            session_file.write_text(
-                json.dumps(
-                    {
-                        "timestamp": "2026-04-10T10:00:00Z",
-                        "type": "session_meta",
-                        "payload": {
-                            "id": session_id,
-                            "model_provider": "test",
-                            "source": "cli",
-                            "originator": "CLI",
-                            "cwd": str(workspace),
-                            "timestamp": "2026-04-10T10:00:00Z",
-                            "cli_version": "0.1.0",
-                        },
-                    },
-                    separators=(",", ":"),
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-
-            dst_paths = CodexPaths(home=dst_home)
-            with pushd(workspace):
-                import_result = import_session(dst_paths, str(bundle_dir))
-
-            self.assertEqual(import_result.skills_missing_count, 0)
-            self.assertEqual(import_result.skills_failed_count, 1)
-            self.assertTrue(
-                any(
-                    warning.code == "invalid_bundled_skill"
-                    and warning.name == "missing-bundled-skill"
-                    for warning in import_result.warnings
-                )
-            )
-
-    def test_import_session_warns_when_bundled_skill_directory_is_incomplete(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(dst_home, "dst-provider")
-
-            session_id = "aaa00021-0000-7000-8000-000000000021"
-            bundle_dir = workspace / "codex_sessions" / "test-machine" / session_id
-            bundle_dir.mkdir(parents=True)
-
-            manifest = SkillsManifest(
-                available_skill_count=1,
-                used_skill_count=1,
-                bundled_skill_count=1,
-                skills=(
-                    SkillDescriptor(
-                        name="broken-bundled-skill",
-                        skill_file="/home/user/.agents/skills/broken-bundled-skill/SKILL.md",
-                        source_root="agents",
-                        relative_dir="broken-bundled-skill",
-                        location_kind="custom",
-                        used=True,
-                        usage_count=1,
-                        bundled=True,
-                        bundle_path="skills/agents/broken-bundled-skill",
-                        content_hash="abc123",
-                    ),
-                ),
-            )
-            write_skills_manifest(manifest, bundle_dir)
-            (bundle_dir / "skills" / "agents" / "broken-bundled-skill").mkdir(parents=True)
-            (bundle_dir / "skills" / "agents" / "broken-bundled-skill" / "README.txt").write_text(
-                "missing SKILL.md",
-                encoding="utf-8",
-            )
-
-            relative_path = f"sessions/2026/04/10/rollout-2026-04-10T10-00-00-{session_id}.jsonl"
-            write_bundle_manifest(bundle_dir, session_id=session_id, relative_path=relative_path)
-
-            codex_dir = bundle_dir / "codex" / "sessions" / "2026" / "04" / "10"
-            codex_dir.mkdir(parents=True)
-            session_file = codex_dir / f"rollout-2026-04-10T10-00-00-{session_id}.jsonl"
-            session_file.write_text(
-                json.dumps(
-                    {
-                        "timestamp": "2026-04-10T10:00:00Z",
-                        "type": "session_meta",
-                        "payload": {
-                            "id": session_id,
-                            "model_provider": "test",
-                            "source": "cli",
-                            "originator": "CLI",
-                            "cwd": str(workspace),
-                            "timestamp": "2026-04-10T10:00:00Z",
-                            "cli_version": "0.1.0",
-                        },
-                    },
-                    separators=(",", ":"),
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-
-            dst_paths = CodexPaths(home=dst_home)
-            with pushd(workspace):
-                import_result = import_session(dst_paths, str(bundle_dir))
-
-            self.assertEqual(import_result.skills_restored_count, 0)
-            self.assertEqual(import_result.skills_failed_count, 1)
-            self.assertTrue(
-                any(
-                    warning.code == "invalid_bundled_skill"
-                    and warning.name == "broken-bundled-skill"
-                    and warning.detail == "missing SKILL.md"
-                    for warning in import_result.warnings
-                )
-            )
-            self.assertFalse((dst_home / ".agents" / "skills" / "broken-bundled-skill").exists())
-
-    def test_import_session_warns_on_invalid_skills_manifest(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(dst_home, "dst-provider")
-
-            session_id = "aaa00013-0000-7000-8000-000000000013"
-            bundle_dir = workspace / "codex_sessions" / "test-machine" / session_id
-            bundle_dir.mkdir(parents=True)
-
-            relative_path = f"sessions/2026/04/10/rollout-2026-04-10T10-00-00-{session_id}.jsonl"
-            write_bundle_manifest(bundle_dir, session_id=session_id, relative_path=relative_path)
-
-            codex_dir = bundle_dir / "codex" / "sessions" / "2026" / "04" / "10"
-            codex_dir.mkdir(parents=True)
-            session_file = codex_dir / f"rollout-2026-04-10T10-00-00-{session_id}.jsonl"
-            session_file.write_text(
-                json.dumps(
-                    {
-                        "timestamp": "2026-04-10T10:00:00Z",
-                        "type": "session_meta",
-                        "payload": {
-                            "id": session_id,
-                            "model_provider": "test",
-                            "source": "cli",
-                            "originator": "CLI",
-                            "cwd": str(workspace),
-                            "timestamp": "2026-04-10T10:00:00Z",
-                            "cli_version": "0.1.0",
-                        },
-                    },
-                    separators=(",", ":"),
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            (bundle_dir / "skills_manifest.json").write_text("NOT VALID JSON{{{", encoding="utf-8")
-
-            dst_paths = CodexPaths(home=dst_home)
-            with pushd(workspace):
-                import_result = import_session(dst_paths, str(bundle_dir))
-
-            self.assertTrue(any(warning.code == "invalid_skills_manifest" for warning in import_result.warnings))
-
-    def test_import_session_warns_on_structurally_invalid_skills_manifest(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(dst_home, "dst-provider")
-
-            session_id = "aaa00019-0000-7000-8000-000000000019"
-            bundle_dir = workspace / "codex_sessions" / "test-machine" / session_id
-            bundle_dir.mkdir(parents=True)
-
-            relative_path = f"sessions/2026/04/10/rollout-2026-04-10T10-00-00-{session_id}.jsonl"
-            write_bundle_manifest(bundle_dir, session_id=session_id, relative_path=relative_path)
-
-            codex_dir = bundle_dir / "codex" / "sessions" / "2026" / "04" / "10"
-            codex_dir.mkdir(parents=True)
-            session_file = codex_dir / f"rollout-2026-04-10T10-00-00-{session_id}.jsonl"
-            session_file.write_text(
-                json.dumps(
-                    {
-                        "timestamp": "2026-04-10T10:00:00Z",
-                        "type": "session_meta",
-                        "payload": {
-                            "id": session_id,
-                            "model_provider": "test",
-                            "source": "cli",
-                            "originator": "CLI",
-                            "cwd": str(workspace),
-                            "timestamp": "2026-04-10T10:00:00Z",
-                            "cli_version": "0.1.0",
-                        },
-                    },
-                    separators=(",", ":"),
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            (bundle_dir / "skills_manifest.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "available_skill_count": 1,
-                        "used_skill_count": 1,
-                        "bundled_skill_count": 1,
-                        "skills": [
-                            {
-                                "name": "bad-skill",
-                                "skill_file": "/tmp/source/.agents/skills/bad-skill/SKILL.md",
-                                "source_root": "agents",
-                                "relative_dir": "bad-skill",
-                                "location_kind": "custom",
-                                "used": True,
-                                "usage_count": 1,
-                                "bundled": True,
-                                "content_hash": "",
-                            }
-                        ],
-                    },
-                    separators=(",", ":"),
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-
-            dst_paths = CodexPaths(home=dst_home)
-            with pushd(workspace):
-                import_result = import_session(dst_paths, str(bundle_dir))
-
-            self.assertEqual(import_result.skills_restored_count, 0)
-            self.assertTrue(any(warning.code == "invalid_skills_manifest" for warning in import_result.warnings))
-            self.assertFalse((dst_home / ".agents" / "skills" / "bad-skill").exists())
-
-    def test_import_session_strict_mode_raises_on_invalid_skills_manifest(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(dst_home, "dst-provider")
-
-            session_id = "aaa00014-0000-7000-8000-000000000014"
-            bundle_dir = workspace / "codex_sessions" / "test-machine" / session_id
-            bundle_dir.mkdir(parents=True)
-
-            relative_path = f"sessions/2026/04/10/rollout-2026-04-10T10-00-00-{session_id}.jsonl"
-            write_bundle_manifest(bundle_dir, session_id=session_id, relative_path=relative_path)
-
-            codex_dir = bundle_dir / "codex" / "sessions" / "2026" / "04" / "10"
-            codex_dir.mkdir(parents=True)
-            session_file = codex_dir / f"rollout-2026-04-10T10-00-00-{session_id}.jsonl"
-            session_file.write_text(
-                json.dumps(
-                    {
-                        "timestamp": "2026-04-10T10:00:00Z",
-                        "type": "session_meta",
-                        "payload": {
-                            "id": session_id,
-                            "model_provider": "test",
-                            "source": "cli",
-                            "originator": "CLI",
-                            "cwd": str(workspace),
-                            "timestamp": "2026-04-10T10:00:00Z",
-                            "cli_version": "0.1.0",
-                        },
-                    },
-                    separators=(",", ":"),
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            (bundle_dir / "skills_manifest.json").write_text("NOT VALID JSON{{{", encoding="utf-8")
-
-            dst_paths = CodexPaths(home=dst_home)
-            from codex_session_toolkit.errors import ToolkitError
-            with pushd(workspace), self.assertRaises(ToolkitError):
-                import_session(dst_paths, str(bundle_dir), skills_mode="strict")
-
-    def test_import_session_keeps_partial_skill_restore_results_when_one_copy_fails(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "good-skill", "good content")
-            write_test_skill(agents_skills, "bad-skill", "bad content")
-
-            session_id = "aaa00017-0000-7000-8000-000000000017"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "good-skill", "file": str(agents_skills / "good-skill" / "SKILL.md")},
-                    {"name": "bad-skill", "file": str(agents_skills / "bad-skill" / "SKILL.md")},
-                ],
-            )
-
-            paths = CodexPaths(home=src_home)
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_result = export_session(paths, session_id)
-                bundle_dir = export_result.bundle_dir
-
-            real_copytree = shutil.copytree
-
-            def copytree_side_effect(src, dst, *args, **kwargs):
-                if str(src).endswith("skills/agents/bad-skill"):
-                    raise OSError("simulated restore failure")
-                return real_copytree(src, dst, *args, **kwargs)
-
-            dst_paths = CodexPaths(home=dst_home)
-            with patch("codex_session_toolkit.stores.skills.shutil.copytree", side_effect=copytree_side_effect):
-                with pushd(workspace):
-                    import_result = import_session(dst_paths, str(bundle_dir))
-
-            self.assertEqual(import_result.skills_restored_count, 1)
-            self.assertEqual(import_result.skills_missing_count, 0)
-            self.assertEqual(import_result.skills_failed_count, 1)
-            self.assertTrue((dst_home / ".agents" / "skills" / "good-skill" / "SKILL.md").is_file())
-            self.assertFalse((dst_home / ".agents" / "skills" / "bad-skill" / "SKILL.md").exists())
-            self.assertTrue(
-                any(
-                    warning.code == "restore_skill_failed"
-                    and warning.name == "bad-skill"
-                    for warning in import_result.warnings
-                )
-            )
-
-    def test_import_session_keeps_restore_counts_when_report_write_fails(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "report-fail-skill", "report content")
-
-            session_id = "aaa00022-0000-7000-8000-000000000022"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "report-fail-skill", "file": str(agents_skills / "report-fail-skill" / "SKILL.md")},
-                ],
-            )
-
-            src_paths = CodexPaths(home=src_home)
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_result = export_session(src_paths, session_id)
-                bundle_dir = export_result.bundle_dir
-
-            report_path = workspace / "restore-report.json"
-            dst_paths = CodexPaths(home=dst_home)
-            with patch(
-                "codex_session_toolkit.services.skill_sidecars.write_batch_skills_restore_report",
-                side_effect=OSError("simulated report write failure"),
-            ):
-                with pushd(workspace):
-                    import_result = import_session(
-                        dst_paths,
-                        str(bundle_dir),
-                        skills_restore_report_path=report_path,
-                    )
-
-            self.assertEqual(import_result.skills_restored_count, 1)
-            self.assertEqual(import_result.skills_failed_count, 0)
-            self.assertTrue((dst_home / ".agents" / "skills" / "report-fail-skill" / "SKILL.md").is_file())
-            self.assertTrue(
-                any(
-                    warning.code == "skills_restore_report_failed"
-                    and warning.path == str(report_path)
-                    for warning in import_result.warnings
-                )
-            )
-
-    def test_import_session_skills_strict_mode_raises(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "strict-skill", "content A")
-
-            session_id = "aaa00006-0000-7000-8000-000000000006"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "strict-skill", "file": str(agents_skills / "strict-skill" / "SKILL.md")},
-                ],
-            )
-
-            paths = CodexPaths(home=src_home)
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_result = export_session(paths, session_id)
-                bundle_dir = export_result.bundle_dir
-
-            dst_agents_skills = dst_home / ".agents" / "skills"
-            write_test_skill(dst_agents_skills, "strict-skill", "content B - different")
-
-            dst_paths = CodexPaths(home=dst_home)
-            from codex_session_toolkit.errors import ToolkitError
-            with pushd(workspace), self.assertRaises(ToolkitError):
-                import_session(dst_paths, str(bundle_dir), skills_mode="strict")
-
-    def test_import_session_skills_overwrite_mode(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "ow-skill", "new content")
-
-            session_id = "aaa00007-0000-7000-8000-000000000007"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "ow-skill", "file": str(agents_skills / "ow-skill" / "SKILL.md")},
-                ],
-            )
-
-            paths = CodexPaths(home=src_home)
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_result = export_session(paths, session_id)
-                bundle_dir = export_result.bundle_dir
-
-            dst_agents_skills = dst_home / ".agents" / "skills"
-            write_test_skill(dst_agents_skills, "ow-skill", "old content")
-
-            dst_paths = CodexPaths(home=dst_home)
-            with pushd(workspace):
-                import_result = import_session(dst_paths, str(bundle_dir), skills_mode="overwrite")
-
-            self.assertEqual(import_result.skills_restored_count, 1)
-            self.assertEqual(
-                (dst_home / ".agents" / "skills" / "ow-skill" / "SKILL.md").read_text(encoding="utf-8"),
-                "new content",
-            )
-
-    def test_import_session_skills_skip_mode(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir) / "workspace"
-            src_home = Path(tmpdir) / "src_home"
-            dst_home = Path(tmpdir) / "dst_home"
-            workspace.mkdir()
-            write_config(src_home, "src-provider")
-            write_config(dst_home, "dst-provider")
-
-            agents_skills = src_home / ".agents" / "skills"
-            write_test_skill(agents_skills, "skip-skill", "content")
-
-            session_id = "aaa00008-0000-7000-8000-000000000008"
-            write_session_with_skills(
-                src_home,
-                session_id,
-                provider="src-provider",
-                source="cli",
-                originator="Codex CLI",
-                cwd=workspace,
-                skill_entries=[
-                    {"name": "skip-skill", "file": str(agents_skills / "skip-skill" / "SKILL.md")},
-                ],
-            )
-
-            paths = CodexPaths(home=src_home)
-            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
-                export_result = export_session(paths, session_id)
-                bundle_dir = export_result.bundle_dir
-
-            dst_paths = CodexPaths(home=dst_home)
-            with pushd(workspace):
-                import_result = import_session(dst_paths, str(bundle_dir), skills_mode="skip")
-
-            self.assertEqual(import_result.skills_restored_count, 0)
-            self.assertEqual(import_result.skills_missing_count, 0)
-            self.assertFalse((dst_home / ".agents" / "skills" / "skip-skill").exists())
 
     def test_validate_bundle_with_skills_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

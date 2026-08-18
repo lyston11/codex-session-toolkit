@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import sqlite3
 import tempfile
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -26,6 +27,7 @@ from ..stores.session_files import (
     session_id_from_filename,
 )
 from ..stores.session_parser import normalize_session_text, parse_session_summary_file
+from ..stores.thread_history import export_thread_history
 from ..support import (
     build_single_export_root,
     build_machine_bundle_root,
@@ -35,11 +37,6 @@ from ..support import (
     normalize_bundle_root,
 )
 from ..validation import normalize_relative_path, validate_jsonl_file, validate_session_id, write_manifest
-from ..stores.skills_manifest import SKILLS_DIR_NAME, SKILLS_MANIFEST_FILENAME, write_skills_manifest
-from ..stores.skills import (
-    bundle_skills,
-    parse_skills_from_session,
-)
 
 
 def export_session(
@@ -121,44 +118,26 @@ def export_session(
             thread_name = desktop_thread_name
         last_updated = extract_last_timestamp(session_file) or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        skills_bundled_count = 0
-        skills_available_count = 0
-        skills_manifest_path = None
         warnings: list[OperationWarning] = []
-
-        if skills_mode != "skip":
-            try:
-                raw_manifest = parse_skills_from_session(session_file)
-                skills_available_count = raw_manifest.available_skill_count
-                if raw_manifest.skills:
-                    bundle_result = bundle_skills(raw_manifest, stage_bundle_dir)
-                    bundled_manifest = bundle_result.manifest
-                    skills_bundled_count = bundled_manifest.bundled_skill_count
-                    bundle_warnings = [
-                        _with_session_id(warning, session_id)
-                        for warning in bundle_result.warnings
-                    ]
-                    if bundle_warnings and skills_mode == "strict":
-                        raise ToolkitError(_format_export_warning(bundle_warnings[0]))
-                    warnings.extend(bundle_warnings)
-                    if skills_bundled_count > 0 or skills_available_count > 0:
-                        skills_manifest_path = write_skills_manifest(bundled_manifest, stage_bundle_dir)
-            except ToolkitError:
-                raise
-            except OSError as exc:
-                shutil.rmtree(stage_bundle_dir / SKILLS_DIR_NAME, ignore_errors=True)
-                (stage_bundle_dir / SKILLS_MANIFEST_FILENAME).unlink(missing_ok=True)
-                skills_bundled_count = 0
-                skills_manifest_path = None
-                warning = OperationWarning(
-                    code="export_skills_failed",
+        thread_history_rows_exported = 0
+        thread_history_sidecar_path = None
+        try:
+            thread_history_result = export_thread_history(
+                paths.latest_thread_history_db(),
+                stage_bundle_dir,
+                session_id,
+            )
+            thread_history_rows_exported = thread_history_result.row_count
+            thread_history_sidecar_path = thread_history_result.sidecar_path
+        except (OSError, sqlite3.DatabaseError) as exc:
+            warnings.append(
+                OperationWarning(
+                    code="export_thread_history_failed",
                     session_id=session_id,
-                    path=str(stage_bundle_dir),
+                    path=str(paths.latest_thread_history_db() or ""),
                     detail=str(exc),
                 )
-                if skills_mode == "strict":
-                    raise ToolkitError(_format_export_warning(warning)) from exc
-                warnings.append(warning)
+            )
 
         manifest_data = OrderedDict(
             SESSION_ID=session_id,
@@ -198,11 +177,10 @@ def export_session(
             session_cwd=session_cwd,
             source_machine=machine_label,
             source_machine_key=machine_key,
-            skills_bundled_count=skills_bundled_count,
-            skills_available_count=skills_available_count,
-            skills_manifest_path=(
-                final_bundle_dir / SKILLS_MANIFEST_FILENAME
-                if skills_manifest_path is not None
+            thread_history_rows_exported=thread_history_rows_exported,
+            thread_history_sidecar_path=(
+                final_bundle_dir / thread_history_sidecar_path.name
+                if thread_history_sidecar_path is not None
                 else None
             ),
             warnings=warnings,
@@ -256,14 +234,14 @@ def export_selected_sessions(
     export_root.mkdir(parents=True, exist_ok=True)
     success_ids: list[str] = []
     failed_exports: list[tuple[str, str]] = []
-    total_skills_bundled = 0
+    total_thread_history_rows_exported = 0
     warnings: list[OperationWarning] = []
 
     for session_id in selected_ids:
         try:
             result = export_session(paths, session_id, bundle_root=export_root, skills_mode=skills_mode)
             success_ids.append(session_id)
-            total_skills_bundled += result.skills_bundled_count
+            total_thread_history_rows_exported += result.thread_history_rows_exported
             warnings.extend(result.warnings)
         except (ToolkitError, OSError) as exc:
             failed_exports.append((session_id, str(exc)))
@@ -295,7 +273,7 @@ def export_selected_sessions(
         manifest_file=manifest_file,
         selection_label=summary_label,
         export_group="single",
-        total_skills_bundled=total_skills_bundled,
+        total_thread_history_rows_exported=total_thread_history_rows_exported,
         warnings=warnings,
     )
 
@@ -375,14 +353,14 @@ def export_sessions_for_kind(
     plan.export_root.mkdir(parents=True, exist_ok=True)
     success_ids: list[str] = []
     failed_exports: list[tuple[str, str]] = []
-    total_skills_bundled = 0
+    total_thread_history_rows_exported = 0
     warnings: list[OperationWarning] = []
 
     for session_id in plan.session_ids:
         try:
             result = export_session(paths, session_id, bundle_root=plan.export_root, skills_mode=skills_mode)
             success_ids.append(session_id)
-            total_skills_bundled += result.skills_bundled_count
+            total_thread_history_rows_exported += result.thread_history_rows_exported
             warnings.extend(result.warnings)
         except (ToolkitError, OSError) as exc:
             failed_exports.append((session_id, str(exc)))
@@ -397,7 +375,7 @@ def export_sessions_for_kind(
         success_ids=success_ids,
         failed_exports=failed_exports,
         manifest_file=manifest_file,
-        total_skills_bundled=total_skills_bundled,
+        total_thread_history_rows_exported=total_thread_history_rows_exported,
         warnings=warnings,
     )
 
@@ -476,14 +454,14 @@ def export_project_sessions(
     plan.export_root.mkdir(parents=True, exist_ok=True)
     success_ids: list[str] = []
     failed_exports: list[tuple[str, str]] = []
-    total_skills_bundled = 0
+    total_thread_history_rows_exported = 0
     warnings: list[OperationWarning] = []
 
     for session_id in plan.session_ids:
         try:
             result = export_session(paths, session_id, bundle_root=plan.export_root, skills_mode=skills_mode)
             success_ids.append(session_id)
-            total_skills_bundled += result.skills_bundled_count
+            total_thread_history_rows_exported += result.thread_history_rows_exported
             warnings.extend(result.warnings)
         except (ToolkitError, OSError) as exc:
             failed_exports.append((session_id, str(exc)))
@@ -498,36 +476,6 @@ def export_project_sessions(
         success_ids=success_ids,
         failed_exports=failed_exports,
         manifest_file=manifest_file,
-        total_skills_bundled=total_skills_bundled,
+        total_thread_history_rows_exported=total_thread_history_rows_exported,
         warnings=warnings,
     )
-
-
-def _with_session_id(warning: OperationWarning, session_id: str) -> OperationWarning:
-    return OperationWarning(
-        code=warning.code,
-        session_id=session_id,
-        path=warning.path,
-        related_path=warning.related_path,
-        detail=warning.detail,
-        name=warning.name,
-        source_root=warning.source_root,
-        relative_dir=warning.relative_dir,
-    )
-
-
-def _format_export_warning(warning: OperationWarning) -> str:
-    if warning.code == "skill_not_bundled":
-        detail = f": {warning.detail}" if warning.detail else ""
-        return (
-            "Custom skill not bundled: "
-            f"{warning.name} ({warning.source_root}/{warning.relative_dir}){detail}"
-        )
-    if warning.code == "bundle_skill_failed":
-        return (
-            "Failed to bundle custom skill: "
-            f"{warning.name} ({warning.source_root}/{warning.relative_dir}): {warning.detail}"
-        )
-    if warning.code == "export_skills_failed":
-        return f"Failed to export skills sidecar for session {warning.session_id}: {warning.detail}"
-    return warning.detail or warning.code

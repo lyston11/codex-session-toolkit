@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sqlite3
 import tempfile
 import time
 from pathlib import Path
@@ -14,7 +15,6 @@ from ..models import BatchImportResult, ImportResult, OperationWarning
 from ..paths import CodexPaths
 from ..services.import_planning import build_batch_import_plan, build_selected_import_plan
 from ..services.provider import detect_provider
-from ..services.skill_sidecars import restore_bundle_skills_sidecar
 from ..stores.bundle_repository import (
     resolve_bundle_dir,
     resolve_known_bundle_dir,
@@ -32,6 +32,7 @@ from ..stores.history import first_history_text
 from ..stores.index import is_weak_thread_name, load_existing_index, upsert_session_index
 from ..stores.session_files import build_session_preview, extract_last_timestamp, extract_session_field_from_file
 from ..stores.session_parser import normalize_session_text, parse_session_file
+from ..stores.thread_history import THREAD_HISTORY_FILENAME, import_thread_history
 from ..support import (
     classify_session_kind,
     iso_to_epoch,
@@ -271,19 +272,58 @@ def import_session(
                 pin_threads=False,
             )
 
-        skills_restore_summary = restore_bundle_skills_sidecar(
-            home=paths.home,
-            bundle_dir=bundle_dir,
-            session_id=session_id,
-            skills_mode=skills_mode,
-            report_path=skills_restore_report_path,
-        )
-        skills_restored_count = skills_restore_summary.restored_count
-        skills_already_present_count = skills_restore_summary.already_present_count
-        skills_conflict_skipped_count = skills_restore_summary.conflict_skipped_count
-        skills_missing_count = skills_restore_summary.missing_count
-        skills_failed_count = skills_restore_summary.failed_count
-        warnings.extend(skills_restore_summary.warnings)
+        thread_history_action = "missing"
+        thread_history_rows_imported = 0
+        thread_history_db_path = None
+        thread_history_sidecar = bundle_dir / THREAD_HISTORY_FILENAME
+        if thread_history_sidecar.is_file():
+            if rollout_action == "preserved_newer_local":
+                thread_history_action = "skipped_newer_local"
+                warnings.append(
+                    OperationWarning(
+                        code="thread_history_skipped_newer_local",
+                        session_id=session_id,
+                        path=str(thread_history_sidecar),
+                    )
+                )
+            else:
+                target_thread_history_db = paths.latest_thread_history_db() or paths.thread_history_db
+                try:
+                    thread_history_result = import_thread_history(
+                        thread_history_sidecar,
+                        target_thread_history_db,
+                        session_id,
+                    )
+                    thread_history_action = thread_history_result.action
+                    thread_history_rows_imported = thread_history_result.row_count
+                    thread_history_db_path = thread_history_result.target_db
+                    if thread_history_result.action == "missing_migrations":
+                        warnings.append(
+                            OperationWarning(
+                                code="thread_history_missing_migrations",
+                                session_id=session_id,
+                                path=str(thread_history_sidecar),
+                            )
+                        )
+                    if thread_history_result.skipped_tables:
+                        warnings.append(
+                            OperationWarning(
+                                code="thread_history_tables_skipped",
+                                session_id=session_id,
+                                path=str(target_thread_history_db),
+                                detail=", ".join(thread_history_result.skipped_tables),
+                            )
+                        )
+                except (OSError, sqlite3.DatabaseError) as exc:
+                    thread_history_action = "failed"
+                    warnings.append(
+                        OperationWarning(
+                            code="import_thread_history_failed",
+                            session_id=session_id,
+                            path=str(thread_history_sidecar),
+                            detail=str(exc),
+                        )
+                    )
 
         return ImportResult(
             session_id=session_id,
@@ -301,13 +341,11 @@ def import_session(
             created_workspace_dir=created_workspace_dir,
             backup_path=backup_path,
             warnings=warnings,
-            skills_restored_count=skills_restored_count,
-            skills_already_present_count=skills_already_present_count,
-            skills_conflict_skipped_count=skills_conflict_skipped_count,
-            skills_missing_count=skills_missing_count,
-            skills_failed_count=skills_failed_count,
             desktop_sidebar_promoted_count=desktop_sidebar_visible_count or len(promoted_thread_ids),
             desktop_pinned_count=0,
+            thread_history_action=thread_history_action,
+            thread_history_rows_imported=thread_history_rows_imported,
+            thread_history_db_path=thread_history_db_path,
         )
     finally:
         Path(prepared_path).unlink(missing_ok=True)
@@ -422,14 +460,12 @@ def import_desktop_all(
         project_filter=project_filter,
         target_project_path=target_project_path,
         latest_only=latest_only,
-        skills_mode=skills_mode,
     )
     return _execute_batch_import_plan(
         paths,
         plan,
         desktop_visible=desktop_visible,
         create_missing_workspace=create_missing_workspace,
-        skills_mode=skills_mode,
     )
 
 
@@ -458,14 +494,12 @@ def import_selected_bundles(
         project_filter=project_filter,
         target_project_path=target_project_path,
         latest_only=latest_only,
-        skills_mode=skills_mode,
     )
     return _execute_batch_import_plan(
         paths,
         plan,
         desktop_visible=desktop_visible,
         create_missing_workspace=create_missing_workspace,
-        skills_mode=skills_mode,
     )
 
 
@@ -475,7 +509,6 @@ def _execute_batch_import_plan(
     *,
     desktop_visible: bool,
     create_missing_workspace: Optional[bool],
-    skills_mode: str,
 ) -> BatchImportResult:
     if create_missing_workspace is None:
         create_missing_workspace = desktop_visible
@@ -485,15 +518,10 @@ def _execute_batch_import_plan(
 
     success_dirs: list[Path] = []
     failed_imports: list[tuple[Path, str]] = []
-    total_skills_restored = 0
-    total_skills_already_present = 0
-    total_skills_conflict_skipped = 0
-    total_skills_missing = 0
-    total_skills_failed = 0
+    total_thread_history_rows_imported = 0
     imported_workspaces: list[str] = []
     imported_thread_ids: list[str] = []
     imported_thread_workspaces: list[tuple[str, str]] = []
-    skills_restore_report_path = None
     warnings: list[OperationWarning] = []
     for summary in plan.bundle_summaries:
         try:
@@ -504,16 +532,10 @@ def _execute_batch_import_plan(
                 desktop_visible=desktop_visible,
                 create_missing_workspace=create_missing_workspace,
                 session_cwd_override=plan.session_cwd_override_for(summary),
-                skills_mode=skills_mode,
-                skills_restore_report_path=plan.skills_restore_report_candidate_path,
                 pin_sidebar_workspace=False,
             )
             success_dirs.append(summary.bundle_dir)
-            total_skills_restored += result.skills_restored_count
-            total_skills_already_present += result.skills_already_present_count
-            total_skills_conflict_skipped += result.skills_conflict_skipped_count
-            total_skills_missing += result.skills_missing_count
-            total_skills_failed += result.skills_failed_count
+            total_thread_history_rows_imported += result.thread_history_rows_imported
             if result.session_cwd:
                 imported_workspaces.append(result.session_cwd)
             if result.thread_row_upserted:
@@ -546,12 +568,6 @@ def _execute_batch_import_plan(
         if not desktop_sidebar_promoted_count:
             desktop_sidebar_promoted_count = len(visible_thread_ids)
 
-    if (
-        plan.skills_restore_report_candidate_path is not None
-        and plan.skills_restore_report_candidate_path.is_file()
-    ):
-        skills_restore_report_path = plan.skills_restore_report_candidate_path
-
     return BatchImportResult(
         bundle_root=plan.bundle_root,
         desktop_visible=desktop_visible,
@@ -567,13 +583,8 @@ def _execute_batch_import_plan(
         project_label=plan.project_label,
         project_source_path=plan.project_source_path,
         target_project_path=plan.target_project_path,
-        total_skills_restored=total_skills_restored,
-        total_skills_already_present=total_skills_already_present,
-        total_skills_conflict_skipped=total_skills_conflict_skipped,
-        total_skills_missing=total_skills_missing,
-        total_skills_failed=total_skills_failed,
-        skills_restore_report_path=skills_restore_report_path,
         desktop_sidebar_promoted_count=desktop_sidebar_promoted_count,
         desktop_pinned_count=0,
+        total_thread_history_rows_imported=total_thread_history_rows_imported,
         warnings=warnings,
     )
