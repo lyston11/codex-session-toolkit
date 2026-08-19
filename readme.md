@@ -371,7 +371,8 @@ export CST_MACHINE_LABEL=My-MacBook
 - `codex/<relative rollout path>.jsonl`
 - `history.jsonl`
 - `manifest.env`
-- `thread_history_1.sqlite`，可选，只包含当前 thread 的投影数据
+- `thread_history_1.sqlite`，可选，只包含当前 rollout 的投影数据
+- `history_lineage.json`、父 rollout JSONL 和 `thread_history/`，仅 paginated revert/fork 会话存在，用于恢复继承历史链
 
 会话 Bundle 不再携带或恢复 Skill。这样可以避免当前 Codex 的 Skill root alias、插件和运行时目录被误判为可跨机器复制的本地文件。
 
@@ -395,7 +396,7 @@ Skills 只通过 standalone Skills Bundle 搬运，与会话导入导出解耦�
 
 工具读取 `~/.codex/config.toml` 顶层的 `sqlite_home`，并用它定位 `state_*.sqlite` 和 `thread_history_*.sqlite`。如果未配置，则按官方优先级读取 `CODEX_SQLITE_HOME`，最后回退到 `~/.codex/`。相对路径按当前工作目录解析。
 
-导出投影数据时只选择当前 session id 对应的 `thread_history_projection_state`、`thread_turns` 和 `thread_items` 行，不会把其他会话的 SQLite 数据带入 Bundle。导入已有数据库时也只替换当前 thread 的投影行。
+导出投影数据时只选择当前 rollout 及其 `history_base` 祖先对应的 `thread_history_projection_state`、`thread_turns` 和 `thread_items` 行，不会把无关会话的 SQLite 数据带入 Bundle。导入已有数据库时也只替换这些 rollout 的投影行。stable thread id 与物理 rollout id 会分别记录，revert 后仍注册为原 thread。目标机已有内容不同的父 rollout 时保留本地文件，并跳过对应投影，避免 JSONL 与 SQLite 混用不同版本。
 
 ## Provider 和 Desktop 标题
 

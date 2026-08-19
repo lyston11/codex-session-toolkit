@@ -27,6 +27,13 @@ from ..stores.session_files import (
     session_id_from_filename,
 )
 from ..stores.session_parser import normalize_session_text, parse_session_summary_file
+from ..stores.session_lineage import (
+    LINEAGE_FILENAME,
+    LINEAGE_PROJECTION_DIR,
+    build_lineage_manifest,
+    collect_session_lineage,
+    write_lineage_manifest,
+)
 from ..stores.thread_history import export_thread_history
 from ..support import (
     build_single_export_root,
@@ -46,7 +53,7 @@ def export_session(
     bundle_root: Optional[Path] = None,
     skills_mode: str = "best-effort",
 ) -> ExportResult:
-    session_id = validate_session_id(session_id)
+    requested_id = validate_session_id(session_id)
     machine_key = detect_machine_key()
     machine_label = detect_machine_label()
     if bundle_root is None:
@@ -56,9 +63,12 @@ def export_session(
         bundle_root = normalize_bundle_root(paths, bundle_root, paths.default_bundle_root)
     bundle_root.mkdir(parents=True, exist_ok=True)
 
-    session_file = find_session_file(paths, session_id)
+    session_file = find_session_file(paths, requested_id)
     if not session_file:
-        raise ToolkitError(f"Session not found: {session_id}")
+        raise ToolkitError(f"Session not found: {requested_id}")
+    session_summary = parse_session_summary_file(session_file, include_explicit_thread_name=True)
+    session_id = validate_session_id(session_summary.session_id or requested_id)
+    current_rollout_id = validate_session_id(session_id_from_filename(session_file) or session_id)
 
     try:
         relative_path = session_file.relative_to(paths.code_dir)
@@ -77,9 +87,18 @@ def export_session(
 
         (bundle_codex_dir / relative_path.parent).mkdir(parents=True, exist_ok=True)
 
-        bundled_session = bundle_codex_dir / relative_path
-        shutil.copy2(session_file, bundled_session)
-        validate_jsonl_file(bundled_session, "Bundled session file", "session", session_id)
+        lineage = collect_session_lineage(paths, session_file)
+        for lineage_file in lineage:
+            lineage_relative_path = lineage_file.relative_to(paths.code_dir)
+            bundled_lineage_file = bundle_codex_dir / lineage_relative_path
+            bundled_lineage_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(lineage_file, bundled_lineage_file)
+            validate_jsonl_file(bundled_lineage_file, "Bundled session file", "session")
+        if len(lineage) > 1:
+            write_lineage_manifest(
+                stage_bundle_dir / LINEAGE_FILENAME,
+                build_lineage_manifest(lineage, paths.code_dir),
+            )
 
         history_lines = collect_history_lines_for_session(paths.history_file, session_id)
         bundle_history.parent.mkdir(parents=True, exist_ok=True)
@@ -91,7 +110,6 @@ def export_session(
         session_source = extract_session_field_from_file("source", session_file)
         session_originator = extract_session_field_from_file("originator", session_file)
         session_kind = classify_session_kind(session_source, session_originator)
-        session_summary = parse_session_summary_file(session_file, include_explicit_thread_name=True)
         thread_metadata = load_thread_metadata(paths.latest_state_db(), session_ids={session_id}).get(session_id, {})
         desktop_thread_name = str(thread_metadata.get("title") or "").strip()
         first_prompt = (
@@ -121,26 +139,37 @@ def export_session(
         warnings: list[OperationWarning] = []
         thread_history_rows_exported = 0
         thread_history_sidecar_path = None
-        try:
-            thread_history_result = export_thread_history(
-                paths.latest_thread_history_db(),
-                stage_bundle_dir,
-                session_id,
+        source_history_db = paths.latest_thread_history_db()
+        for lineage_index, lineage_file in enumerate(lineage):
+            lineage_rollout_id = session_id_from_filename(lineage_file) or session_id
+            sidecar_filename = (
+                "thread_history_1.sqlite"
+                if lineage_index == 0
+                else f"{LINEAGE_PROJECTION_DIR}/{lineage_rollout_id}.sqlite"
             )
-            thread_history_rows_exported = thread_history_result.row_count
-            thread_history_sidecar_path = thread_history_result.sidecar_path
-        except (OSError, sqlite3.DatabaseError) as exc:
-            warnings.append(
-                OperationWarning(
-                    code="export_thread_history_failed",
-                    session_id=session_id,
-                    path=str(paths.latest_thread_history_db() or ""),
-                    detail=str(exc),
+            try:
+                thread_history_result = export_thread_history(
+                    source_history_db,
+                    stage_bundle_dir,
+                    lineage_rollout_id,
+                    filename=sidecar_filename,
                 )
-            )
+                thread_history_rows_exported += thread_history_result.row_count
+                if lineage_index == 0:
+                    thread_history_sidecar_path = thread_history_result.sidecar_path
+            except (OSError, sqlite3.DatabaseError) as exc:
+                warnings.append(
+                    OperationWarning(
+                        code="export_thread_history_failed",
+                        session_id=lineage_rollout_id,
+                        path=str(source_history_db or ""),
+                        detail=str(exc),
+                    )
+                )
 
         manifest_data = OrderedDict(
             SESSION_ID=session_id,
+            ROLLOUT_ID=current_rollout_id,
             RELATIVE_PATH=normalize_relative_path(str(relative_path)),
             EXPORTED_AT=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             UPDATED_AT=last_updated,
@@ -287,10 +316,19 @@ def _selected_session_ids(
     if all_sessions and session_ids:
         raise ToolkitError("Pass either --all or specific session ids, not both.")
     if all_sessions:
-        raw_ids = [
-            session_id_from_filename(session_file) or ""
-            for session_file in iter_session_files(paths)
-        ]
+        raw_ids = []
+        for session_file in iter_session_files(paths):
+            try:
+                raw_ids.append(
+                    parse_session_summary_file(
+                        session_file,
+                        include_first_user_prompt=False,
+                    ).session_id
+                    or session_id_from_filename(session_file)
+                    or ""
+                )
+            except ToolkitError:
+                raw_ids.append(session_id_from_filename(session_file) or "")
     else:
         if not session_ids:
             raise ToolkitError("Session id or --all is required.")

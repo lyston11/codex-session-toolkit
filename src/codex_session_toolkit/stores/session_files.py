@@ -11,7 +11,7 @@ from ..models import SessionSummary
 from ..paths import CodexPaths
 from ..support import project_path_matches
 from ..validation import validate_session_id
-from .desktop_state import load_thread_metadata
+from .desktop_state import load_thread_metadata, load_thread_rollout_path
 from .history import first_history_messages
 from .index import is_weak_thread_name, load_existing_index
 from .session_parser import (
@@ -113,9 +113,29 @@ def extract_last_timestamp(session_file: Path) -> str:
 
 def find_session_file(paths: CodexPaths, session_id: str) -> Optional[Path]:
     validate_session_id(session_id)
+    indexed_path = load_thread_rollout_path(paths.latest_state_db(), session_id)
+    if indexed_path is not None and indexed_path.is_file():
+        try:
+            indexed_path.relative_to(paths.sessions_dir)
+        except ValueError:
+            try:
+                indexed_path.relative_to(paths.archived_sessions_dir)
+            except ValueError:
+                indexed_path = None
+        if indexed_path is not None:
+            return indexed_path
     for session_file in iter_session_files(paths):
         if session_id_from_filename(session_file) == session_id:
             return session_file
+    for session_file in reversed(list(iter_session_files(paths))):
+        try:
+            if parse_session_summary_file(
+                session_file,
+                include_first_user_prompt=False,
+            ).session_id == session_id:
+                return session_file
+        except ToolkitError:
+            continue
     return None
 
 

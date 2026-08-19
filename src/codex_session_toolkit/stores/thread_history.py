@@ -47,12 +47,15 @@ def export_thread_history(
     source_db: Optional[Path],
     bundle_dir: Path,
     thread_id: str,
+    *,
+    filename: str = THREAD_HISTORY_FILENAME,
 ) -> ThreadHistoryExportResult:
     """Write a self-contained SQLite sidecar containing only one thread."""
     if source_db is None or not source_db.is_file():
         return ThreadHistoryExportResult(sidecar_path=None)
 
-    sidecar_path = bundle_dir / THREAD_HISTORY_FILENAME
+    sidecar_path = bundle_dir / filename
+    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
     sidecar_path.unlink(missing_ok=True)
     source = _connect_read_only(source_db)
     try:

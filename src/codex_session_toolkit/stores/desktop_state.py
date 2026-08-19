@@ -505,6 +505,28 @@ def load_thread_metadata(
         conn.close()
 
 
+def load_thread_rollout_path(state_db: Optional[Path], thread_id: str) -> Optional[Path]:
+    if not state_db or not state_db.is_file():
+        return None
+    try:
+        conn = sqlite3.connect(state_db)
+        try:
+            columns = {row[1] for row in conn.execute("pragma table_info(threads)").fetchall()}
+            if not {"id", "rollout_path"}.issubset(columns):
+                return None
+            row = conn.execute(
+                "select rollout_path from threads where id = ?",
+                (thread_id,),
+            ).fetchone()
+            if row and isinstance(row[0], str) and row[0]:
+                return Path(row[0])
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+    return None
+
+
 def prepare_session_for_import(
     source_session: Path,
     prepared_session: Path,

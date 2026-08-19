@@ -160,6 +160,10 @@ def _format_operation_warning(warning: OperationWarning) -> str:
         return "Warning: thread history sidecar has no migration metadata; target database was not created."
     if warning.code == "thread_history_tables_skipped":
         return f"Warning: incompatible thread history tables were skipped: {warning.detail}"
+    if warning.code == "history_lineage_rollout_missing":
+        return f"Warning: inherited rollout is missing from the Bundle: {warning.path}"
+    if warning.code == "history_lineage_rollout_conflict":
+        return f"Warning: kept conflicting local inherited rollout and skipped its projection: {warning.path}"
     return warning.detail or warning.code
 
 

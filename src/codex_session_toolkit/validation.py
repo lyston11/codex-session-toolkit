@@ -22,6 +22,7 @@ def validate_session_id(session_id: str) -> str:
 def load_manifest(manifest_file: Path) -> Dict[str, str]:
     allowed = {
         "SESSION_ID",
+        "ROLLOUT_ID",
         "RELATIVE_PATH",
         "EXPORTED_AT",
         "UPDATED_AT",

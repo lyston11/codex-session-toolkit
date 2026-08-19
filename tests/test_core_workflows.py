@@ -2228,6 +2228,99 @@ class CoreWorkflowTests(unittest.TestCase):
             finally:
                 conn.close()
 
+    def test_session_bundle_preserves_paginated_revert_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            workspace = root / "workspace"
+            src_home = root / "src-home"
+            dst_home = root / "dst-home"
+            workspace.mkdir()
+            write_config(src_home, "source-provider")
+            write_config(dst_home, "target-provider")
+            create_threads_db(dst_home)
+
+            thread_id = "aaa00080-0000-7000-8000-000000000080"
+            parent_rollout_id = thread_id
+            current_rollout_id = "aaa00082-0000-7000-8000-000000000082"
+            parent = write_session(
+                src_home,
+                parent_rollout_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                timestamp="2026-04-10T10:00:00Z",
+            )
+            current = write_session(
+                src_home,
+                current_rollout_id,
+                provider="source-provider",
+                source="vscode",
+                originator="Codex Desktop",
+                cwd=workspace,
+                timestamp="2026-04-10T11:00:00Z",
+            )
+            for rollout, history_base in ((parent, None), (current, parent_rollout_id)):
+                records = [json.loads(raw) for raw in rollout.read_text(encoding="utf-8").splitlines()]
+                metadata = records[0]["payload"]
+                metadata["id"] = thread_id
+                metadata["session_id"] = thread_id
+                metadata["history_mode"] = "paginated"
+                if history_base:
+                    metadata["history_base"] = {
+                        "thread_id": history_base,
+                        "end_ordinal_exclusive": 10,
+                        "end_byte_offset": 100,
+                    }
+                rollout.write_text(
+                    "".join(json.dumps(record, separators=(",", ":")) + "\n" for record in records),
+                    encoding="utf-8",
+                )
+
+            write_history(src_home, thread_id, "reverted thread")
+            source_state = create_threads_db(src_home)
+            source_state_conn = sqlite3.connect(source_state)
+            source_state_conn.execute(
+                "insert into threads (id, rollout_path) values (?, ?)",
+                (thread_id, str(current)),
+            )
+            source_state_conn.commit()
+            source_state_conn.close()
+            create_thread_history_db_file(
+                src_home / ".codex" / "thread_history_1.sqlite",
+                [current_rollout_id, parent_rollout_id],
+            )
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                export_result = export_session(CodexPaths(home=src_home), thread_id)
+                manifest = load_manifest(export_result.bundle_dir / "manifest.env")
+                self.assertEqual(manifest["SESSION_ID"], thread_id)
+                self.assertEqual(manifest["ROLLOUT_ID"], current_rollout_id)
+                self.assertTrue(export_result.bundle_dir.joinpath("history_lineage.json").is_file())
+                self.assertTrue(export_result.bundle_dir.joinpath("codex", parent.relative_to(src_home / ".codex")).is_file())
+                self.assertTrue(
+                    export_result.bundle_dir.joinpath("thread_history", f"{parent_rollout_id}.sqlite").is_file()
+                )
+                import_result = import_session(CodexPaths(home=dst_home), str(export_result.bundle_dir))
+
+            self.assertEqual(import_result.session_id, thread_id)
+            self.assertEqual(import_result.thread_history_rows_imported, 6)
+            self.assertTrue((dst_home / ".codex" / current.relative_to(src_home / ".codex")).is_file())
+            self.assertTrue((dst_home / ".codex" / parent.relative_to(src_home / ".codex")).is_file())
+            state = sqlite3.connect(dst_home / ".codex" / "state_0001.sqlite")
+            try:
+                self.assertEqual(state.execute("select id from threads").fetchall(), [(thread_id,)])
+            finally:
+                state.close()
+            history = sqlite3.connect(dst_home / ".codex" / "thread_history_1.sqlite")
+            try:
+                self.assertEqual(
+                    history.execute("select thread_id from thread_history_projection_state order by thread_id").fetchall(),
+                    [(parent_rollout_id,), (current_rollout_id,)],
+                )
+            finally:
+                history.close()
+
     def test_session_import_creates_thread_history_database_from_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

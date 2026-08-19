@@ -30,7 +30,8 @@ def validate_bundle_directory(
 
         manifest = load_manifest(manifest_file)
         session_id = validate_session_id(manifest.get("SESSION_ID", ""))
-        relative_path = validate_relative_path(manifest.get("RELATIVE_PATH", ""), session_id)
+        rollout_id = validate_session_id(manifest.get("ROLLOUT_ID", "") or session_id)
+        relative_path = validate_relative_path(manifest.get("RELATIVE_PATH", ""), rollout_id)
 
         source_session = bundle_dir / "codex" / Path(*relative_path.split("/"))
         ensure_path_within_dir(source_session, bundle_dir / "codex", "Bundled session file")

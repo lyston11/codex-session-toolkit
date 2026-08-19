@@ -32,6 +32,7 @@ from ..stores.history import first_history_text
 from ..stores.index import is_weak_thread_name, load_existing_index, upsert_session_index
 from ..stores.session_files import build_session_preview, extract_last_timestamp, extract_session_field_from_file
 from ..stores.session_parser import normalize_session_text, parse_session_file
+from ..stores.session_lineage import LINEAGE_FILENAME, LINEAGE_PROJECTION_DIR, read_lineage_manifest
 from ..stores.thread_history import THREAD_HISTORY_FILENAME, import_thread_history
 from ..support import (
     classify_session_kind,
@@ -79,7 +80,8 @@ def import_session(
 
     manifest = load_manifest(manifest_file)
     session_id = validate_session_id(manifest["SESSION_ID"])
-    relative_path = validate_relative_path(manifest["RELATIVE_PATH"], session_id)
+    current_rollout_id = validate_session_id(manifest.get("ROLLOUT_ID", "") or session_id)
+    relative_path = validate_relative_path(manifest["RELATIVE_PATH"], current_rollout_id)
 
     if resolved_from_session_id and input_value != session_id:
         raise ToolkitError(f"Manifest session id does not match requested session id: {session_id}")
@@ -165,6 +167,46 @@ def import_session(
             rollout_action = "created"
 
         effective_session_file = target_session
+        lineage_entries = []
+        skipped_lineage_projections: set[str] = set()
+        lineage_manifest = bundle_dir / LINEAGE_FILENAME
+        if lineage_manifest.is_file():
+            lineage_entries = read_lineage_manifest(lineage_manifest)
+            for entry in lineage_entries:
+                lineage_rollout_id = entry["rollout_id"]
+                if lineage_rollout_id == current_rollout_id:
+                    continue
+                lineage_relative_path = validate_relative_path(entry["relative_path"], lineage_rollout_id)
+                lineage_source = bundle_dir / "codex" / Path(*lineage_relative_path.split("/"))
+                if not lineage_source.is_file():
+                    warnings.append(
+                        OperationWarning(
+                            code="history_lineage_rollout_missing",
+                            session_id=lineage_rollout_id,
+                            path=str(lineage_source),
+                        )
+                    )
+                    skipped_lineage_projections.add(lineage_rollout_id)
+                    continue
+                lineage_target_relative = _target_relative_path_for_import(
+                    lineage_relative_path,
+                    desktop_visible=desktop_visible,
+                )
+                lineage_target = paths.code_dir / Path(*lineage_target_relative.split("/"))
+                lineage_target.parent.mkdir(parents=True, exist_ok=True)
+                if lineage_target.exists():
+                    if lineage_target.read_bytes() != lineage_source.read_bytes():
+                        warnings.append(
+                            OperationWarning(
+                                code="history_lineage_rollout_conflict",
+                                session_id=lineage_rollout_id,
+                                path=str(lineage_target),
+                            )
+                        )
+                        skipped_lineage_projections.add(lineage_rollout_id)
+                else:
+                    shutil.copy2(lineage_source, lineage_target)
+
         session_cwd = extract_session_field_from_file("cwd", effective_session_file) or session_cwd
         session_source = extract_session_field_from_file("source", effective_session_file) or session_source
         session_originator = extract_session_field_from_file("originator", effective_session_file) or session_originator
@@ -292,7 +334,7 @@ def import_session(
                     thread_history_result = import_thread_history(
                         thread_history_sidecar,
                         target_thread_history_db,
-                        session_id,
+                        current_rollout_id,
                     )
                     thread_history_action = thread_history_result.action
                     thread_history_rows_imported = thread_history_result.row_count
@@ -321,6 +363,46 @@ def import_session(
                             code="import_thread_history_failed",
                             session_id=session_id,
                             path=str(thread_history_sidecar),
+                            detail=str(exc),
+                        )
+                    )
+
+        if rollout_action != "preserved_newer_local":
+            target_thread_history_db = paths.latest_thread_history_db() or paths.thread_history_db
+            for entry in lineage_entries:
+                lineage_rollout_id = entry["rollout_id"]
+                if lineage_rollout_id == current_rollout_id:
+                    continue
+                if lineage_rollout_id in skipped_lineage_projections:
+                    continue
+                lineage_sidecar = bundle_dir / LINEAGE_PROJECTION_DIR / f"{lineage_rollout_id}.sqlite"
+                if not lineage_sidecar.is_file():
+                    continue
+                try:
+                    lineage_result = import_thread_history(
+                        lineage_sidecar,
+                        target_thread_history_db,
+                        lineage_rollout_id,
+                    )
+                    if lineage_result.action not in {"missing", "empty"}:
+                        thread_history_action = "merged"
+                    thread_history_rows_imported += lineage_result.row_count
+                    thread_history_db_path = lineage_result.target_db
+                    if lineage_result.skipped_tables:
+                        warnings.append(
+                            OperationWarning(
+                                code="thread_history_tables_skipped",
+                                session_id=lineage_rollout_id,
+                                path=str(target_thread_history_db),
+                                detail=", ".join(lineage_result.skipped_tables),
+                            )
+                        )
+                except (OSError, sqlite3.DatabaseError) as exc:
+                    warnings.append(
+                        OperationWarning(
+                            code="import_thread_history_failed",
+                            session_id=lineage_rollout_id,
+                            path=str(lineage_sidecar),
                             detail=str(exc),
                         )
                     )
