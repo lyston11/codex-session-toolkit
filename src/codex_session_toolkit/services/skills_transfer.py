@@ -21,12 +21,13 @@ from ..models import (
 )
 from ..paths import CodexPaths
 from ..stores.skills_manifest import SKILLS_MANIFEST_FILENAME, read_skills_manifest, write_skills_manifest
+from ..stores.skill_roots import root_by_id
+from ..stores.skill_roots_manifest import write_roots_manifest
 from ..stores.skills import (
+    SKILL_MD_NAME,
     build_skills_manifest_from_local_summaries,
     bundle_skills,
-    classify_skill_location,
     collect_local_skill_summaries,
-    compute_skill_directory_hash,
     restore_skills,
 )
 from ..support import build_skills_export_root, detect_machine_key, detect_machine_label, ensure_path_within_dir, normalize_bundle_root
@@ -39,8 +40,19 @@ def list_local_skills(
     *,
     pattern: str = "",
     include_system: bool = False,
+    source_root: str = "",
+    deduplicate: Optional[bool] = None,
 ) -> list[LocalSkillSummary]:
-    summaries = collect_local_skill_summaries(paths.home, include_system=include_system)
+    summaries = collect_local_skill_summaries(
+        paths.home,
+        include_system=include_system,
+        roots=paths.skill_roots(),
+        deduplicate=(not bool(source_root)) if deduplicate is None else deduplicate,
+    )
+    if source_root:
+        if root_by_id(paths.skill_roots(), source_root) is None:
+            raise ToolkitError(f"Unsupported source root: {source_root}")
+        summaries = [summary for summary in summaries if summary.source_root == source_root]
     if pattern:
         summaries = [
             summary for summary in summaries
@@ -63,6 +75,7 @@ def export_skills(
     bundle_root: Optional[Path] = None,
     include_system: bool = False,
     skills_mode: str = "best-effort",
+    source_root: str = "",
 ) -> SkillExportResult:
     selected_inputs = [value for value in input_values if value]
     machine_key = detect_machine_key()
@@ -77,6 +90,7 @@ def export_skills(
         pattern=pattern,
         input_values=selected_inputs,
         include_system=include_system,
+        source_root=source_root,
     )
     exportable = [summary for summary in local_skills if summary.location_kind == "custom"]
     skipped_count = len(local_skills) - len(exportable)
@@ -89,12 +103,13 @@ def export_skills(
     warnings: list[OperationWarning] = []
     try:
         manifest = build_skills_manifest_from_local_summaries(exportable)
-        bundle_result = bundle_skills(manifest, stage_dir)
+        bundle_result = bundle_skills(manifest, stage_dir, roots=paths.skill_roots())
         warnings.extend(bundle_result.warnings)
         if warnings and skills_mode == "strict":
             raise ToolkitError(_format_skill_warning(warnings[0]))
         stage_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = write_skills_manifest(bundle_result.manifest, stage_dir)
+        write_roots_manifest(stage_dir, paths.skill_roots())
         _write_skill_bundle_manifest(
             stage_dir / "manifest.env",
             exported_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -214,7 +229,7 @@ def _import_one_skill_bundle_dir(
         raise ToolkitError(f"Invalid skills manifest: {bundle_dir / SKILLS_MANIFEST_FILENAME}")
     if skills_mode == "skip":
         return SkillImportResult(bundle_dir=bundle_dir)
-    outcome = restore_skills(manifest, bundle_dir, paths.home, skills_mode=skills_mode)
+    outcome = restore_skills(manifest, bundle_dir, paths.home, skills_mode=skills_mode, roots=paths.skill_roots())
     restored = sum(1 for result in outcome.results if result.status == "restored")
     already_present = sum(1 for result in outcome.results if result.status == "already_present")
     conflict_skipped = sum(1 for result in outcome.results if result.status == "conflict_skipped")
@@ -255,13 +270,18 @@ def _selected_local_skills(
     pattern: str,
     input_values: Sequence[str],
     include_system: bool,
+    source_root: str = "",
 ) -> list[LocalSkillSummary]:
     if not input_values:
-        return list_local_skills(paths, pattern=pattern, include_system=include_system)
+        return list_local_skills(paths, pattern=pattern, include_system=include_system, source_root=source_root)
     if pattern:
         raise ToolkitError("Pass either a pattern or selected Skills, not both.")
 
-    available = collect_local_skill_summaries(paths.home, include_system=include_system)
+    available = collect_local_skill_summaries(paths.home, include_system=include_system, roots=paths.skill_roots())
+    if source_root:
+        if root_by_id(paths.skill_roots(), source_root) is None:
+            raise ToolkitError(f"Unsupported source root: {source_root}")
+        available = [summary for summary in available if summary.source_root == source_root]
     targets: list[LocalSkillSummary] = []
     seen: set[tuple[str, str]] = set()
     for input_value in input_values:
@@ -350,7 +370,7 @@ def delete_local_skill(
         raise ToolkitError(f"Custom Skill not found{scope}: {input_value}")
     if len(matches) > 1:
         roots = ", ".join(sorted({match.source_root for match in matches}))
-        raise ToolkitError(f"Multiple matching Skills found in {roots}; pass --source-root agents|codex")
+        raise ToolkitError(f"Multiple matching Skills found in {roots}; pass --source-root to pick one configured root")
 
     return _delete_local_skill_summary(paths, matches[0], dry_run=dry_run)
 
@@ -384,7 +404,7 @@ def delete_local_skills(
                 raise ToolkitError(f"Custom Skill not found{scope}: {input_value}")
             if len(matches) > 1:
                 roots = ", ".join(sorted({match.source_root for match in matches}))
-                raise ToolkitError(f"Multiple matching Skills found in {roots}; pass --source-root agents|codex")
+                raise ToolkitError(f"Multiple matching Skills found in {roots}; pass --source-root to pick one configured root")
             targets.append(matches[0])
 
     results: list[SkillDeleteResult] = []
@@ -405,14 +425,21 @@ def _delete_local_skill_summary(
     dry_run: bool = False,
 ) -> SkillDeleteResult:
     root_dir = _skills_root_for_source(paths, target.source_root)
-    ensure_path_within_dir(target.skill_dir, root_dir, "Skill directory")
     if target.location_kind != "custom":
         raise ToolkitError(f"Refusing to delete non-custom Skill: {target.relative_dir}")
-    if not (target.skill_dir / "SKILL.md").is_file():
+    if not (target.skill_dir / SKILL_MD_NAME).is_file():
         raise ToolkitError(f"Refusing to delete invalid Skill directory: {target.skill_dir}")
 
-    if not dry_run:
-        shutil.rmtree(target.skill_dir)
+    if target.skill_dir.is_symlink():
+        # Shared roots may hold symlinked skill directories pointing at a real
+        # per-agent copy. Removing the entry only unlinks it from this root.
+        ensure_path_within_dir(target.skill_dir.parent, root_dir, "Skill directory")
+        if not dry_run:
+            target.skill_dir.unlink()
+    else:
+        ensure_path_within_dir(target.skill_dir, root_dir, "Skill directory")
+        if not dry_run:
+            shutil.rmtree(target.skill_dir)
 
     return SkillDeleteResult(
         name=target.name,
@@ -443,7 +470,7 @@ def _resolve_local_skill_delete_matches(
     *,
     source_root: str = "",
 ) -> list[LocalSkillSummary]:
-    if source_root and source_root not in {"agents", "codex"}:
+    if source_root and root_by_id(paths.skill_roots(), source_root) is None:
         raise ToolkitError(f"Unsupported source root: {source_root}")
     input_value = input_value.strip()
     if not input_value:
@@ -474,41 +501,19 @@ def _path_key(path: Path) -> str:
 
 
 def _collect_local_skill_delete_candidates(paths: CodexPaths) -> list[LocalSkillSummary]:
-    candidates: list[LocalSkillSummary] = []
-    for source_root in ("agents", "codex"):
-        root_dir = _skills_root_for_source(paths, source_root)
-        if not root_dir.is_dir():
-            continue
-        for skill_file in sorted(root_dir.rglob("SKILL.md")):
-            skill_dir = skill_file.parent
-            try:
-                relative_dir = skill_dir.relative_to(root_dir).as_posix()
-            except ValueError:
-                continue
-            location_kind = classify_skill_location(relative_dir)
-            if location_kind != "custom":
-                continue
-            try:
-                content_hash = compute_skill_directory_hash(skill_dir)
-            except OSError:
-                content_hash = ""
-            candidates.append(LocalSkillSummary(
-                name=skill_dir.name,
-                source_root=source_root,
-                relative_dir=relative_dir,
-                skill_dir=skill_dir,
-                location_kind=location_kind,
-                content_hash=content_hash,
-            ))
-    return candidates
+    return collect_local_skill_summaries(
+        paths.home,
+        include_system=False,
+        roots=paths.skill_roots(),
+        deduplicate=False,
+    )
 
 
 def _skills_root_for_source(paths: CodexPaths, source_root: str) -> Path:
-    if source_root == "agents":
-        return paths.agents_skills_dir
-    if source_root == "codex":
-        return paths.codex_skills_dir
-    raise ToolkitError(f"Unsupported source root: {source_root}")
+    root = root_by_id(paths.skill_roots(), source_root)
+    if root is None:
+        raise ToolkitError(f"Unsupported source root: {source_root}")
+    return root.resolve(paths.home)
 
 
 def _assert_skill_bundle(bundle_dir: Path) -> None:

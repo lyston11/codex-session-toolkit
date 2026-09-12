@@ -17,6 +17,7 @@ class SessionSummary:
     cwd: str
     model_provider: str
     thread_name: str = ""
+    agent: str = "codex"
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ class BundleSummary:
     bundled_skill_count: int = 0
     used_skill_count: int = 0
     has_thread_history: bool = False
+    agent: str = "codex"
 
 
 @dataclass(frozen=True)

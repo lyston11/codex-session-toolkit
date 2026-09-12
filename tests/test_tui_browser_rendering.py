@@ -4,7 +4,7 @@ import unittest
 from contextlib import ExitStack, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -17,7 +17,9 @@ from codex_session_toolkit.tui.browser_flows import open_archived_session_browse
 from codex_session_toolkit.tui.bundle_flows import bundle_detail_lines  # noqa: E402
 from codex_session_toolkit.tui.progress_flows import _render_progress  # noqa: E402
 from codex_session_toolkit.tui.prompt_flows import prompt_choice, render_prompt_choice  # noqa: E402
-from codex_session_toolkit.tui.terminal import Ansi, strip_ansi  # noqa: E402
+from codex_session_toolkit.tui.terminal import Ansi, KeyPoller, strip_ansi  # noqa: E402
+from codex_session_toolkit.tui.terminal_io import enter_key_mode, exit_key_mode, key_mode_active, read_key, suspend_key_mode  # noqa: E402
+from codex_session_toolkit.stores.skill_roots import SkillRoot  # noqa: E402
 
 
 class FakeBrowserApp:
@@ -262,6 +264,20 @@ def active_summary(session_id: str) -> SessionSummary:
         cwd="/tmp/project",
         model_provider="provider",
         thread_name=f"Thread {session_id}",
+    )
+
+
+def agent_session_summary(session_id: str, agent: str) -> SessionSummary:
+    return SessionSummary(
+        session_id=session_id,
+        scope="active",
+        path=Path(f"/tmp/home/.{agent}/sessions/{session_id}.jsonl"),
+        preview=f"Preview {session_id}",
+        kind="cli",
+        cwd="",
+        model_provider="",
+        thread_name="",
+        agent=agent,
     )
 
 
@@ -580,6 +596,83 @@ class TuiBrowserRenderingTests(unittest.TestCase):
 
         self.assertFalse(app.run_calls)
 
+    def test_session_browser_switches_agent_with_g(self) -> None:
+        app = FakeSessionBrowserApp()
+        calls = []
+
+        def fake_summaries(*args, **kwargs):
+            calls.append(kwargs)
+            agent = kwargs.get("agent")
+            if agent == "":
+                return [
+                    active_summary("11111111-2222-4333-8444-555555555555"),
+                    agent_session_summary("sess-claude", "claude"),
+                    agent_session_summary("sess-pi", "pi"),
+                    agent_session_summary("sess-zcode", "zcode"),
+                ]
+            if agent in (None, "codex"):
+                return [active_summary("11111111-2222-4333-8444-555555555555")]
+            return [agent_session_summary(f"sess-{agent}", agent)]
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["g", "g", "g", "g", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.get_session_summaries", side_effect=fake_summaries))
+            output = TtyStringIO()
+            stack.enter_context(redirect_stdout(output))
+            open_session_browser(app, mode="view")
+
+        self.assertEqual([call.get("agent") for call in calls], ["codex", "claude", "pi", "zcode", ""])
+        frames = strip_ansi(output.getvalue()).split("浏览并导出会话")[1:]
+        self.assertEqual(len(frames), 5)
+        labels = [
+            frame.split("Agent   : ", 1)[1].splitlines()[0].split("│")[0].strip()
+            for frame in frames
+        ]
+        self.assertEqual(labels, ["Codex", "Claude Code", "Pi", "ZCode", "全部 Agent"])
+        merged_frame = frames[-1]
+        self.assertIn("Claude Code", merged_frame)
+        self.assertIn("sess-claude", merged_frame)
+        self.assertIn("sess-zcode", merged_frame)
+
+    def test_session_browser_exports_non_codex_sessions_with_agent_flag(self) -> None:
+        app = FakeSessionBrowserApp()
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["e", "q"]))
+            stack.enter_context(
+                patch(
+                    "codex_session_toolkit.tui.browser_flows.get_session_summaries",
+                    return_value=[agent_session_summary("sess-claude", "claude")],
+                )
+            )
+            stack.enter_context(redirect_stdout(TtyStringIO()))
+            open_session_browser(app, mode="view")
+
+        action_name, cli_args, kwargs = app.run_calls[0]
+        self.assertEqual(action_name, "导出 Claude Code 会话 sess-claude 为 Bundle")
+        self.assertEqual(cli_args, ["export", "--agent", "claude", "sess-claude"])
+        self.assertFalse(kwargs["danger"])
+
+    def test_session_browser_blocks_mixed_agent_export(self) -> None:
+        app = FakeSessionBrowserApp()
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=[" ", "DOWN", " ", "e", "q"]))
+            stack.enter_context(
+                patch(
+                    "codex_session_toolkit.tui.browser_flows.get_session_summaries",
+                    return_value=[
+                        agent_session_summary("sess-claude", "claude"),
+                        agent_session_summary("sess-pi", "pi"),
+                    ],
+                )
+            )
+            stack.enter_context(redirect_stdout(TtyStringIO()))
+            open_session_browser(app, mode="view")
+
+        self.assertFalse(app.run_calls)
+        self.assertTrue(any("多个 Agent" in lines[0] for _title, lines, _kwargs in app.detail_calls))
+
     def test_project_session_browser_can_export_current_session(self) -> None:
         session_id = "11111111-2222-4333-8444-555555555555"
         app = FakeProjectSessionBrowserApp()
@@ -884,6 +977,147 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         self.assertEqual(app.run_calls[1][0], "导出 2 个 Skills")
         self.assertEqual(app.run_calls[1][1], ["export-skills", str(first.skill_dir), str(second.skill_dir)])
 
+    def test_local_skill_browser_switches_agent_root_with_g(self) -> None:
+        app = FakeSkillBrowserApp()
+        app.paths = SimpleNamespace(
+            skill_roots=lambda: (
+                SkillRoot("agents", "Shared / agents", ".agents/skills", "shared"),
+                SkillRoot("codex", "Codex", ".codex/skills"),
+                SkillRoot("pi", "Pi", ".pi/skills"),
+                SkillRoot("claude", "Claude Code", ".claude/skills"),
+                SkillRoot("zcode", "ZCode", ".zcode/skills"),
+            )
+        )
+        calls = []
+        snapshot = [
+            skill_summary("shared-skill", source_root="agents"),
+            skill_summary("codex-skill", source_root="codex"),
+        ]
+
+        def list_skills(*args, **kwargs):
+            calls.append(kwargs)
+            return list(snapshot)
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["g", "g", "g", "g", "g", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_local_skills", side_effect=list_skills))
+            output = TtyStringIO()
+            stack.enter_context(redirect_stdout(output))
+            open_local_skill_browser(app, mode="view")
+
+        self.assertEqual(calls, [{"deduplicate": False}])
+        frames = strip_ansi(output.getvalue()).split("浏览本机 Skills")[1:]
+        self.assertEqual(len(frames), 6)
+        labels = [
+            frame.split("Agent   : ", 1)[1].splitlines()[0].split("│")[0].strip()
+            for frame in frames
+        ]
+        self.assertEqual(
+            labels,
+            ["自定义（Shared / agents）", "Codex", "Pi", "Claude Code", "ZCode", "全部 Agent"],
+        )
+
+    def test_local_skill_browser_defaults_to_shared_custom_root(self) -> None:
+        app = FakeSkillBrowserApp()
+        app.paths = SimpleNamespace(
+            skill_roots=lambda: (
+                SkillRoot("agents", "Shared / agents", ".agents/skills", "shared"),
+                SkillRoot("codex", "Codex", ".codex/skills"),
+            )
+        )
+        calls = []
+        snapshot = [
+            skill_summary("shared-skill", source_root="agents"),
+            skill_summary("codex-skill", source_root="codex"),
+        ]
+
+        def list_skills(*args, **kwargs):
+            calls.append(kwargs)
+            return list(snapshot)
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_local_skills", side_effect=list_skills))
+            output = TtyStringIO()
+            stack.enter_context(redirect_stdout(output))
+            open_local_skill_browser(app, mode="view")
+
+        self.assertEqual(calls, [{"deduplicate": False}])
+        frame = strip_ansi(output.getvalue()).split("浏览本机 Skills")[-1]
+        self.assertIn("Agent   : 自定义（Shared / agents）", frame)
+        self.assertIn("shared-skill", frame)
+        self.assertNotIn("codex-skill", frame)
+
+    def test_local_skill_browser_falls_back_to_all_roots_without_shared(self) -> None:
+        app = FakeSkillBrowserApp()
+        app.paths = SimpleNamespace(
+            skill_roots=lambda: (SkillRoot("codex", "Codex", ".codex/skills"),)
+        )
+        calls = []
+        snapshot = [skill_summary("codex-skill", source_root="codex")]
+
+        def list_skills(*args, **kwargs):
+            calls.append(kwargs)
+            return list(snapshot)
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_local_skills", side_effect=list_skills))
+            output = TtyStringIO()
+            stack.enter_context(redirect_stdout(output))
+            open_local_skill_browser(app, mode="view")
+
+        self.assertEqual(calls, [{"deduplicate": False}])
+        frame = strip_ansi(output.getvalue()).split("浏览本机 Skills")[-1]
+        self.assertIn("Agent   : 全部 Agent", frame)
+        self.assertIn("codex-skill | Codex", frame)
+
+    def test_local_skill_browser_reuses_snapshot_across_repaints(self) -> None:
+        app = FakeSkillBrowserApp()
+        app.paths = SimpleNamespace(
+            skill_roots=lambda: (
+                SkillRoot("agents", "Shared / agents", ".agents/skills", "shared"),
+                SkillRoot("codex", "Codex", ".codex/skills"),
+            )
+        )
+        calls = []
+        snapshot = [skill_summary("demo", source_root="codex")]
+
+        def list_skills(*args, **kwargs):
+            calls.append(kwargs)
+            return list(snapshot)
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=[None, None, "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_local_skills", side_effect=list_skills))
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal.term_width", return_value=100))
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal.term_height", return_value=40))
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal._stdin_is_interactive", return_value=True))
+            output = TtyStringIO()
+            stack.enter_context(redirect_stdout(output))
+            open_local_skill_browser(app, mode="view")
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(output.getvalue().count("浏览本机 Skills"), 3)
+
+    def test_local_skill_browser_keeps_single_agent_rows_compact(self) -> None:
+        app = FakeSkillBrowserApp()
+        app.paths = SimpleNamespace(
+            skill_roots=lambda: (SkillRoot("codex", "Codex", ".codex/skills"),)
+        )
+        skill = skill_summary("nature-proposal-writer", source_root="codex")
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_local_skills", return_value=[skill]))
+            output = TtyStringIO()
+            stack.enter_context(redirect_stdout(output))
+            open_local_skill_browser(app, mode="view")
+
+        rendered = strip_ansi(output.getvalue())
+        self.assertIn("nature-proposal-writer", rendered)
+        self.assertNotIn("nature-proposal-writer | Codex/custom | nature-proposal-writer", rendered)
+
     def test_skill_bundle_browser_can_import_checked_bundles(self) -> None:
         app = FakeSkillBundleBrowserApp()
         first = skill_bundle_summary("bundle-a")
@@ -965,6 +1199,138 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         self.assertEqual(action_name, "删除 2 个本机 Skills")
         self.assertEqual(cli_args, ["delete-skill", str(first.skill_dir), str(second.skill_dir)])
         self.assertTrue(kwargs["danger"])
+
+    def test_skill_browser_repaints_on_terminal_resize_without_keypress(self) -> None:
+        app = FakeSkillBrowserApp()
+        skill = skill_summary("nature-proposal-writer", source_root="codex")
+        cols = {"value": 100}
+        key_calls = {"count": 0}
+
+        def fake_term_width(*args, **kwargs):
+            return cols["value"]
+
+        def fake_read_key(timeout_ms=None):
+            key_calls["count"] += 1
+            if key_calls["count"] == 2:
+                cols["value"] = 60
+                return None
+            if key_calls["count"] == 3:
+                return "q"
+            return None
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=fake_read_key))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_local_skills", return_value=[skill]))
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal.term_width", side_effect=fake_term_width))
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal.term_height", return_value=40))
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal._stdin_is_interactive", return_value=True))
+            stack.enter_context(
+                patch("builtins.input", side_effect=AssertionError("tty stdin must not fall back to input()"))
+            )
+            output = TtyStringIO()
+            stack.enter_context(redirect_stdout(output))
+            self.assertIsNone(open_local_skill_browser(app, mode="view"))
+
+        self.assertEqual(key_calls["count"], 3)
+        self.assertEqual(output.getvalue().count("浏览本机 Skills"), 3)
+
+    def test_skill_browser_keeps_piped_command_fallback_when_stdin_is_not_a_tty(self) -> None:
+        app = FakeSkillBrowserApp()
+        skill = skill_summary("demo")
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", return_value=None))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_local_skills", return_value=[skill]))
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal.term_width", return_value=100))
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal.term_height", return_value=40))
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal._stdin_is_interactive", return_value=False))
+            input_mock = stack.enter_context(patch("builtins.input", side_effect=["", "q"]))
+            stack.enter_context(redirect_stdout(TtyStringIO()))
+            self.assertIsNone(open_local_skill_browser(app, mode="view"))
+
+        self.assertEqual(
+            input_mock.call_count,
+            2,
+        )
+        prompts = {args[0] for args, _kwargs in input_mock.call_args_list}
+        self.assertEqual(len(prompts), 1)
+        self.assertTrue(prompts.pop().startswith("命令 [Enter/"))
+
+
+class KeyModeTests(unittest.TestCase):
+    def test_held_mode_reads_without_touching_termios_and_restores_on_exit(self) -> None:
+        self.addCleanup(exit_key_mode)
+        fake_stdin = SimpleNamespace(fileno=lambda: 7)
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal_io.sys.stdin", fake_stdin))
+            setraw = stack.enter_context(patch("tty.setraw"))
+            setcbreak = stack.enter_context(patch("tty.setcbreak"))
+            tcgetattr = stack.enter_context(patch("termios.tcgetattr"))
+            tcsetattr = stack.enter_context(patch("termios.tcsetattr"))
+            ready = ([7], [], [])
+            stack.enter_context(patch("select.select", side_effect=[ready, ready, ready]))
+            stack.enter_context(patch("os.read", side_effect=[b"\x1b", b"[", b"B"]))
+
+            self.assertTrue(enter_key_mode())
+            self.assertTrue(key_mode_active())
+            self.assertEqual(setcbreak.call_count, 1)
+            self.assertEqual(read_key(timeout_ms=200), "DOWN")
+            self.assertEqual(setraw.call_count, 0)
+            self.assertEqual(tcgetattr.call_count, 1)
+
+            with suspend_key_mode():
+                self.assertFalse(key_mode_active())
+                self.assertEqual(setcbreak.call_count, 1)
+                self.assertEqual(tcsetattr.call_count, 1)
+
+            self.assertTrue(key_mode_active())
+            self.assertEqual(setcbreak.call_count, 2)
+            exit_key_mode()
+            self.assertFalse(key_mode_active())
+            self.assertEqual(tcsetattr.call_count, 2)
+
+    def test_suspend_key_mode_is_noop_when_not_held(self) -> None:
+        with suspend_key_mode():
+            self.assertFalse(key_mode_active())
+        self.assertFalse(key_mode_active())
+
+    def test_enter_key_mode_fails_without_tty_stdin(self) -> None:
+        fake_stdin = SimpleNamespace(fileno=Mock(side_effect=OSError))
+        with patch("codex_session_toolkit.tui.terminal_io.sys.stdin", fake_stdin):
+            self.assertFalse(enter_key_mode())
+        self.assertFalse(key_mode_active())
+
+
+class KeyPollerTests(unittest.TestCase):
+    def test_wait_key_distinguishes_idle_timeout_resize_and_piped_fallback(self) -> None:
+        read_key_mock = Mock(side_effect=[None, "x", None])
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal.term_width", side_effect=[100, 100, 60, 60]))
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal.term_height", return_value=30))
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal._stdin_is_interactive", side_effect=[True, False]))
+            input_mock = stack.enter_context(patch("builtins.input", return_value="a"))
+            poller = KeyPoller(read_key_mock)
+
+            self.assertIsNone(poller.wait_key(fallback_prompt="命令："))
+            self.assertIsNone(poller.wait_key(fallback_prompt="命令："))
+            self.assertEqual(poller.wait_key(fallback_prompt="命令："), "a")
+
+        read_key_mock.assert_has_calls([call(timeout_ms=200), call(timeout_ms=200), call(timeout_ms=200)])
+        input_mock.assert_called_once_with("命令：")
+
+    def test_wait_key_defaults_to_module_read_key(self) -> None:
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal.term_width", return_value=100))
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal.term_height", return_value=30))
+            stack.enter_context(patch("codex_session_toolkit.tui.terminal._stdin_is_interactive", return_value=True))
+            read_key_mock = stack.enter_context(
+                patch("codex_session_toolkit.tui.terminal.read_key", return_value="DOWN")
+            )
+            poller = KeyPoller()
+            self.assertEqual(poller.wait_key(fallback_prompt="命令："), "DOWN")
+
+        read_key_mock.assert_called_once_with(timeout_ms=200)
 
 
 if __name__ == "__main__":

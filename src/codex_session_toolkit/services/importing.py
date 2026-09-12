@@ -13,6 +13,7 @@ from typing import Optional
 from ..errors import ToolkitError
 from ..models import BatchImportResult, ImportResult, OperationWarning
 from ..paths import CodexPaths
+from ..services.agent_session_transfer import import_agent_session_bundle
 from ..services.import_planning import build_batch_import_plan, build_selected_import_plan
 from ..services.provider import detect_provider
 from ..stores.bundle_repository import (
@@ -79,6 +80,8 @@ def import_session(
         raise ToolkitError(f"Missing manifest: {manifest_file}")
 
     manifest = load_manifest(manifest_file)
+    if manifest.get("AGENT") and manifest["AGENT"] != "codex":
+        return import_agent_session_bundle(paths, bundle_dir, manifest)
     session_id = validate_session_id(manifest["SESSION_ID"])
     current_rollout_id = validate_session_id(manifest.get("ROLLOUT_ID", "") or session_id)
     relative_path = validate_relative_path(manifest["RELATIVE_PATH"], current_rollout_id)

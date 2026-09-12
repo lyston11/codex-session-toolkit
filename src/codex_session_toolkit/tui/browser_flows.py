@@ -20,7 +20,7 @@ from .navigation_state import (
     cycle_option_key,
     selection_window,
 )
-from .terminal import Ansi, align_line, app_logo_lines, ellipsize_middle, glyphs, render_box, style_text
+from .terminal import Ansi, KeyPoller, align_line, app_logo_lines, ellipsize_middle, glyphs, hold_key_mode, render_box, style_text
 from .terminal_io import read_key
 
 if TYPE_CHECKING:
@@ -77,6 +77,7 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
     pointer = glyphs().get("pointer", ">")
     entries: list["SessionSummary"] = []
     needs_reload = True
+    poller = KeyPoller(read_key)
 
     while True:
         project_label = project_label_from_path(project_path) or "root"
@@ -152,10 +153,9 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
             center=center,
         )
 
-        key = read_key()
+        key = poller.wait_key(fallback_prompt="命令 [Enter/空格/e/a/\\/d/p/q]：")
         if key is None:
-            raw = input("命令 [Enter/空格/e/a/\\/d/p/q]：").strip()
-            key = raw if raw else "ENTER"
+            continue
 
         if key == " " and entries:
             _toggle_selected_session(selected_session_ids, entries[selected_index])
@@ -218,6 +218,22 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
             continue
 
 
+SESSION_AGENT_OPTIONS: list[tuple[str, str]] = [
+    ("codex", "Codex"),
+    ("claude", "Claude Code"),
+    ("pi", "Pi"),
+    ("zcode", "ZCode"),
+    ("", "全部 Agent"),
+]
+
+
+def _session_agent_label(agent: str) -> str:
+    for key, label in SESSION_AGENT_OPTIONS:
+        if key == agent:
+            return label
+    return agent or "全部 Agent"
+
+
 def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["SessionSummary"]:
     filter_text = ""
     selected_index = 0
@@ -225,11 +241,13 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
     pointer = glyphs().get("pointer", ">")
     entries: list["SessionSummary"] = []
     needs_reload = True
+    agent_filter = "codex"
+    poller = KeyPoller(read_key)
 
     while True:
         if needs_reload:
             try:
-                entries = get_session_summaries(app.paths, pattern=filter_text, limit=200)
+                entries = get_session_summaries(app.paths, pattern=filter_text, limit=200, agent=agent_filter)
             except ToolkitError as exc:
                 app._show_detail_panel("读取会话失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
                 return None
@@ -239,31 +257,36 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
         subtitle = (
-            "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · e 导出选中/当前 · a 选中全部 · q 返回"
+            "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · g 切换 Agent · e 导出选中/当前 · a 选中全部 · q 返回"
             if mode == "view"
-            else "↑/↓ 选择 · Enter 确认 · / 搜索 · d 查看详情 · q 返回"
+            else "↑/↓ 选择 · Enter 确认 · / 搜索 · g 切换 Agent · d 查看详情 · q 返回"
         )
         title = "浏览并导出会话" if mode == "view" else "选择要导出的会话"
 
         info_lines = [
             f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
             f"{style_text('匹配数量', Ansi.DIM)} : {len(entries)}",
+            f"{style_text('Agent', Ansi.DIM)}   : {_session_agent_label(agent_filter)}",
             f"{style_text('已勾选', Ansi.DIM)}   : {len(selected_session_ids)}",
             f"{style_text('模式', Ansi.DIM)}   : {'浏览 / 直接操作' if mode == 'view' else '选择后导出'}",
         ]
 
         list_lines: list[str] = []
         if not entries:
-            list_lines.append("没有匹配会话。按 / 修改搜索词，或按 q 返回。")
+            list_lines.append("没有匹配会话。按 / 修改搜索词，按 g 切换 Agent，或按 q 返回。")
         else:
             start, end = selection_window(len(entries), selected_index, 10)
             for idx in range(start, end):
                 summary = entries[idx]
                 preview = summary.thread_name or summary.preview or summary.path.name
                 marker = "[x]" if summary.session_id in selected_session_ids else "[ ]"
+                metadata = [] if agent_filter else [_session_agent_label(summary.agent)]
+                if summary.agent == "codex":
+                    metadata.append(f"{summary.kind}/{summary.scope}")
+                metadata.append(preview)
                 line = (
                     f"{pointer if idx == selected_index else ' '} {marker if mode == 'view' else ''} "
-                    f"{summary.session_id} | {summary.kind}/{summary.scope} | {preview}"
+                    f"{summary.session_id} | {' | '.join(metadata)}"
                 )
                 if idx == selected_index:
                     list_lines.append(style_text(line, Ansi.BOLD, Ansi.CYAN))
@@ -293,11 +316,12 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
             center=center,
         )
 
-        key = read_key()
+        raw_prompt = (
+            "命令 [Enter/空格/g/e/a/\\/d/q]：" if mode == "view" else "命令 [Enter/g/\\/d/q]："
+        )
+        key = poller.wait_key(fallback_prompt=raw_prompt)
         if key is None:
-            raw_prompt = "命令 [Enter/空格/e/a/\\/d/q]：" if mode == "view" else "命令 [Enter/\\/d/q]："
-            raw = input(raw_prompt).strip()
-            key = raw if raw else "ENTER"
+            continue
 
         if key == " " and mode == "view" and entries:
             _toggle_selected_session(selected_session_ids, entries[selected_index])
@@ -341,13 +365,29 @@ def open_session_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Sessio
             selected_session_ids.clear()
             needs_reload = True
             continue
+        if key_str == "g":
+            agent_filter = cycle_option_key(SESSION_AGENT_OPTIONS, agent_filter)
+            selected_index = 0
+            selected_session_ids.clear()
+            needs_reload = True
+            continue
         if key_str == "e" and entries and mode == "view":
             selected_entries = _selected_or_current_sessions(entries, selected_index, selected_session_ids)
-            _run_selected_session_export(app, selected_entries)
+            agent_groups = _group_sessions_by_agent(selected_entries)
+            if len(agent_groups) > 1:
+                app._show_detail_panel(
+                    "导出会话",
+                    ["选中的会话包含多个 Agent，请按 g 切换到单一 Agent 后分别导出。"],
+                    border_codes=(Ansi.DIM, Ansi.YELLOW),
+                )
+                continue
+            _run_selected_session_export(app, selected_entries, agent=selected_entries[0].agent if selected_entries else "codex")
             selected_session_ids.clear()
             continue
         if key_str == "a" and mode == "view":
-            all_entries = _all_session_entries_for_current_filter(app, filter_text=filter_text)
+            all_entries = _all_session_entries_for_current_filter(
+                app, filter_text=filter_text, agent=agent_filter
+            )
             _select_matching_sessions(app, selected_session_ids, all_entries, empty_title="会话选择")
             if all_entries:
                 entries = all_entries
@@ -381,6 +421,7 @@ def _all_session_entries_for_current_filter(
     *,
     filter_text: str,
     archived_only: bool = False,
+    agent: str = "codex",
 ) -> list["SessionSummary"]:
     try:
         return get_session_summaries(
@@ -388,6 +429,7 @@ def _all_session_entries_for_current_filter(
             pattern=filter_text,
             limit=None,
             archived_only=archived_only,
+            agent=agent,
         )
     except ToolkitError as exc:
         app._show_detail_panel("读取会话失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
@@ -430,7 +472,19 @@ def _select_matching_sessions(
         selected_session_ids.add(entry.session_id)
 
 
-def _run_selected_session_export(app: "ToolkitTuiApp", summaries: list["SessionSummary"]) -> None:
+def _group_sessions_by_agent(summaries: list["SessionSummary"]) -> dict[str, list["SessionSummary"]]:
+    groups: dict[str, list["SessionSummary"]] = {}
+    for summary in summaries:
+        groups.setdefault(summary.agent or "codex", []).append(summary)
+    return groups
+
+
+def _run_selected_session_export(
+    app: "ToolkitTuiApp",
+    summaries: list["SessionSummary"],
+    *,
+    agent: str = "codex",
+) -> None:
     if not summaries:
         app._show_detail_panel(
             "导出会话",
@@ -440,12 +494,23 @@ def _run_selected_session_export(app: "ToolkitTuiApp", summaries: list["SessionS
         return
     session_ids = [summary.session_id for summary in summaries]
     count = len(session_ids)
-    cli_args = ["export", *session_ids]
-    action_name = (
-        f"导出会话 {session_ids[0]} 为 Bundle"
-        if count == 1
-        else f"导出 {count} 个会话为 Bundle"
-    )
+    cli_args = ["export"]
+    if agent != "codex":
+        cli_args.extend(["--agent", agent])
+    cli_args.extend(session_ids)
+    if agent == "codex":
+        action_name = (
+            f"导出会话 {session_ids[0]} 为 Bundle"
+            if count == 1
+            else f"导出 {count} 个会话为 Bundle"
+        )
+    else:
+        agent_label = _session_agent_label(agent)
+        action_name = (
+            f"导出 {agent_label} 会话 {session_ids[0]} 为 Bundle"
+            if count == 1
+            else f"导出 {agent_label} {count} 个会话为 Bundle"
+        )
     app._run_action(
         action_name,
         cli_args,
@@ -462,6 +527,7 @@ def open_archived_session_browser(app: "ToolkitTuiApp") -> None:
     pointer = glyphs().get("pointer", ">")
     entries: list["SessionSummary"] = []
     needs_reload = True
+    poller = KeyPoller(read_key)
 
     while True:
         if needs_reload:
@@ -532,10 +598,9 @@ def open_archived_session_browser(app: "ToolkitTuiApp") -> None:
             center=center,
         )
 
-        key = read_key()
+        key = poller.wait_key(fallback_prompt="命令 [Enter/空格/\\/x/a/d/q]：")
         if key is None:
-            raw = input("命令 [Enter/空格/\\/x/a/d/q]：").strip()
-            key = raw if raw else "ENTER"
+            continue
 
         if key == " " and entries:
             selected = entries[selected_index]
@@ -633,6 +698,7 @@ def open_migrated_original_session_browser(app: "ToolkitTuiApp") -> None:
     pointer = glyphs().get("pointer", ">")
     entries: list["MigratedOriginalSessionSummary"] = []
     needs_reload = True
+    poller = KeyPoller(read_key)
 
     while True:
         if needs_reload:
@@ -696,10 +762,9 @@ def open_migrated_original_session_browser(app: "ToolkitTuiApp") -> None:
             center=center,
         )
 
-        key = read_key()
+        key = poller.wait_key(fallback_prompt="命令 [Enter/空格/\\/x/a/d/q]：")
         if key is None:
-            raw = input("命令 [Enter/空格/\\/x/a/d/q]：").strip()
-            key = raw if raw else "ENTER"
+            continue
 
         if key == " " and entries:
             selected = entries[selected_index]
@@ -853,6 +918,7 @@ def open_session_backup_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional[
     pointer = glyphs().get("pointer", ">")
     entries: list["SessionBackupSummary"] = []
     needs_reload = True
+    poller = KeyPoller(read_key)
 
     while True:
         if needs_reload:
@@ -910,11 +976,10 @@ def open_session_backup_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional[
             center=center,
         )
 
-        key = read_key()
+        raw_prompt = "命令 [Enter/\\/r/x/d/q]：" if mode == "view" else "命令 [Enter/\\/d/q]："
+        key = poller.wait_key(fallback_prompt=raw_prompt)
         if key is None:
-            raw_prompt = "命令 [Enter/\\/r/x/d/q]：" if mode == "view" else "命令 [Enter/\\/d/q]："
-            raw = input(raw_prompt).strip()
-            key = raw if raw else "ENTER"
+            continue
 
         transition = apply_list_key(key, selected_index=selected_index, item_count=len(entries))
         selected_index = transition.selected_index
@@ -1012,6 +1077,7 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
     snapshot = None
     entries: list["BundleSummary"] = []
     needs_reload = True
+    poller = KeyPoller(read_key)
 
     while True:
         if needs_reload:
@@ -1090,17 +1156,16 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
             center=center,
         )
 
-        key = read_key()
+        raw_prompt = (
+            "命令 [Enter/空格/x/a/\\/s/m/l/d/q]："
+            if browse_mode
+            else "命令 [Enter/空格/i/a/\\/s/m/l/d/q]："
+            if import_mode
+            else "命令 [Enter/\\/s/m/l/d/q]："
+        )
+        key = poller.wait_key(fallback_prompt=raw_prompt)
         if key is None:
-            raw_prompt = (
-                "命令 [Enter/空格/x/a/\\/s/m/l/d/q]："
-                if browse_mode
-                else "命令 [Enter/空格/i/a/\\/s/m/l/d/q]："
-                if import_mode
-                else "命令 [Enter/\\/s/m/l/d/q]："
-            )
-            raw = input(raw_prompt).strip()
-            key = raw if raw else "ENTER"
+            continue
 
         if key == " " and entries and (browse_mode or import_mode):
             _toggle_selected_bundle(selected_bundle_dirs, entries[selected_index])
@@ -1505,35 +1570,45 @@ def _format_size(size_bytes: int) -> str:
     return f"{size_bytes / 1024 / 1024:.1f} MB"
 
 
+@hold_key_mode
 def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["LocalSkillSummary"]:
     filter_text = ""
     selected_index = 0
-    include_system = False
+    agent_options, agent_filter = _skill_agent_options(app)
     selected_skills: set[tuple[str, str]] = set()
     pointer = glyphs().get("pointer", ">")
+    # One scan per browser session: re-collecting (and hashing) every skill
+    # directory on each repaint tick made key presses queue behind disk work.
+    snapshot: Optional[list["LocalSkillSummary"]] = None
+    raw_prompt = (
+        "命令 [Enter/空格/\\/g/e/a/d/q]："
+        if mode == "view"
+        else "命令 [Enter/空格/\\/g/x/a/d/q]："
+        if mode == "delete"
+        else "命令 [Enter/\\/g/d/q]："
+    )
+    poller = KeyPoller(read_key)
 
     while True:
-        try:
-            entries = list_local_skills(
-                app.paths,
-                pattern=filter_text,
-                include_system=include_system,
-            )
-        except ToolkitError as exc:
-            app._show_detail_panel("读取本机 Skills 失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
-            return None
+        if snapshot is None:
+            try:
+                snapshot = list_local_skills(app.paths, deduplicate=False)
+            except ToolkitError as exc:
+                app._show_detail_panel("读取本机 Skills 失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+                return None
+        entries = _filter_skill_entries(snapshot, agent_filter, filter_text)
         visible_keys = {(entry.source_root, entry.relative_dir) for entry in entries}
         selected_skills.intersection_update(visible_keys)
 
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
         subtitle = (
-            "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · g 切换系统 Skills · e 导出选中/当前 · a 选中全部 · q 返回"
+            "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · g 切换 Agent · e 导出选中/当前 · a 选中全部 · q 返回"
             if mode == "view"
             else (
-                "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · x 删除选中/当前 · a 选中全部 · q 返回"
+                "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · g 切换 Agent · x 删除选中/当前 · a 选中全部 · q 返回"
                 if mode == "delete"
-                else "↑/↓ 选择 · Enter 确认 · / 搜索 · g 切换系统 Skills · d 查看详情 · q 返回"
+                else "↑/↓ 选择 · Enter 确认 · / 搜索 · g 切换 Agent · d 查看详情 · q 返回"
             )
         )
         title = (
@@ -1546,17 +1621,15 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
         info_lines = [
             f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
             f"{style_text('匹配数量', Ansi.DIM)} : {len(entries)}",
-            f"{style_text('显示范围', Ansi.DIM)} : {'自定义 + 系统/运行时 Skills' if include_system else '仅自定义 Skills'}",
+            f"{style_text('Agent', Ansi.DIM)}   : {_skill_agent_label(agent_options, agent_filter)}",
         ]
         if mode in {"view", "delete"}:
-            custom_count = sum(1 for entry in entries if entry.location_kind == "custom")
-            info_lines.append(f"{style_text('自定义', Ansi.DIM)}   : {custom_count}")
             info_lines.append(f"{style_text('已勾选', Ansi.DIM)}   : {len(selected_skills)}")
         info_lines.extend(app._github_sync_hint_lines())
 
         list_lines: list[str] = []
         if not entries:
-            list_lines.append("没有匹配 Skills。按 / 修改搜索词，按 g 切换显示范围，或按 q 返回。")
+            list_lines.append("没有匹配 Skills。按 / 修改搜索词，按 g 切换 Agent，或按 q 返回。")
         else:
             start, end = selection_window(len(entries), selected_index, 10)
             for idx in range(start, end):
@@ -1565,9 +1638,16 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
                 if mode in {"view", "delete"}:
                     skill_key = (skill.source_root, skill.relative_dir)
                     marker = "[x] " if skill_key in selected_skills else "[ ] "
+                source_label = _skill_root_label(skill.source_root, agent_options)
+                metadata: list[str] = []
+                if not agent_filter:
+                    metadata.append(source_label)
+                if skill.relative_dir != skill.name:
+                    metadata.append(skill.relative_dir)
+                suffix = f" | {' | '.join(metadata)}" if metadata else ""
                 line = (
                     f"{pointer if idx == selected_index else ' '} "
-                    f"{marker}{skill.name} | {skill.source_root}/{skill.location_kind} | {skill.relative_dir}"
+                    f"{marker}{skill.name}{suffix}"
                 )
                 if idx == selected_index:
                     list_lines.append(style_text(line, Ansi.BOLD, Ansi.BRIGHT_BLUE))
@@ -1592,28 +1672,12 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
             center=center,
         )
 
-        key = read_key()
+        key = poller.wait_key(fallback_prompt=raw_prompt)
         if key is None:
-            raw_prompt = (
-                "命令 [Enter/空格/\\/g/e/a/d/q]："
-                if mode == "view"
-                else "命令 [Enter/空格/\\/x/a/d/q]："
-                if mode == "delete"
-                else "命令 [Enter/\\/g/d/q]："
-            )
-            raw = input(raw_prompt).strip()
-            key = raw if raw else "ENTER"
+            continue
 
         if key == " " and mode in {"view", "delete"} and entries:
-            selected = entries[selected_index]
-            if selected.location_kind != "custom":
-                app._show_detail_panel(
-                    "Skill 选择",
-                    ["系统/运行时 Skills 不能在这里选择。"],
-                    border_codes=(Ansi.DIM, Ansi.YELLOW),
-                )
-                continue
-            _toggle_selected_skill(selected_skills, selected)
+            _toggle_selected_skill(selected_skills, entries[selected_index])
             continue
 
         detail_keys = ("d",) if mode in {"view", "delete"} else ()
@@ -1656,8 +1720,8 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
             selected_index = 0
             selected_skills.clear()
             continue
-        if key_str == "g" and mode != "delete":
-            include_system = not include_system
+        if key_str == "g":
+            agent_filter = cycle_option_key(agent_options, agent_filter)
             selected_index = 0
             selected_skills.clear()
             continue
@@ -1666,7 +1730,7 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
             if not selected_entries:
                 app._show_detail_panel(
                     "导出 Skill",
-                    ["系统/运行时 Skills 只记录元数据，不作为 standalone Skills Bundle 导出。"],
+                    ["没有可导出的自定义 Skills。"],
                     border_codes=(Ansi.DIM, Ansi.YELLOW),
                 )
                 continue
@@ -1680,25 +1744,14 @@ def open_local_skill_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["Lo
                 if (entry.source_root, entry.relative_dir) in selected_skills
             ]
             if not selected_entries:
-                selected = entries[selected_index]
-                if selected.location_kind != "custom":
-                    app._show_detail_panel(
-                        "删除 Skill",
-                        ["系统/运行时 Skills 不能在这里删除。"],
-                        border_codes=(Ansi.DIM, Ansi.YELLOW),
-                    )
-                    continue
-                selected_entries = [selected]
+                selected_entries = [entries[selected_index]]
             _confirm_and_delete_skills(app, selected_entries)
+            snapshot = None
             selected_index = 0
             selected_skills.clear()
             continue
         if key_str == "a" and mode in {"view", "delete"}:
-            all_entries = _all_local_skill_entries_for_current_filter(
-                app,
-                filter_text=filter_text,
-                include_system=include_system,
-            )
+            all_entries = _filter_skill_entries(snapshot, agent_filter, filter_text)
             _select_matching_skills(app, selected_skills, all_entries)
             if all_entries:
                 entries = all_entries
@@ -1730,21 +1783,93 @@ def _selected_or_current_skills(
     return selected_entries
 
 
-def _all_local_skill_entries_for_current_filter(
-    app: "ToolkitTuiApp",
-    *,
+def _skill_agent_options(app: "ToolkitTuiApp") -> tuple[list[tuple[str, str]], str]:
+    """Return selectable Skill roots for the ``g`` cycle plus the default key.
+
+    The shared custom pool comes first because it is the default browsing
+    scope; per-agent roots follow, and the merged "all roots" view stays
+    available as an explicit opt-in at the end.  When no shared root is
+    configured the default falls back to the merged view.  ``paths`` is
+    deliberately duck-typed here so the browser remains easy to exercise with
+    lightweight test apps and compatible legacy callers.
+    """
+    options: list[tuple[str, str]] = []
+    agent_roots: list[tuple[str, str]] = []
+    default_key = ""
+    skill_roots = getattr(app.paths, "skill_roots", None)
+    if callable(skill_roots):
+        try:
+            roots = skill_roots()
+        except (OSError, ValueError):
+            roots = ()
+        for root in roots:
+            if not getattr(root, "enabled", True):
+                continue
+            root_id = str(getattr(root, "root_id", "") or "")
+            if not root_id:
+                continue
+            label = str(getattr(root, "label", "") or root_id)
+            if getattr(root, "kind", "agent") == "shared":
+                if not default_key:
+                    default_key = root_id
+                options.append((root_id, f"自定义（{label}）"))
+            else:
+                agent_roots.append((root_id, label))
+    options.extend(agent_roots)
+    options.append(("", "全部 Agent"))
+    return options, default_key
+
+
+def _skill_agent_label(options: list[tuple[str, str]], selected: str) -> str:
+    for key, label in options:
+        if key == selected:
+            return label
+    return selected or "全部 Agent"
+
+
+def _skill_root_label(root_id: str, options: list[tuple[str, str]]) -> str:
+    """Render a root id clearly, including the shared compatibility root."""
+    if root_id == "agents":
+        return "Shared / agents"
+    for key, label in options:
+        if key == root_id:
+            return label
+    return root_id or "全部 Agent"
+
+
+def _filter_skill_entries(
+    snapshot: list["LocalSkillSummary"],
+    agent_filter: str,
     filter_text: str,
-    include_system: bool,
 ) -> list["LocalSkillSummary"]:
-    try:
-        return list_local_skills(
-            app.paths,
-            pattern=filter_text,
-            include_system=include_system,
-        )
-    except ToolkitError as exc:
-        app._show_detail_panel("读取本机 Skills 失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
-        return []
+    """Filter a cached skill snapshot the same way ``list_local_skills`` does.
+
+    The snapshot is collected once per browser session with ``deduplicate``
+    disabled, so the merged view re-applies the first-wins collapse on
+    ``relative_dir`` here (roots keep their configured order).
+    """
+    if agent_filter:
+        entries = [entry for entry in snapshot if entry.source_root == agent_filter]
+    else:
+        seen: set[str] = set()
+        entries = []
+        for entry in snapshot:
+            if entry.relative_dir in seen:
+                continue
+            seen.add(entry.relative_dir)
+            entries.append(entry)
+    if filter_text:
+        entries = [
+            entry for entry in entries
+            if filter_text in " ".join([
+                entry.name,
+                entry.source_root,
+                entry.relative_dir,
+                entry.location_kind,
+                str(entry.skill_dir),
+            ])
+        ]
+    return entries
 
 
 def _select_matching_skills(
@@ -1816,6 +1941,8 @@ def open_skill_bundle_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["S
     selected_index = 0
     selected_bundle_dirs: set[str] = set()
     pointer = glyphs().get("pointer", ">")
+    raw_prompt = "命令 [Enter/空格/\\/i/a/d/q]：" if mode == "view" else "命令 [Enter/\\/d/q]："
+    poller = KeyPoller(read_key)
 
     while True:
         try:
@@ -1881,11 +2008,9 @@ def open_skill_bundle_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["S
             center=center,
         )
 
-        key = read_key()
+        key = poller.wait_key(fallback_prompt=raw_prompt)
         if key is None:
-            raw_prompt = "命令 [Enter/空格/\\/i/a/d/q]：" if mode == "view" else "命令 [Enter/\\/d/q]："
-            raw = input(raw_prompt).strip()
-            key = raw if raw else "ENTER"
+            continue
 
         if key == " " and entries and mode == "view":
             _toggle_selected_skill_bundle(selected_bundle_dirs, entries[selected_index])

@@ -33,6 +33,7 @@ from ..presenters.reports import (
     print_skill_import_result,
     print_validation_report,
 )
+from ..services.agent_session_transfer import export_agent_sessions
 from ..services.archived_sessions import delete_archived_sessions
 from ..services.backups import delete_session_backup, list_session_backups, restore_session_backup
 from ..services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles
@@ -120,6 +121,10 @@ def _handle_delete_migrated_originals(args: argparse.Namespace, paths: CodexPath
 
 
 def _handle_export(args: argparse.Namespace, paths: CodexPaths) -> int:
+    if getattr(args, "agent", "") and args.agent != "codex":
+        for result in export_agent_sessions(paths, list(args.session_ids), agent=args.agent):
+            print_export_result(result)
+        return 0
     if args.all or len(args.session_ids) != 1 or args.dry_run:
         return print_batch_export_result(
             export_selected_sessions(
@@ -211,6 +216,7 @@ def _handle_list_skills(args: argparse.Namespace, paths: CodexPaths) -> int:
             paths,
             pattern=args.pattern,
             include_system=args.include_system,
+            source_root=args.source_root,
         )
     )
 
@@ -221,6 +227,7 @@ def _handle_export_skills(args: argparse.Namespace, paths: CodexPaths) -> int:
             paths,
             pattern=args.pattern,
             input_values=args.input_values,
+            source_root=args.source_root,
             include_system=args.include_system,
             skills_mode=args.skills_mode,
         )

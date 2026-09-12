@@ -52,6 +52,8 @@ from codex_session_toolkit.services.importing import import_desktop_all, import_
 from codex_session_toolkit.services.provider import detect_provider  # noqa: E402
 from codex_session_toolkit.services.repair import repair_desktop  # noqa: E402
 from codex_session_toolkit.services.skills_transfer import delete_local_skill, delete_local_skills, export_skills, import_skill_bundle, list_skill_bundles, list_local_skills  # noqa: E402
+from codex_session_toolkit.stores.skills import collect_local_skill_summaries  # noqa: E402
+from codex_session_toolkit.stores.agent_sessions import collect_agent_session_summaries, iter_agent_session_files  # noqa: E402
 from codex_session_toolkit.support import default_local_project_target, iso_to_epoch_ms, machine_label_to_key  # noqa: E402
 from codex_session_toolkit.stores import bundles as legacy_bundles  # noqa: E402
 from codex_session_toolkit.stores.bundle_scanner import collect_known_bundle_summaries, latest_distinct_bundle_summaries  # noqa: E402
@@ -66,6 +68,7 @@ from codex_session_toolkit.stores.desktop_state import (  # noqa: E402
 )
 from codex_session_toolkit.stores.session_files import iter_session_files, read_session_payload  # noqa: E402
 from codex_session_toolkit.stores.skills import SkillDescriptor, SkillsManifest, compute_skill_directory_hash, infer_skill_source_root, write_skills_manifest  # noqa: E402
+from codex_session_toolkit.stores.skill_roots import default_skill_roots  # noqa: E402
 from codex_session_toolkit.stores.thread_history import export_thread_history, import_thread_history  # noqa: E402
 from codex_session_toolkit.validation import load_manifest, write_manifest  # noqa: E402
 
@@ -4503,6 +4506,17 @@ class CoreWorkflowTests(unittest.TestCase):
             infer_skill_source_root(r"C:\Users\me\.codex\skills\slides\SKILL.md"),
             ("codex", "slides"),
         )
+        self.assertEqual(
+            infer_skill_source_root(r"C:\Users\me\.pi\skills\terminal\SKILL.md"),
+            ("pi", "terminal"),
+        )
+
+    def test_default_skill_roots_include_supported_agent_ecosystems(self) -> None:
+        roots = default_skill_roots(Path("/tmp/home"))
+        self.assertEqual(
+            [root.root_id for root in roots],
+            ["agents", "codex", "pi", "claude", "zcode"],
+        )
 
     def test_export_selected_sessions_supports_multiple_targets_and_all(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -5083,6 +5097,293 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertTrue(result.deleted)
             self.assertTrue((home / ".agents" / "skills" / "duplicate-delete").is_dir())
             self.assertFalse((home / ".codex" / "skills" / "duplicate-delete").exists())
+
+    def test_collect_local_skill_summaries_follows_symlinked_skill_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            real_dir = write_test_skill(home / ".codex" / "skills", "shared-demo", "real content")
+            agents_skills = home / ".agents" / "skills"
+            agents_skills.mkdir(parents=True, exist_ok=True)
+            link_dir = agents_skills / "shared-demo"
+            link_dir.symlink_to(real_dir)
+            # A symlink that is not a skill directory must stay invisible.
+            (agents_skills / "not-a-skill").symlink_to(home / ".codex" / "skills")
+
+            summaries = collect_local_skill_summaries(home)
+            self.assertEqual(
+                [(summary.source_root, summary.relative_dir) for summary in summaries],
+                [("agents", "shared-demo")],
+            )
+
+            expanded = collect_local_skill_summaries(home, deduplicate=False)
+            self.assertEqual(
+                [(summary.source_root, summary.relative_dir) for summary in expanded],
+                [("agents", "shared-demo"), ("codex", "shared-demo")],
+            )
+            self.assertTrue((home / ".agents" / "skills" / "shared-demo").is_symlink())
+
+    def test_delete_local_skill_unlinks_symlinked_shared_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            real_dir = write_test_skill(home / ".codex" / "skills", "linked-skill", "real content")
+            agents_skills = home / ".agents" / "skills"
+            agents_skills.mkdir(parents=True, exist_ok=True)
+            link_dir = agents_skills / "linked-skill"
+            link_dir.symlink_to(real_dir)
+            paths = CodexPaths(home=home)
+
+            dry_run = delete_local_skill(paths, "linked-skill", source_root="agents", dry_run=True)
+            self.assertFalse(dry_run.deleted)
+            self.assertTrue(link_dir.is_symlink())
+            self.assertTrue(real_dir.is_dir())
+
+            deleted = delete_local_skill(paths, "linked-skill", source_root="agents")
+            self.assertTrue(deleted.deleted)
+            self.assertFalse(link_dir.is_symlink())
+            self.assertFalse(link_dir.exists())
+            self.assertTrue((real_dir / "SKILL.md").read_text(encoding="utf-8") == "real content")
+
+            removed = delete_local_skill(paths, "linked-skill", source_root="codex")
+            self.assertTrue(removed.deleted)
+            self.assertFalse(real_dir.exists())
+
+    def test_collect_agent_session_summaries_parses_claude_pi_zcode_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+
+            claude_dir = home / ".claude" / "projects" / "-Users-me-project"
+            claude_dir.mkdir(parents=True)
+            (claude_dir / "aaaa1111-2222-4333-8444-555555555555.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps({"type": "mode", "sessionId": "aaaa1111-2222-4333-8444-555555555555"}),
+                        json.dumps({
+                            "type": "user",
+                            "sessionId": "aaaa1111-2222-4333-8444-555555555555",
+                            "cwd": "/tmp/project",
+                            "timestamp": "2026-09-01T12:30:00.116Z",
+                            "message": {"role": "user", "content": "帮我看看这个会话"},
+                        }),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            pi_dir = home / ".pi" / "agent" / "sessions" / "--tmp-project"
+            pi_dir.mkdir(parents=True)
+            (pi_dir / "2026-09-02T08-00-00-000Z_bbbb2222-3333-4444-8555-666666666666.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps({
+                            "type": "session",
+                            "version": 3,
+                            "id": "bbbb2222-3333-4444-8555-666666666666",
+                            "timestamp": "2026-09-02T08:00:00.000Z",
+                            "cwd": "/tmp/project",
+                        }),
+                        json.dumps({
+                            "type": "message",
+                            "timestamp": "2026-09-02T08:00:05.000Z",
+                            "message": {"role": "user", "content": [{"type": "text", "text": "pi 的第一句话"}]},
+                        }),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            zcode_dir = home / ".zcode" / "cli" / "rollout"
+            zcode_dir.mkdir(parents=True)
+            (zcode_dir / "model-io-sess_cccc3333-4444-5555-8666-777777777777.jsonl").write_text(
+                json.dumps({"completedAt": "2026-09-03T09:00:00.000Z", "huge": "x" * 100}) + "\n",
+                encoding="utf-8",
+            )
+
+            claude = collect_agent_session_summaries(home, agents=("claude",))
+            self.assertEqual(len(claude), 1)
+            self.assertEqual(claude[0].session_id, "aaaa1111-2222-4333-8444-555555555555")
+            self.assertEqual(claude[0].cwd, "/tmp/project")
+            self.assertEqual(claude[0].preview, "帮我看看这个会话")
+            self.assertEqual(claude[0].agent, "claude")
+
+            pi = collect_agent_session_summaries(home, agents=("pi",))
+            self.assertEqual(len(pi), 1)
+            self.assertEqual(pi[0].session_id, "bbbb2222-3333-4444-8555-666666666666")
+            self.assertEqual(pi[0].cwd, "/tmp/project")
+            self.assertEqual(pi[0].preview, "pi 的第一句话")
+
+            zcode = collect_agent_session_summaries(home, agents=("zcode",))
+            self.assertEqual(len(zcode), 1)
+            self.assertEqual(zcode[0].session_id, "sess_cccc3333-4444-5555-8666-777777777777")
+            self.assertIn("会话开始于", zcode[0].preview)
+
+            merged = collect_agent_session_summaries(home)
+            self.assertEqual([summary.agent for summary in merged], ["claude", "pi", "zcode"])
+
+            filtered = collect_agent_session_summaries(home, pattern="pi 的第一句话")
+            self.assertEqual([summary.agent for summary in filtered], ["pi"])
+
+            limited = collect_agent_session_summaries(home, limit=2)
+            self.assertEqual(len(limited), 2)
+
+    def test_iter_agent_session_files_rejects_unknown_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            self.assertEqual(iter_agent_session_files(home, "claude"), [])
+            with self.assertRaises(ValueError):
+                iter_agent_session_files(home, "codex")
+
+    def test_get_session_summaries_supports_agent_filter(self) -> None:
+        from codex_session_toolkit.paths import CodexPaths
+        from codex_session_toolkit.services.browse import get_session_summaries
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            claude_dir = home / ".claude" / "projects" / "-tmp"
+            claude_dir.mkdir(parents=True)
+            (claude_dir / "dddd4444-5555-4666-8777-888888888888.jsonl").write_text(
+                json.dumps({"type": "user", "cwd": "/tmp/x", "message": {"role": "user", "content": "hello"}}) + "\n",
+                encoding="utf-8",
+            )
+            codex_id = "eeee5555-6666-4777-8888-999999999999"
+            codex_file = home / ".codex" / "sessions" / "2026" / "09" / "04" / f"rollout-2026-09-04T10-00-00-{codex_id}.jsonl"
+            codex_file.parent.mkdir(parents=True)
+            codex_file.write_text(
+                json.dumps({
+                    "timestamp": "2026-09-04T10:00:00Z",
+                    "type": "session_meta",
+                    "payload": {"id": codex_id, "model_provider": "test", "source": "cli", "cwd": "/tmp/x"},
+                }) + "\n",
+                encoding="utf-8",
+            )
+            paths = CodexPaths(home=home)
+
+            claude_rows = get_session_summaries(paths, agent="claude")
+            self.assertEqual([row.agent for row in claude_rows], ["claude"])
+
+            merged = get_session_summaries(paths, agent="")
+            self.assertEqual({row.agent for row in merged}, {"codex", "claude"})
+
+            codex_rows = get_session_summaries(paths, agent="codex")
+            self.assertTrue(all(row.agent == "codex" for row in codex_rows))
+
+            from codex_session_toolkit.errors import ToolkitError as _ToolkitError
+            with self.assertRaises(_ToolkitError):
+                get_session_summaries(paths, agent="unknown")
+
+    def test_agent_session_bundle_export_import_roundtrip(self) -> None:
+        from codex_session_toolkit.paths import CodexPaths
+        from codex_session_toolkit.services.agent_session_transfer import export_agent_sessions
+        from codex_session_toolkit.services.importing import import_session
+        from codex_session_toolkit.stores.bundle_scanner import collect_known_bundle_summaries
+        from codex_session_toolkit.stores.bundle_validation import validate_bundle_directory
+        from codex_session_toolkit.validation import load_manifest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            src_home = Path(tmpdir) / "src_home"
+            claude_dir = src_home / ".claude" / "projects" / "-tmp-proj"
+            claude_dir.mkdir(parents=True)
+            claude_file = claude_dir / "aaaa1111-2222-4333-8444-555555555555.jsonl"
+            claude_file.write_text(
+                json.dumps({"type": "user", "cwd": "/tmp/proj", "message": {"role": "user", "content": "claude 内容"}}) + "\n",
+                encoding="utf-8",
+            )
+            dst_home = Path(tmpdir) / "dst_home"
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                src_paths = CodexPaths(home=src_home)
+                results = export_agent_sessions(src_paths, ["aaaa1111-2222-4333-8444-555555555555"], agent="claude")
+            bundle_dir = results[0].bundle_dir
+            self.assertTrue((bundle_dir / ".claude" / "projects" / "-tmp-proj" / claude_file.name).is_file())
+            manifest = load_manifest(bundle_dir / "manifest.env")
+            self.assertEqual(manifest["AGENT"], "claude")
+            self.assertEqual(manifest["RELATIVE_PATH"], f".claude/projects/-tmp-proj/{claude_file.name}")
+
+            validated = validate_bundle_directory(bundle_dir)
+            self.assertTrue(validated.is_valid, validated.message)
+
+            with pushd(workspace):
+                summaries = collect_known_bundle_summaries(CodexPaths(home=src_home))
+            self.assertEqual([summary.agent for summary in summaries], ["claude"])
+
+            with pushd(workspace):
+                dst_paths = CodexPaths(home=dst_home)
+                import_result = import_session(dst_paths, str(bundle_dir))
+            restored = dst_home / ".claude" / "projects" / "-tmp-proj" / claude_file.name
+            self.assertTrue(restored.is_file())
+            self.assertEqual(restored.read_text(encoding="utf-8"), claude_file.read_text(encoding="utf-8"))
+            self.assertEqual(import_result.rollout_action, "restored")
+
+            # Re-import: identical content counts as already present.
+            with pushd(workspace):
+                again = import_session(dst_paths, str(bundle_dir))
+            self.assertEqual(again.rollout_action, "already_present")
+
+            # Different content conflicts and is skipped by default.
+            original_content = claude_file.read_text(encoding="utf-8")
+            claude_file.write_text("changed\n", encoding="utf-8")
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                reexport = export_agent_sessions(src_paths, ["aaaa1111-2222-4333-8444-555555555555"], agent="claude")
+            with pushd(workspace):
+                conflict = import_session(dst_paths, str(reexport[0].bundle_dir))
+            self.assertEqual(conflict.rollout_action, "conflict_skipped")
+            self.assertTrue(conflict.warnings)
+            self.assertEqual(restored.read_text(encoding="utf-8"), original_content)
+
+            # ZCode ids carry an underscore prefix; they must round-trip too.
+            zcode_dir = src_home / ".zcode" / "cli" / "rollout"
+            zcode_dir.mkdir(parents=True, exist_ok=True)
+            zcode_file = zcode_dir / "model-io-sess_ffff6666-7777-4888-8999-000000000000.jsonl"
+            zcode_file.write_text(json.dumps({"completedAt": "2026-09-04T09:00:00.000Z"}) + "\n", encoding="utf-8")
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                zresult = export_agent_sessions(src_paths, ["sess_ffff6666-7777-4888-8999-000000000000"], agent="zcode")[0]
+            with pushd(workspace):
+                zimport = import_session(dst_paths, str(zresult.bundle_dir))
+            self.assertEqual(zimport.rollout_action, "restored")
+            self.assertTrue((dst_home / ".zcode" / "cli" / "rollout" / zcode_file.name).is_file())
+
+    def test_standalone_skills_roundtrip_across_agent_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            src_home = Path(tmpdir) / "src_home"
+            dst_home = Path(tmpdir) / "dst_home"
+            workspace.mkdir()
+            for root, name in (
+                (".pi/skills", "pi-skill"),
+                (".zcode/skills", "zcode-skill"),
+                (".claude/skills", "claude-skill"),
+            ):
+                skill_dir = src_home / root / name
+                skill_dir.mkdir(parents=True)
+                (skill_dir / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8")
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                export_result = export_skills(CodexPaths(home=src_home))
+            bundled = sorted(
+                str(path.relative_to(export_result.bundle_dir))
+                for path in export_result.bundle_dir.rglob("SKILL.md")
+            )
+            self.assertEqual(
+                bundled,
+                [
+                    "skills/claude/claude-skill/SKILL.md",
+                    "skills/pi/pi-skill/SKILL.md",
+                    "skills/zcode/zcode-skill/SKILL.md",
+                ],
+            )
+
+            with pushd(workspace):
+                import_result = import_skill_bundle(CodexPaths(home=dst_home), str(export_result.bundle_dir))
+            self.assertEqual(import_result.restored_count, 3)
+            for root, name in (
+                (".pi/skills", "pi-skill"),
+                (".zcode/skills", "zcode-skill"),
+                (".claude/skills", "claude-skill"),
+            ):
+                self.assertTrue((dst_home / root / name / "SKILL.md").is_file(), f"{root}/{name} not restored")
 
     def test_validate_bundle_with_skills_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

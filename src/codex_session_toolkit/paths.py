@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from .stores.skill_roots import SkillRoot, parse_skill_roots_config, root_by_id
+
 try:
     import tomllib
 except ImportError:  # pragma: no cover - exercised through the fallback parser tests
@@ -84,12 +86,36 @@ class CodexPaths:
         return self.local_bundle_workspace
 
     @property
+    def skill_roots_config_file(self) -> Path:
+        return self.local_bundle_workspace / ".toolkit" / "config.toml"
+
+    @property
+    def user_skill_roots_config_file(self) -> Path:
+        return self.home / ".config" / "codex-session-toolkit" / "config.toml"
+
+    def skill_roots(self) -> tuple[SkillRoot, ...]:
+        config = self.skill_roots_config_file
+        if not config.is_file():
+            config = self.user_skill_roots_config_file
+        return parse_skill_roots_config(
+            config,
+            home=self.home,
+            bundle_workspace=self.local_bundle_workspace,
+        )
+
+    def skill_root_dir(self, root_id: str) -> Path:
+        root = root_by_id(self.skill_roots(), root_id)
+        if root is None:
+            raise ValueError(f"Unsupported Skill root: {root_id}")
+        return root.resolve(self.home)
+
+    @property
     def agents_skills_dir(self) -> Path:
-        return self.home / ".agents" / "skills"
+        return self.skill_root_dir("agents")
 
     @property
     def codex_skills_dir(self) -> Path:
-        return self.code_dir / "skills"
+        return self.skill_root_dir("codex")
 
     @property
     def sqlite_dir(self) -> Path:

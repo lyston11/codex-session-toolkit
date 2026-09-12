@@ -16,7 +16,7 @@ from .bundle_state import (
     build_project_folder_options,
 )
 from .navigation_state import apply_picker_key, clamp_selected_index, selection_window
-from .terminal import Ansi, ellipsize_middle, glyphs, render_box, style_text
+from .terminal import Ansi, KeyPoller, ellipsize_middle, glyphs, render_box, style_text
 from .terminal_io import read_key
 
 if TYPE_CHECKING:
@@ -24,8 +24,10 @@ if TYPE_CHECKING:
 
 
 def bundle_detail_lines(app: "ToolkitTuiApp", bundle: BundleSummary) -> List[str]:
+    agent_label = bundle.agent if bundle.agent != "codex" else "Codex"
     lines = [
         f"{style_text('Session ID', Ansi.DIM)} : {bundle.session_id}",
+        f"{style_text('Agent', Ansi.DIM)}     : {agent_label}",
         f"{style_text('来源位置', Ansi.DIM)}  : {_bundle_source_location_label(app, bundle)}",
         f"{style_text('来源机器', Ansi.DIM)}  : {bundle.source_machine or '（旧布局）'}",
         f"{style_text('Bundle 类别', Ansi.DIM)} : {bundle.export_group_label or '（未识别）'}",
@@ -213,6 +215,7 @@ def select_project_bundle_import_scope(
 
     pointer = glyphs().get("pointer", ">")
     project_selected_index = 0
+    poller = KeyPoller(read_key)
 
     while True:
         project_options = app._bundle_project_folder_options(selected_category.entries)
@@ -269,10 +272,9 @@ def select_project_bundle_import_scope(
         for line in render_box(project_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.GREEN)):
             print(line)
 
-        key = read_key()
+        key = poller.wait_key(fallback_prompt="命令 [Enter/d/q]：")
         if key is None:
-            raw = input("命令 [Enter/d/q]：").strip()
-            key = raw if raw else "ENTER"
+            continue
 
         transition = apply_picker_key(
             key,
@@ -337,6 +339,7 @@ def select_batch_bundle_import_scope(app: "ToolkitTuiApp"):
 
     pointer = glyphs().get("pointer", ">")
     machine_selected_index = 0
+    poller = KeyPoller(read_key)
 
     while True:
         try:
@@ -379,10 +382,9 @@ def select_batch_bundle_import_scope(app: "ToolkitTuiApp"):
         for line in render_box(machine_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.GREEN)):
             print(line)
 
-        key = read_key()
+        key = poller.wait_key(fallback_prompt="命令 [Enter/d/q]：")
         if key is None:
-            raw = input("命令 [Enter/d/q]：").strip()
-            key = raw if raw else "ENTER"
+            continue
 
         transition = apply_picker_key(
             key,
@@ -449,10 +451,9 @@ def select_batch_bundle_import_scope(app: "ToolkitTuiApp"):
             for line in render_box(category_lines, width=box_width, border_codes=(Ansi.DIM, Ansi.GREEN)):
                 print(line)
 
-            key = read_key()
+            key = poller.wait_key(fallback_prompt="命令 [Enter/d/q]：")
             if key is None:
-                raw = input("命令 [Enter/d/q]：").strip()
-                key = raw if raw else "ENTER"
+                continue
 
             transition = apply_picker_key(
                 key,

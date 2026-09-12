@@ -58,7 +58,7 @@ from .terminal import (
     term_width,
     tui_width,
 )
-from .terminal_io import read_key
+from .terminal_io import read_key, suspend_key_mode as _suspend_key_mode
 from ..support import normalize_project_path
 from .ui_panels import render_home as _render_home_flow
 from .ui_panels import render_section_page as _render_section_page_flow
@@ -200,8 +200,10 @@ class ToolkitTuiApp:
         return _github_sync_hint_lines_flow(self, force=force)
 
     def _session_detail_lines(self, summary: SessionSummary) -> List[str]:
+        agent_label = summary.agent if summary.agent != "codex" else "Codex"
         return [
             f"{style_text('Session ID', Ansi.DIM)} : {summary.session_id}",
+            f"{style_text('Agent', Ansi.DIM)}     : {agent_label}",
             f"{style_text('类型', Ansi.DIM)}      : {summary.kind}",
             f"{style_text('范围', Ansi.DIM)}      : {summary.scope}",
             f"{style_text('会话名称', Ansi.DIM)}  : {summary.thread_name or '（无，使用预览兜底）'}",
@@ -253,7 +255,6 @@ class ToolkitTuiApp:
         return [
             f"{style_text('Skill', Ansi.DIM)}      : {skill.name}",
             f"{style_text('来源根', Ansi.DIM)}     : {skill.source_root}",
-            f"{style_text('类型', Ansi.DIM)}       : {skill.location_kind}",
             f"{style_text('相对目录', Ansi.DIM)}   : {skill.relative_dir}",
             f"{style_text('内容 Hash', Ansi.DIM)}  : {skill.content_hash or '-'}",
             f"{style_text('路径', Ansi.DIM)}       : {skill.skill_dir}",
@@ -324,14 +325,15 @@ class ToolkitTuiApp:
         default: str = "",
         allow_empty: bool = True,
     ) -> Optional[str]:
-        return _prompt_value_flow(
-            self,
-            title=title,
-            prompt_label=prompt_label,
-            help_lines=help_lines,
-            default=default,
-            allow_empty=allow_empty,
-        )
+        with _suspend_key_mode():
+            return _prompt_value_flow(
+                self,
+                title=title,
+                prompt_label=prompt_label,
+                help_lines=help_lines,
+                default=default,
+                allow_empty=allow_empty,
+            )
 
     def _confirm_toggle(
         self,
@@ -342,14 +344,15 @@ class ToolkitTuiApp:
         no_label: str,
         default_yes: bool = False,
     ) -> bool:
-        return _confirm_toggle_flow(
-            self,
-            title=title,
-            question=question,
-            yes_label=yes_label,
-            no_label=no_label,
-            default_yes=default_yes,
-        )
+        with _suspend_key_mode():
+            return _confirm_toggle_flow(
+                self,
+                title=title,
+                question=question,
+                yes_label=yes_label,
+                no_label=no_label,
+                default_yes=default_yes,
+            )
 
     def _render_prompt_choice(
         self,
@@ -413,12 +416,13 @@ class ToolkitTuiApp:
         *,
         border_codes: Optional[Tuple[str, ...]] = None,
     ) -> None:
-        return _show_detail_panel_flow(
-            self,
-            title,
-            lines,
-            border_codes=border_codes,
-        )
+        with _suspend_key_mode():
+            return _show_detail_panel_flow(
+                self,
+                title,
+                lines,
+                border_codes=border_codes,
+            )
 
     def _open_session_browser(self, *, mode: str) -> Optional[SessionSummary]:
         return _open_session_browser_flow(self, mode=mode)
@@ -470,16 +474,17 @@ class ToolkitTuiApp:
         preview_cmd: Optional[str] = None,
         use_progress: bool = False,
     ) -> None:
-        return _run_action_flow(
-            self,
-            action_name,
-            cli_args,
-            dry_run=dry_run,
-            runner=runner,
-            danger=danger,
-            preview_cmd=preview_cmd,
-            use_progress=use_progress,
-        )
+        with _suspend_key_mode():
+            return _run_action_flow(
+                self,
+                action_name,
+                cli_args,
+                dry_run=dry_run,
+                runner=runner,
+                danger=danger,
+                preview_cmd=preview_cmd,
+                use_progress=use_progress,
+            )
 
     def _confirm_dangerous_action(
         self,
@@ -490,14 +495,15 @@ class ToolkitTuiApp:
         warning: str = "Clean 会删除旧版无标记副本文件。",
         impact: str = "旧版无标记 clone 文件",
     ) -> bool:
-        return _confirm_dangerous_action_flow(
-            self,
-            cli_args,
-            title=title,
-            subtitle=subtitle,
-            warning=warning,
-            impact=impact,
-        )
+        with _suspend_key_mode():
+            return _confirm_dangerous_action_flow(
+                self,
+                cli_args,
+                title=title,
+                subtitle=subtitle,
+                warning=warning,
+                impact=impact,
+            )
 
     def run(self) -> int:
         selected_section = 0

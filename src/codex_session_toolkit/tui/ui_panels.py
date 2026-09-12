@@ -44,7 +44,7 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         f"  {app.context.entry_command} --advanced-help   查看自动化/兼容 CLI 命令",
         "",
         style_text("菜单分组：", Ansi.BOLD),
-        "  Session / Browse   : 浏览并导出会话，支持单个、多选、全部和按项目导出",
+        "  Session / Browse   : 浏览并导出会话（g 可切换 Codex、Claude Code、Pi、ZCode），支持单个、多选、全部和按项目导出",
         "  Bundle / Transfer  : 浏览/删除 Bundle、校验 Bundle、导出与可选择导入（project 分类支持按项目文件夹导入）",
         "  Skills / Transfer  : 独立浏览、导出和导入 Skills Bundle",
         "  Repair / Maintenance : Provider 复制/迁移、Desktop 显示修复、备份管理和旧副本清理",
@@ -90,7 +90,7 @@ def tui_help_text(app: "ToolkitTuiApp") -> None:
         "  m                  在 Bundle 列表按来源机器筛选",
         "  l                  在 Bundle 列表切换历史范围（全部历史 / 仅最新）",
         "  a                  在支持多选的功能页选中当前筛选结果的全部匹配项",
-        "  g                  在 Skills 列表切换是否显示系统/运行时 Skills",
+        "  g                  在 Skills 列表切换 Agent（默认共享自定义，其次 Codex、Pi、Claude Code、ZCode、全部）",
         "  r                  在会话备份列表恢复当前备份",
         "  操作键语义：a=全选匹配项，e=导出，i=导入，x=删除",
     ]

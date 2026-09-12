@@ -14,7 +14,8 @@ from .support import ensure_path_within_dir, extract_iso_timestamp
 
 
 def validate_session_id(session_id: str) -> str:
-    if not re.fullmatch(r"[A-Za-z0-9-]+", session_id or ""):
+    # ZCode session ids carry a ``sess_`` prefix, so underscores are allowed.
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", session_id or ""):
         raise ToolkitError(f"Invalid session id: {session_id}")
     return session_id
 
@@ -23,6 +24,7 @@ def load_manifest(manifest_file: Path) -> Dict[str, str]:
     allowed = {
         "SESSION_ID",
         "ROLLOUT_ID",
+        "AGENT",
         "RELATIVE_PATH",
         "EXPORTED_AT",
         "UPDATED_AT",

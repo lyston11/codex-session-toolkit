@@ -29,6 +29,10 @@ def _add_bundle_source(parser: argparse.ArgumentParser, *, help_text: str) -> No
     )
 
 
+def _add_skill_root_filter(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--source-root", default="", help="Limit Skills to one configured root")
+
+
 def _add_skills_mode(parser: argparse.ArgumentParser, *, action: str) -> None:
     parser.add_argument(
         "--skills-mode",
@@ -83,6 +87,7 @@ def create_parser() -> argparse.ArgumentParser:
 
     export_parser = subparsers.add_parser("export", help=command_help("export"))
     export_parser.add_argument("session_ids", nargs="*", help="Session ids to export")
+    export_parser.add_argument("--agent", default="codex", help="Session source agent: codex (default), claude, pi, or zcode")
     export_parser.add_argument("--all", action="store_true", help="Export all local sessions")
     export_parser.add_argument("--dry-run", action="store_true", help="Preview selected sessions without exporting")
 
@@ -125,12 +130,14 @@ def create_parser() -> argparse.ArgumentParser:
 
     list_skills_parser = subparsers.add_parser("list-skills", help=command_help("list-skills"))
     _add_optional_pattern(list_skills_parser)
+    _add_skill_root_filter(list_skills_parser)
     list_skills_parser.add_argument("--include-system", action="store_true", help="Include system/runtime Skills")
 
     export_skills_parser = subparsers.add_parser("export-skills", help=command_help("export-skills"))
     export_skills_parser.add_argument("input_values", nargs="*", help="Optional Skill names, relative directories, or local Skill directories")
     export_skills_parser.add_argument("--pattern", default="", help="Optional Skill name/path filter")
     export_skills_parser.add_argument("--include-system", action="store_true", help="Include system/runtime Skills in the manifest")
+    _add_skill_root_filter(export_skills_parser)
     _add_skills_mode(export_skills_parser, action="export")
 
     list_skill_bundles_parser = subparsers.add_parser("list-skill-bundles", help=command_help("list-skill-bundles"))
@@ -146,7 +153,7 @@ def create_parser() -> argparse.ArgumentParser:
 
     delete_skill_parser = subparsers.add_parser("delete-skill", help=command_help("delete-skill"))
     delete_skill_parser.add_argument("input_values", nargs="*", help="Exact Skill names, relative directories, or local Skill directories")
-    delete_skill_parser.add_argument("--source-root", choices=["agents", "codex"], default="", help="Limit deletion to one local Skills root")
+    delete_skill_parser.add_argument("--source-root", default="", help="Limit deletion to one configured Skills root")
     delete_skill_parser.add_argument("--all", action="store_true", help="Delete all local custom Skills")
     delete_skill_parser.add_argument("--dry-run", action="store_true", help="Preview the Skill that would be deleted")
 

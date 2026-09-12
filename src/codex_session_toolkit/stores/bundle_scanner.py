@@ -151,11 +151,13 @@ def collect_bundle_summaries(
             bundled_skill_count=bundled_skill_count,
             used_skill_count=used_skill_count,
             has_thread_history=(bundle_dir / THREAD_HISTORY_FILENAME).is_file(),
+            agent=manifest.get("AGENT", "") or "codex",
         )
         if pattern:
             combined = " ".join(
                 [
                     summary.session_id,
+                    summary.agent,
                     summary.relative_path,
                     summary.thread_name,
                     summary.session_cwd,

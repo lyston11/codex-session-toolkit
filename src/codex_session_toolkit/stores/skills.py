@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..errors import ToolkitError
 from ..models import LocalSkillSummary, OperationWarning
+from .skill_roots import SkillRoot, default_skill_roots, root_by_id
 from .skills_manifest import (
     SKILLS_DIR_NAME,
     SKILLS_MANIFEST_FILENAME,
@@ -30,11 +31,8 @@ from .skills_manifest import (
 SKILL_MD_NAME = "SKILL.md"
 
 _SKILL_LINE_RE = re.compile(r"^- (\S+?):\s+(.+?)\s+\(file:\s+(.+?)\)\s*$")
-_AGENTS_MARKER = "/.agents/skills/"
-_CODEX_MARKER = "/.codex/skills/"
 _SYSTEM_PREFIX = ".system/"
 _RUNTIME_PREFIX = "codex-primary-runtime/"
-_RESTORABLE_SKILL_ROOTS = {"agents", "codex"}
 
 __all__ = [
     "SKILLS_DIR_NAME",
@@ -63,16 +61,20 @@ __all__ = [
 
 def infer_skill_source_root(skill_file_path: str) -> Tuple[str, str]:
     normalized_path = (skill_file_path or "").replace("\\", "/")
-    if _AGENTS_MARKER in normalized_path:
-        idx = normalized_path.index(_AGENTS_MARKER) + len(_AGENTS_MARKER)
+    marker_candidates = (
+        ("agents", "/.agents/skills/"),
+        ("codex", "/.codex/skills/"),
+        ("pi", "/.pi/skills/"),
+        ("claude", "/.claude/skills/"),
+        ("zcode", "/.zcode/skills/"),
+    )
+    for source_root, marker in marker_candidates:
+        if marker not in normalized_path:
+            continue
+        idx = normalized_path.index(marker) + len(marker)
         relative = normalized_path[idx:]
         relative = relative.rsplit("/", 1)[0] if "/" in relative else relative
-        return "agents", relative
-    if _CODEX_MARKER in normalized_path:
-        idx = normalized_path.index(_CODEX_MARKER) + len(_CODEX_MARKER)
-        relative = normalized_path[idx:]
-        relative = relative.rsplit("/", 1)[0] if "/" in relative else relative
-        return "codex", relative
+        return source_root, relative
     return "unknown", ""
 
 
@@ -143,21 +145,53 @@ def compute_skill_directory_hash(skill_dir: Path) -> str:
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
+def _iter_skill_files(root_dir: Path) -> list[Path]:
+    """Collect SKILL.md files under ``root_dir``, including symlinked skill dirs.
+
+    ``Path.rglob`` refuses to descend into symlinked directories, which hides
+    skills when a shared root such as ``.agents/skills`` is a symlink farm
+    pointing at per-agent roots. Real subdirectories are walked recursively;
+    a symlinked directory counts as one skill when it directly contains
+    ``SKILL.md``.
+    """
+    found: list[Path] = []
+    stack = [root_dir]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = sorted(current.iterdir(), key=lambda entry: entry.name)
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_symlink():
+                    if entry.is_dir() and (entry / SKILL_MD_NAME).is_file():
+                        found.append(entry / SKILL_MD_NAME)
+                elif entry.is_dir():
+                    stack.append(entry)
+                elif entry.name == SKILL_MD_NAME:
+                    found.append(entry)
+            except OSError:
+                continue
+    found.sort()
+    return found
+
+
 def collect_local_skill_summaries(
     target_home: Path,
     *,
     include_system: bool = False,
+    roots: Optional[tuple[SkillRoot, ...]] = None,
+    deduplicate: bool = True,
 ) -> list[LocalSkillSummary]:
     summaries: list[LocalSkillSummary] = []
-    seen_relative_dirs: set[str] = set()
-    roots = (
-        ("agents", target_home / ".agents" / "skills"),
-        ("codex", target_home / ".codex" / "skills"),
-    )
-    for source_root, root_dir in roots:
+    skill_roots = roots or default_skill_roots(target_home)
+    seen_custom: dict[str, str] = {}
+    for root in skill_roots:
+        root_dir = root.resolve(target_home)
         if not root_dir.is_dir():
             continue
-        for skill_file in sorted(root_dir.rglob(SKILL_MD_NAME)):
+        for skill_file in _iter_skill_files(root_dir):
             skill_dir = skill_file.parent
             try:
                 relative_dir = skill_dir.relative_to(root_dir).as_posix()
@@ -166,17 +200,17 @@ def collect_local_skill_summaries(
             location_kind = classify_skill_location(relative_dir)
             if location_kind != "custom" and not include_system:
                 continue
-            if location_kind == "custom" and relative_dir in seen_relative_dirs:
-                continue
-            if location_kind == "custom":
-                seen_relative_dirs.add(relative_dir)
             try:
                 content_hash = compute_skill_directory_hash(skill_dir)
             except OSError:
                 content_hash = ""
+            if location_kind == "custom" and deduplicate and relative_dir in seen_custom:
+                continue
+            if location_kind == "custom" and deduplicate:
+                seen_custom[relative_dir] = content_hash
             summaries.append(LocalSkillSummary(
                 name=skill_dir.name,
-                source_root=source_root,
+                source_root=root.root_id,
                 relative_dir=relative_dir,
                 skill_dir=skill_dir,
                 location_kind=location_kind,
@@ -207,7 +241,12 @@ def build_skills_manifest_from_local_summaries(summaries: list[LocalSkillSummary
     )
 
 
-def bundle_skills(manifest: SkillsManifest, bundle_dir: Path) -> SkillsBundleResult:
+def bundle_skills(
+    manifest: SkillsManifest,
+    bundle_dir: Path,
+    *,
+    roots: Optional[tuple[SkillRoot, ...]] = None,
+) -> SkillsBundleResult:
     updated: list[SkillDescriptor] = []
     bundled_count = 0
     warnings: list[OperationWarning] = []
@@ -216,7 +255,7 @@ def bundle_skills(manifest: SkillsManifest, bundle_dir: Path) -> SkillsBundleRes
         if skill.location_kind != "custom" or skill.bundled or not required:
             updated.append(skill)
             continue
-        if not _is_restorable_custom_skill(skill):
+        if not _is_restorable_custom_skill(skill, roots=roots):
             updated.append(skill)
             warnings.append(
                 OperationWarning(
@@ -299,13 +338,14 @@ def restore_skills(
     target_home: Path,
     *,
     skills_mode: str = "best-effort",
+    roots: Optional[tuple[SkillRoot, ...]] = None,
 ) -> SkillsRestoreOutcome:
     results: list[SkillRestoreResult] = []
     warnings: list[OperationWarning] = []
     for skill in manifest.skills:
         if not skill.bundled:
             if skill.location_kind == "custom" and _is_required_skill(skill):
-                existing_dir = _first_existing_local_skill_dir(target_home, skill)
+                existing_dir = _first_existing_local_skill_dir(target_home, skill, roots=roots)
                 if existing_dir is not None:
                     try:
                         existing_hash = compute_skill_directory_hash(existing_dir)
@@ -329,13 +369,13 @@ def restore_skills(
                     source_root=skill.source_root,
                     relative_dir=skill.relative_dir,
                     status="missing",
-                    target_path=_target_skill_dir(target_home, skill),
+                    target_path=_target_skill_dir(target_home, skill, roots=roots),
                 ))
                 if skills_mode == "strict":
                     raise ToolkitError(f"Missing custom skill: {skill.name}")
             continue
 
-        target_dir = Path(_target_skill_dir(target_home, skill))
+        target_dir = Path(_target_skill_dir(target_home, skill, roots=roots))
         source_dir = bundle_dir / skill.bundle_path
 
         invalid_source_warning = _validate_bundled_skill_source(skill, source_dir)
@@ -355,7 +395,7 @@ def restore_skills(
                 raise ToolkitError(f"Failed to restore skill {skill.name}: {exc}") from exc
             continue
 
-        existing_dirs = _existing_local_skill_dirs(target_home, skill)
+        existing_dirs = _existing_local_skill_dirs(target_home, skill, roots=roots)
         existing_hashes: list[tuple[Path, str]] = []
         existing_hash_failed = False
         for existing_dir in existing_dirs:
@@ -567,45 +607,87 @@ def _resolve_skill_source_dir(skill: SkillDescriptor) -> Optional[Path]:
     return None
 
 
-def _first_existing_local_skill_dir(target_home: Path, skill: SkillDescriptor) -> Optional[Path]:
-    for skill_dir in _candidate_local_skill_dirs(target_home, skill):
+def _first_existing_local_skill_dir(
+    target_home: Path,
+    skill: SkillDescriptor,
+    *,
+    roots: Optional[tuple[SkillRoot, ...]] = None,
+) -> Optional[Path]:
+    for skill_dir in _candidate_local_skill_dirs(target_home, skill, roots=roots):
         if skill_dir.is_dir():
             return skill_dir
     return None
 
 
-def _existing_local_skill_dirs(target_home: Path, skill: SkillDescriptor) -> list[Path]:
-    return [skill_dir for skill_dir in _candidate_local_skill_dirs(target_home, skill) if skill_dir.is_dir()]
+def _existing_local_skill_dirs(
+    target_home: Path,
+    skill: SkillDescriptor,
+    *,
+    roots: Optional[tuple[SkillRoot, ...]] = None,
+) -> list[Path]:
+    return [
+        skill_dir
+        for skill_dir in _candidate_local_skill_dirs(target_home, skill, roots=roots)
+        if skill_dir.is_dir()
+    ]
 
 
-def _candidate_local_skill_dirs(target_home: Path, skill: SkillDescriptor) -> list[Path]:
-    primary = Path(_target_skill_dir(target_home, skill))
+def _candidate_local_skill_dirs(
+    target_home: Path,
+    skill: SkillDescriptor,
+    *,
+    roots: Optional[tuple[SkillRoot, ...]] = None,
+) -> list[Path]:
+    primary = Path(_target_skill_dir(target_home, skill, roots=roots))
     candidates = [primary]
-    if skill.source_root in _RESTORABLE_SKILL_ROOTS and _is_safe_relative_posix_path(skill.relative_dir):
-        for source_root in ("agents", "codex"):
-            candidate = Path(_target_skill_dir_for_root(target_home, source_root, skill.relative_dir))
-            if candidate not in candidates:
-                candidates.append(candidate)
+    if skill.source_root in {"agents", "codex"} and _is_safe_relative_posix_path(skill.relative_dir):
+        alternate = "codex" if skill.source_root == "agents" else "agents"
+        try:
+            candidate = Path(_target_skill_dir_for_root(target_home, alternate, skill.relative_dir, roots=roots))
+        except ToolkitError:
+            candidate = None
+        if candidate is not None and candidate not in candidates:
+            candidates.append(candidate)
     return candidates
 
 
-def _target_skill_dir(target_home: Path, skill: SkillDescriptor) -> str:
-    return _target_skill_dir_for_root(target_home, skill.source_root, skill.relative_dir)
+def _target_skill_dir(
+    target_home: Path,
+    skill: SkillDescriptor,
+    *,
+    roots: Optional[tuple[SkillRoot, ...]] = None,
+) -> str:
+    return _target_skill_dir_for_root(target_home, skill.source_root, skill.relative_dir, roots=roots)
 
 
-def _target_skill_dir_for_root(target_home: Path, source_root: str, relative_dir: str) -> str:
-    if source_root == "agents":
-        return str(target_home / ".agents" / "skills" / relative_dir)
-    return str(target_home / ".codex" / "skills" / relative_dir)
+def _target_skill_dir_for_root(
+    target_home: Path,
+    source_root: str,
+    relative_dir: str,
+    *,
+    roots: Optional[tuple[SkillRoot, ...]] = None,
+) -> str:
+    if not _is_safe_relative_posix_path(relative_dir):
+        raise ToolkitError(f"Unsafe Skill relative path: {relative_dir}")
+    skill_roots = roots or default_skill_roots(target_home)
+    root = root_by_id(skill_roots, source_root)
+    if root is None:
+        raise ToolkitError(f"Unsupported Skill root: {source_root}")
+    return str(root.resolve(target_home) / relative_dir)
 
 
 def _is_required_skill(skill: SkillDescriptor) -> bool:
     return skill.used or skill.dependency_level == "required"
 
 
-def _is_restorable_custom_skill(skill: SkillDescriptor) -> bool:
+def _is_restorable_custom_skill(
+    skill: SkillDescriptor,
+    *,
+    roots: Optional[tuple[SkillRoot, ...]] = None,
+) -> bool:
+    skill_roots = roots or default_skill_roots(Path.home())
     return (
-        skill.source_root in _RESTORABLE_SKILL_ROOTS
+        root_by_id(skill_roots, skill.source_root) is not None
         and _is_safe_relative_posix_path(skill.relative_dir)
     )
 

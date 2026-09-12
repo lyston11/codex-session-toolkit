@@ -7,17 +7,21 @@ from the application workflow so the CLI/TUI shell can focus on behavior.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import shutil
 import sys
 import unicodedata
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from .terminal_io import (
     configure_text_streams as _configure_text_streams,
+    enter_key_mode as _enter_key_mode,
+    exit_key_mode as _exit_key_mode,
     is_interactive_terminal as _is_interactive_terminal,
     read_key as _read_key,
+    stdin_is_interactive as _stdin_is_interactive,
 )
 
 
@@ -778,3 +782,49 @@ def configure_text_streams() -> None:
 
 def read_key(timeout_ms: Optional[int] = None) -> Optional[str]:
     return _read_key(timeout_ms=timeout_ms)
+
+
+def hold_key_mode(flow):
+    """Run an interactive flow with the tty held in cbreak mode.
+
+    Blocking ``input()``-based sub-flows keep working because they suspend
+    the held mode via :func:`suspend_key_mode`; between reads the tty no
+    longer echoes burst input such as mouse-wheel arrow sequences.
+    """
+
+    @functools.wraps(flow)
+    def wrapper(*args, **kwargs):
+        if not _enter_key_mode():
+            return flow(*args, **kwargs)
+        try:
+            return flow(*args, **kwargs)
+        finally:
+            _exit_key_mode()
+
+    return wrapper
+
+
+class KeyPoller:
+    """Timeout key reader so idle screens can follow terminal resizes.
+
+    ``read_key_fn`` is injected so each flow keeps patching its own
+    module-level ``read_key`` symbol.  A size change between polls returns
+    ``None`` to trigger a redraw with the fresh geometry (the key read during
+    the resize is dropped, mirroring the main TUI loop), and when stdin is
+    piped the poll falls back to one line of input instead of spinning.
+    """
+
+    def __init__(self, read_key_fn: Optional[Callable[[Optional[int]], Optional[str]]] = None) -> None:
+        self._read_key = read_key_fn or read_key
+        self._last_size = (term_width(), term_height())
+
+    def wait_key(self, *, fallback_prompt: str, timeout_ms: int = 200) -> Optional[str]:
+        key = self._read_key(timeout_ms=timeout_ms)
+        current_size = (term_width(), term_height())
+        if current_size != self._last_size:
+            self._last_size = current_size
+            return None
+        if key is None and not _stdin_is_interactive():
+            raw = input(fallback_prompt).strip()
+            return raw if raw else "ENTER"
+        return key

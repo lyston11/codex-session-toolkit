@@ -9,6 +9,7 @@ from ..models import BundleValidationResult
 from ..support import ensure_path_within_dir
 from ..validation import (
     load_manifest,
+    normalize_relative_path,
     validate_jsonl_file,
     validate_relative_path,
     validate_session_id,
@@ -30,6 +31,15 @@ def validate_bundle_directory(
 
         manifest = load_manifest(manifest_file)
         session_id = validate_session_id(manifest.get("SESSION_ID", ""))
+        agent = manifest.get("AGENT", "")
+        if agent and agent != "codex":
+            return _validate_agent_bundle_directory(
+                bundle_dir,
+                manifest,
+                session_id=session_id,
+                agent=agent,
+                source_group=source_group,
+            )
         rollout_id = validate_session_id(manifest.get("ROLLOUT_ID", "") or session_id)
         relative_path = validate_relative_path(manifest.get("RELATIVE_PATH", ""), rollout_id)
 
@@ -57,6 +67,43 @@ def validate_bundle_directory(
             source_group=source_group,
             bundle_dir=bundle_dir,
             session_id=fallback_session_id,
+            is_valid=False,
+            message=str(exc),
+        )
+
+
+def _validate_agent_bundle_directory(
+    bundle_dir: Path,
+    manifest: dict,
+    *,
+    session_id: str,
+    agent: str,
+    source_group: str,
+) -> BundleValidationResult:
+    """Agent session bundles hold the file at its home-relative path."""
+    try:
+        relative_posix = normalize_relative_path(manifest.get("RELATIVE_PATH", ""))
+        parts = relative_posix.split("/")
+        if not relative_posix or relative_posix.startswith("/") or ".." in parts:
+            raise ToolkitError(f"Unsafe relative path in manifest: {relative_posix}")
+        if parts[0] != {"claude": ".claude", "pi": ".pi", "zcode": ".zcode"}.get(agent, ""):
+            raise ToolkitError(f"Relative path does not match agent {agent}: {relative_posix}")
+        source_session = bundle_dir / Path(*parts)
+        ensure_path_within_dir(source_session, bundle_dir, "Bundled session file")
+        if not source_session.is_file():
+            raise ToolkitError(f"Missing bundled session file: {source_session}")
+        return BundleValidationResult(
+            source_group=source_group,
+            bundle_dir=bundle_dir,
+            session_id=session_id,
+            is_valid=True,
+            message=f"OK ({agent})",
+        )
+    except Exception as exc:
+        return BundleValidationResult(
+            source_group=source_group,
+            bundle_dir=bundle_dir,
+            session_id=session_id or bundle_dir.name,
             is_valid=False,
             message=str(exc),
         )

@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from typing import Optional
 
+from ..errors import ToolkitError
 from ..models import BundleSummary, SessionSummary, ValidationReport
 from ..paths import CodexPaths
+from ..stores.agent_sessions import (
+    NON_CODEX_SESSION_AGENTS,
+    collect_agent_session_summaries,
+)
 from ..stores.bundle_scanner import (
     collect_known_bundle_summaries,
     iter_known_bundle_directories,
@@ -22,14 +27,30 @@ def get_session_summaries(
     project_path: str = "",
     active_only: bool = False,
     archived_only: bool = False,
+    agent: str = "codex",
 ) -> list[SessionSummary]:
-    summaries = collect_session_summaries(
-        paths,
-        pattern=pattern,
-        limit=limit,
-        project_path=project_path,
-        active_only=active_only,
+    if agent not in {"codex", "", *NON_CODEX_SESSION_AGENTS}:
+        raise ToolkitError(f"Unsupported session agent: {agent}")
+    if agent in NON_CODEX_SESSION_AGENTS:
+        return collect_agent_session_summaries(
+            paths.home,
+            agents=(agent,),
+            pattern=pattern,
+            limit=limit,
+        )
+    summaries = list(
+        collect_session_summaries(
+            paths,
+            pattern=pattern,
+            limit=limit,
+            project_path=project_path,
+            active_only=active_only,
+        )
     )
+    if agent == "":
+        summaries.extend(
+            collect_agent_session_summaries(paths.home, pattern=pattern, limit=limit)
+        )
     if archived_only:
         return [summary for summary in summaries if summary.scope == "archived"]
     return summaries
