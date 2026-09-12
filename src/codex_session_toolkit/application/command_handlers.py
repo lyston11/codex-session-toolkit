@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 from typing import Callable, Mapping
 
 from ..paths import CodexPaths
@@ -34,6 +35,8 @@ from ..presenters.reports import (
     print_validation_report,
 )
 from ..services.agent_session_transfer import export_agent_sessions
+from ..services.skills_transfer import delete_skill_bundles as _delete_skill_bundles
+from ..services.skills_transfer import import_selected_skills_from_bundle, remove_skills_from_bundle
 from ..services.archived_sessions import delete_archived_sessions
 from ..services.backups import delete_session_backup, list_session_backups, restore_session_backup
 from ..services.browse import get_bundle_summaries, get_project_session_summaries, get_session_summaries, validate_bundles
@@ -64,7 +67,7 @@ CommandHandler = Callable[[argparse.Namespace, CodexPaths], int]
 
 
 def _handle_list(args: argparse.Namespace, paths: CodexPaths) -> int:
-    return print_session_rows(get_session_summaries(paths, pattern=args.pattern, limit=max(1, args.limit)))
+    return print_session_rows(get_session_summaries(paths, pattern=args.pattern, limit=max(1, args.limit), agent=("" if getattr(args, "agent", "codex") == "all" else getattr(args, "agent", "codex"))))
 
 
 def _handle_list_project_sessions(args: argparse.Namespace, paths: CodexPaths) -> int:
@@ -118,6 +121,23 @@ def _handle_delete_migrated_originals(args: argparse.Namespace, paths: CodexPath
             dry_run=args.dry_run,
         )
     )
+
+
+def _handle_delete_skill_bundles(args: argparse.Namespace, paths: CodexPaths) -> int:
+    results = _delete_skill_bundles(paths, [Path(value) for value in args.input_values], dry_run=args.dry_run)
+    for result in results:
+        status = "dry-run" if result.dry_run else ("deleted" if result.deleted else "failed")
+        line = f"[{status}] {result.bundle_dir}"
+        if result.error:
+            line += f" | {result.error}"
+        print(line)
+    return 0 if not any(result.error for result in results) else 1
+
+
+def _handle_trim_skill_bundle(args: argparse.Namespace, paths: CodexPaths) -> int:
+    result = remove_skills_from_bundle(paths, Path(args.bundle_dir), list(args.skill_names))
+    print(f"removed={result['removed']} dirs={result['removed_dirs']} remaining={result['remaining']}")
+    return 0
 
 
 def _handle_export(args: argparse.Namespace, paths: CodexPaths) -> int:
@@ -244,6 +264,16 @@ def _handle_list_skill_bundles(args: argparse.Namespace, paths: CodexPaths) -> i
 
 
 def _handle_import_skill_bundle(args: argparse.Namespace, paths: CodexPaths) -> int:
+    skill_names = [name.strip() for name in getattr(args, "skills", "").split(",") if name.strip()]
+    if skill_names and len(args.input_values) == 1:
+        return print_skill_import_result(
+            import_selected_skills_from_bundle(
+                paths,
+                Path(args.input_values[0]),
+                skill_names,
+                skills_mode=args.skills_mode,
+            )
+        )
     return print_skill_import_result(
         import_skill_bundle(
             paths,
@@ -424,6 +454,8 @@ COMMAND_HANDLERS: Mapping[str, CommandHandler] = {
     "import-skill-bundle": _handle_import_skill_bundle,
     "import-skill-bundles": _handle_import_skill_bundles,
     "delete-skill": _handle_delete_skill,
+    "delete-skill-bundles": _handle_delete_skill_bundles,
+    "trim-skill-bundle": _handle_trim_skill_bundle,
     "connect-github": _handle_connect_github,
     "github-proxy": _handle_github_proxy,
     "pull-github": _handle_pull_github,

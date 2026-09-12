@@ -50,6 +50,7 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     list_parser = subparsers.add_parser("list", help=command_help("list"))
+    list_parser.add_argument("--agent", default="codex", help="Session source agent: codex (default), claude, pi, zcode, or all")
     _add_optional_pattern(list_parser)
     _add_limit(list_parser)
 
@@ -145,11 +146,20 @@ def create_parser() -> argparse.ArgumentParser:
 
     import_skill_bundle_parser = subparsers.add_parser("import-skill-bundle", help=command_help("import-skill-bundle"))
     import_skill_bundle_parser.add_argument("input_values", nargs="+", help="Skill bundle directories or Skill names")
+    import_skill_bundle_parser.add_argument("--skills", default="", help="Comma-separated Skill names to import from the Bundle (default: all)")
     _add_skills_mode(import_skill_bundle_parser, action="import")
 
     import_skill_bundles_parser = subparsers.add_parser("import-skill-bundles", help=command_help("import-skill-bundles"))
     import_skill_bundles_parser.add_argument("--machine", default="", help="Only import Skills bundles from this machine key or label")
     _add_skills_mode(import_skill_bundles_parser, action="import")
+
+    delete_skill_bundles_parser = subparsers.add_parser("delete-skill-bundles", help=command_help("delete-skill-bundles"))
+    delete_skill_bundles_parser.add_argument("input_values", nargs="+", help="Skills Bundle directories to delete")
+    delete_skill_bundles_parser.add_argument("--dry-run", action="store_true", help="Preview the Bundles that would be deleted")
+
+    trim_skill_bundle_parser = subparsers.add_parser("trim-skill-bundle", help=command_help("trim-skill-bundle"))
+    trim_skill_bundle_parser.add_argument("bundle_dir", help="Skills Bundle directory to trim")
+    trim_skill_bundle_parser.add_argument("skill_names", nargs="+", help="Skill names to remove from the Bundle")
 
     delete_skill_parser = subparsers.add_parser("delete-skill", help=command_help("delete-skill"))
     delete_skill_parser.add_argument("input_values", nargs="*", help="Exact Skill names, relative directories, or local Skill directories")
