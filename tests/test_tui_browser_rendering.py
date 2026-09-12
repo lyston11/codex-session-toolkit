@@ -13,13 +13,14 @@ if str(SRC_DIR) not in os.sys.path:
     os.sys.path.insert(0, str(SRC_DIR))
 
 from codex_session_toolkit.models import BundleSummary, LocalSkillSummary, MigratedOriginalSessionSummary, SessionSummary, SkillBundleSummary  # noqa: E402
-from codex_session_toolkit.tui.browser_flows import open_archived_session_browser, open_bundle_browser, open_local_skill_browser, open_migrated_original_session_browser, open_project_session_browser, open_session_browser, open_skill_bundle_browser, render_browser_frame  # noqa: E402
+from codex_session_toolkit.tui.browser_flows import open_archived_session_browser, open_bundle_browser, open_local_skill_browser, open_migrated_original_session_browser, open_project_session_browser, open_session_browser, open_skill_bundle_browser, open_skill_bundle_detail_browser, render_browser_frame  # noqa: E402
 from codex_session_toolkit.tui.bundle_flows import bundle_detail_lines  # noqa: E402
 from codex_session_toolkit.tui.progress_flows import _render_progress  # noqa: E402
 from codex_session_toolkit.tui.prompt_flows import prompt_choice, render_prompt_choice  # noqa: E402
 from codex_session_toolkit.tui.terminal import Ansi, KeyPoller, strip_ansi  # noqa: E402
 from codex_session_toolkit.tui.terminal_io import enter_key_mode, exit_key_mode, key_mode_active, read_key, suspend_key_mode  # noqa: E402
 from codex_session_toolkit.stores.skill_roots import SkillRoot  # noqa: E402
+from codex_session_toolkit.stores.skills_manifest import SkillDescriptor  # noqa: E402
 
 
 class FakeBrowserApp:
@@ -265,6 +266,11 @@ def active_summary(session_id: str) -> SessionSummary:
         model_provider="provider",
         thread_name=f"Thread {session_id}",
     )
+
+
+def agent_bundle_summary(session_id: str, agent: str) -> BundleSummary:
+    from dataclasses import replace
+    return replace(bundle_summary(session_id), agent=agent)
 
 
 def agent_session_summary(session_id: str, agent: str) -> SessionSummary:
@@ -837,7 +843,7 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         self.assertFalse(app.run_calls)
         self.assertTrue(any(title == "删除 Bundle 完成" for title, _, _ in app.detail_calls))
 
-    def test_bundle_browse_browser_does_not_import_on_i(self) -> None:
+    def test_bundle_browse_browser_imports_on_i(self) -> None:
         first_id = "11111111-2222-4333-8444-555555555555"
         app = FakeBundleBrowserApp()
         app.snapshot = SimpleNamespace(
@@ -854,9 +860,53 @@ class TuiBrowserRenderingTests(unittest.TestCase):
             stack.enter_context(redirect_stdout(TtyStringIO()))
             open_bundle_browser(app, mode="browse")
 
-        self.assertFalse(app.run_calls)
-        self.assertFalse(app.confirm_calls)
+        self.assertEqual(len(app.run_calls), 1)
+        self.assertEqual(app.run_calls[0][1][0], "import")
         delete_mock.assert_not_called()
+
+    def test_bundle_browser_filters_by_agent_with_g(self) -> None:
+        first_id = "11111111-2222-4333-8444-555555555555"
+        app = FakeBundleBrowserApp()
+        codex_bundle = bundle_summary(first_id)
+        claude_bundle = agent_bundle_summary("sess-claude", "claude")
+        app.snapshot = SimpleNamespace(
+            entries=[codex_bundle, claude_bundle],
+            current_export_group_label="全部类别",
+            current_machine_label="全部机器",
+            export_group_options=[("", "全部类别")],
+            machine_options=[("", "全部机器")],
+        )
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["g", "g", "q"]))
+            stack.enter_context(redirect_stdout(TtyStringIO()))
+            open_bundle_browser(app, mode="browse")
+
+    def test_bundle_browse_browser_agent_filter_rows(self) -> None:
+        first_id = "11111111-2222-4333-8444-555555555555"
+        app = FakeBundleBrowserApp()
+        codex_bundle = bundle_summary(first_id)
+        claude_bundle = agent_bundle_summary("sess-claude", "claude")
+        app.snapshot = SimpleNamespace(
+            entries=[codex_bundle, claude_bundle],
+            current_export_group_label="全部类别",
+            current_machine_label="全部机器",
+            export_group_options=[("", "全部类别")],
+            machine_options=[("", "全部机器")],
+        )
+
+        output = TtyStringIO()
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=["g", "g", "g", "g", "g", "q"]))
+            stack.enter_context(redirect_stdout(output))
+            open_bundle_browser(app, mode="browse")
+
+        rendered = strip_ansi(output.getvalue())
+        frames = rendered.split("浏览 Bundle")[1:]
+        labels = [f.split("Agent   : ", 1)[1].splitlines()[0].split("│")[0].strip() for f in frames[1:]]
+        self.assertEqual(labels, ["Codex", "Claude Code", "Pi", "ZCode", "全部 Agent"])
+        self.assertNotIn("sess-claude", frames[1])
+        self.assertIn("sess-claude", frames[2])
 
     def test_bundle_browse_browser_deletes_on_x(self) -> None:
         first_id = "11111111-2222-4333-8444-555555555555"
@@ -1117,6 +1167,54 @@ class TuiBrowserRenderingTests(unittest.TestCase):
         rendered = strip_ansi(output.getvalue())
         self.assertIn("nature-proposal-writer", rendered)
         self.assertNotIn("nature-proposal-writer | Codex/custom | nature-proposal-writer", rendered)
+
+    def test_skill_bundle_detail_browser_imports_checked_skills(self) -> None:
+        app = FakeSkillBundleBrowserApp()
+        bundle = skill_bundle_summary("bundle-a")
+        skill_a = SkillDescriptor(name="pick-me", skill_file="/tmp/x", source_root="pi", relative_dir="pick-me", location_kind="custom", used=True, usage_count=1, bundled=True)
+        skill_b = SkillDescriptor(name="leave-me", skill_file="/tmp/y", source_root="codex", relative_dir="leave-me", location_kind="custom", used=True, usage_count=1, bundled=True)
+        calls = []
+
+        def fake_import(paths, bundle_dir, names):
+            calls.append(names)
+            from codex_session_toolkit.models import SkillImportResult
+            return SkillImportResult(bundle_dir=bundle.bundle_dir, restored_count=len(names))
+
+        fake_manifest = SimpleNamespace(skills=[skill_a, skill_b])
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.stores.skills_manifest.read_skills_manifest", return_value=fake_manifest))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=[" ", "i", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.import_selected_skills_from_bundle", side_effect=fake_import))
+            output = TtyStringIO()
+            stack.enter_context(redirect_stdout(output))
+            open_skill_bundle_detail_browser(app, bundle)
+
+        self.assertEqual(calls, [["pick-me"]])
+        self.assertTrue(any("导入 1 个 Skills 完成" in title for title, _l, _k in app.detail_calls))
+
+    def test_skill_bundle_browser_can_delete_checked_bundles(self) -> None:
+        app = FakeSkillBundleBrowserApp()
+        first = skill_bundle_summary("bundle-a")
+        second = skill_bundle_summary("bundle-b")
+        calls = []
+
+        def fake_delete(paths, bundle_dirs, **kwargs):
+            calls.append([Path(d) for d in bundle_dirs])
+            from codex_session_toolkit.models import BundleDeleteResult
+            return [BundleDeleteResult(bundle_dir=Path(d), session_id=Path(d).name, dry_run=False, deleted=True) for d in bundle_dirs]
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.read_key", side_effect=[" ", "DOWN", " ", "x", "q"]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.list_skill_bundles", return_value=[first, second]))
+            stack.enter_context(patch("codex_session_toolkit.tui.browser_flows.delete_skill_bundles", side_effect=fake_delete))
+            output = TtyStringIO()
+            stack.enter_context(redirect_stdout(output))
+            open_skill_bundle_browser(app, mode="view")
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls[0]), 2)
+        self.assertEqual(app.confirm_calls[0][0][0], "delete-skill-bundles")
+        self.assertTrue(any("已删除 Skills Bundle：2" in line for _t, lines, _k in app.detail_calls for line in lines))
 
     def test_skill_bundle_browser_can_import_checked_bundles(self) -> None:
         app = FakeSkillBundleBrowserApp()

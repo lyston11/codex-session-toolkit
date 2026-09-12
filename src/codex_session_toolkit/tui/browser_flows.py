@@ -11,7 +11,7 @@ from ..services.backups import list_session_backups
 from ..services.browse import get_project_session_summaries, get_session_summaries
 from ..services.bundle_management import delete_bundle_summaries
 from ..services.clone import list_migrated_original_sessions
-from ..services.skills_transfer import list_local_skills, list_skill_bundles
+from ..services.skills_transfer import delete_skill_bundles, import_selected_skills_from_bundle, list_local_skills, list_skill_bundles, remove_skills_from_bundle
 from ..support import default_local_project_target, detect_machine_key, project_label_from_path, project_label_to_key
 from .action_flows import build_bundle_import_cli_args
 from .navigation_state import (
@@ -218,6 +218,14 @@ def open_project_session_browser(app: "ToolkitTuiApp") -> None:
             continue
 
 
+BUNDLE_AGENT_OPTIONS: list[tuple[str, str]] = [("", "全部 Agent")] + [
+    (key, label) for key, label in [
+        ("codex", "Codex"),
+        ("claude", "Claude Code"),
+        ("pi", "Pi"),
+        ("zcode", "ZCode"),
+    ]
+]
 SESSION_AGENT_OPTIONS: list[tuple[str, str]] = [
     ("codex", "Codex"),
     ("claude", "Claude Code"),
@@ -1077,6 +1085,7 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
     snapshot = None
     entries: list["BundleSummary"] = []
     needs_reload = True
+    agent_filter = ""
     poller = KeyPoller(read_key)
 
     while True:
@@ -1096,15 +1105,18 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
             visible_dir_keys = {_bundle_dir_key(entry) for entry in entries}
             selected_bundle_dirs.intersection_update(visible_dir_keys)
             needs_reload = False
+        if snapshot is not None:
+            # Always derive from the snapshot: filtering the already-filtered
+            # list would compound across repaints and strand the view empty.
+            entries = list(snapshot.entries)
+            if agent_filter:
+                entries = [entry for entry in entries if (entry.agent or "codex") == agent_filter]
 
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
-        if browse_mode:
-            subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · x 删除选中/当前 · a 选中全部 · / 搜索 · s 类别 · m 机器 · l 历史 · q 返回"
-            title = "浏览 Bundle"
-        elif import_mode:
-            subtitle = "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · i 导入选中/当前 · a 选中全部 · / 搜索 · s 类别 · m 机器 · l 历史 · q 返回"
-            title = "导入 Bundle 为会话"
+        if browse_mode or import_mode:
+            subtitle = "空格 勾选 · i 导入 · x 删除 · a 全选 · d 详情 · g/s/m/l 筛选 · / 搜索 · q 返回"
+            title = "浏览 Bundle" if browse_mode else "导入 Bundle 为会话"
         else:
             subtitle = "↑/↓ 选择 · Enter 确认 · / 搜索 · s 类别 · m 来源机器 · l 历史范围 · d 查看详情 · q 返回"
             title = "选择要导入的 Bundle"
@@ -1112,6 +1124,7 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
         info_lines = [
             f"{style_text('搜索词', Ansi.DIM)} : {filter_text or '（无）'}",
             f"{style_text('匹配数量', Ansi.DIM)} : {len(entries)}",
+            f"{style_text('Agent', Ansi.DIM)}   : {_session_agent_label(agent_filter) if (browse_mode or import_mode) else '全部'}",
             f"{style_text('已勾选', Ansi.DIM)}   : {len(selected_bundle_dirs)}",
             f"{style_text('Bundle 类别', Ansi.DIM)} : {snapshot.current_export_group_label}",
             f"{style_text('来源机器', Ansi.DIM)} : {snapshot.current_machine_label}",
@@ -1209,6 +1222,11 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
             selected_bundle_dirs.clear()
             needs_reload = True
             continue
+        if key_str == "g" and (browse_mode or import_mode):
+            agent_filter = cycle_option_key(BUNDLE_AGENT_OPTIONS, agent_filter)
+            selected_bundle_dirs.clear()
+            selected_index = 0
+            continue
         if key_str == "s":
             export_group_filter = cycle_option_key(snapshot.export_group_options, export_group_filter)
             selected_index = 0
@@ -1240,13 +1258,13 @@ def open_bundle_browser(app: "ToolkitTuiApp", *, mode: str, source_group: str = 
             if all_entries:
                 entries = all_entries
             continue
-        if key_str == "x" and entries and browse_mode:
+        if key_str == "x" and entries and (browse_mode or import_mode):
             selected_entries = _selected_or_current_bundles(entries, selected_index, selected_bundle_dirs)
             if _delete_selected_bundles(app, selected_entries):
                 selected_bundle_dirs.clear()
                 needs_reload = True
             continue
-        if key_str == "i" and entries and import_mode:
+        if key_str == "i" and entries and (browse_mode or import_mode):
             selected_entries = _selected_or_current_bundles(entries, selected_index, selected_bundle_dirs)
             _run_bundle_import(
                 app,
@@ -1944,19 +1962,24 @@ def open_skill_bundle_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["S
     raw_prompt = "命令 [Enter/空格/\\/i/a/d/q]：" if mode == "view" else "命令 [Enter/\\/d/q]："
     poller = KeyPoller(read_key)
 
+    needs_reload = True
     while True:
-        try:
-            entries = list_skill_bundles(app.paths, pattern=filter_text)
-        except ToolkitError as exc:
-            app._show_detail_panel("读取 Skills Bundle 失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
-            return None
+        if needs_reload:
+            # Rescanning walks the whole bundle workspace and reads every
+            # manifest; doing that per repaint tick made the page feel stuck.
+            try:
+                entries = list_skill_bundles(app.paths, pattern=filter_text)
+            except ToolkitError as exc:
+                app._show_detail_panel("读取 Skills Bundle 失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+                return None
+            needs_reload = False
         visible_dir_keys = {_skill_bundle_dir_key(entry) for entry in entries}
         selected_bundle_dirs.intersection_update(visible_dir_keys)
 
         selected_index = clamp_selected_index(selected_index, len(entries))
         box_width, center = app._screen_layout()
         subtitle = (
-            "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · i 导入选中/当前 · a 选中全部 · q 返回"
+            "↑/↓ 选择 · 空格勾选 · Enter/d 详情 · / 搜索 · i 导入选中/当前 · x 删除选中/当前 · a 选中全部 · q 返回"
             if mode == "view"
             else "↑/↓ 选择 · Enter 确认 · / 搜索 · d 查看详情 · q 返回"
         )
@@ -2028,21 +2051,13 @@ def open_skill_bundle_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["S
                 continue
             selected = entries[selected_index]
             if mode == "view":
-                app._show_detail_panel(
-                    "Skills Bundle 详情",
-                    app._skill_bundle_detail_lines(selected),
-                    border_codes=(Ansi.DIM, Ansi.BRIGHT_BLUE),
-                )
+                open_skill_bundle_detail_browser(app, selected)
                 continue
             return selected
         if transition.exit_requested:
             return None
         if transition.show_detail and entries:
-            app._show_detail_panel(
-                "Skills Bundle 详情",
-                app._skill_bundle_detail_lines(entries[selected_index]),
-                border_codes=(Ansi.DIM, Ansi.BRIGHT_BLUE),
-            )
+            open_skill_bundle_detail_browser(app, entries[selected_index])
             continue
 
         key_str = transition.matched_hotkey
@@ -2059,11 +2074,18 @@ def open_skill_bundle_browser(app: "ToolkitTuiApp", *, mode: str) -> Optional["S
             filter_text = new_filter or ""
             selected_index = 0
             selected_bundle_dirs.clear()
+            needs_reload = True
             continue
         if key_str == "i" and entries and mode == "view":
             selected_entries = _selected_or_current_skill_bundles(entries, selected_index, selected_bundle_dirs)
             _run_skill_bundle_import(app, selected_entries)
             selected_bundle_dirs.clear()
+            continue
+        if key_str == "x" and entries and mode == "view":
+            selected_entries = _selected_or_current_skill_bundles(entries, selected_index, selected_bundle_dirs)
+            if _delete_selected_skill_bundles(app, selected_entries):
+                selected_bundle_dirs.clear()
+                needs_reload = True
             continue
         if key_str == "a" and mode == "view":
             all_entries = _all_skill_bundle_entries_for_current_filter(app, filter_text=filter_text)
@@ -2129,6 +2151,173 @@ def _select_matching_skill_bundles(
         return
     for entry in entries:
         selected_bundle_dirs.add(_skill_bundle_dir_key(entry))
+
+
+def open_skill_bundle_detail_browser(app: "ToolkitTuiApp", bundle: "SkillBundleSummary") -> None:
+    """Browse the skills inside one bundle; check items then import them."""
+    from ..stores.skills_manifest import read_skills_manifest
+
+    try:
+        manifest = read_skills_manifest(bundle.bundle_dir)
+    except ToolkitError as exc:
+        app._show_detail_panel("读取 Skills Bundle 失败", [str(exc)], border_codes=(Ansi.DIM, Ansi.RED))
+        return
+    if manifest is None or not manifest.skills:
+        app._show_detail_panel(
+            "Skills Bundle 详情",
+            app._skill_bundle_detail_lines(bundle),
+            border_codes=(Ansi.DIM, Ansi.BRIGHT_BLUE),
+        )
+        return
+    skills = list(manifest.skills)
+    importable = {skill.name for skill in skills if skill.bundled}
+    selected_skills: set[str] = set()
+    selected_index = 0
+    pointer = glyphs().get("pointer", ">")
+    header = app._skill_bundle_detail_lines(bundle)
+    header = [line for line in header if not line.startswith("包含") and not line.lstrip().startswith("- ")]
+
+    while True:
+        selected_index = clamp_selected_index(selected_index, len(skills))
+        box_width, center = app._screen_layout()
+        subtitle = "↑/↓ 选择 · 空格勾选 · i 导入选中 · x 从 Bundle 移除 · a 选中全部可导入 · q 返回"
+        info_lines = list(header)
+        info_lines.extend([
+            f"{style_text('可导入', Ansi.DIM)} : {len(importable)}/{len(skills)}",
+            f"{style_text('已勾选', Ansi.DIM)} : {len(selected_skills)}",
+        ])
+        list_lines: list[str] = []
+        start, end = selection_window(len(skills), selected_index, 10)
+        for idx in range(start, end):
+            skill = skills[idx]
+            marker = "[x]" if skill.name in selected_skills else "[ ]" if skill.bundled else "   "
+            note = "" if skill.bundled else "（仅元数据）"
+            line = f"{pointer if idx == selected_index else ' '} {marker} {skill.name}  [{skill.source_root or '-'}]{note}"
+            list_lines.append(style_text(line, Ansi.BOLD, Ansi.CYAN) if idx == selected_index else line)
+        render_browser_frame(
+            app,
+            title=f"Skills Bundle 详情 · {bundle.bundle_dir.name}",
+            subtitle=subtitle,
+            info_lines=info_lines,
+            list_lines=list_lines,
+            list_border_codes=(Ansi.DIM, Ansi.BRIGHT_BLUE),
+            box_width=box_width,
+            center=center,
+        )
+        key = poller_wait_key(fallback_prompt="命令 [空格/i/a/q]：")
+        if key is None:
+            continue
+        if key == " " and skills:
+            current = skills[selected_index]
+            if current.name in importable:
+                if current.name in selected_skills:
+                    selected_skills.discard(current.name)
+                else:
+                    selected_skills.add(current.name)
+            continue
+        if key == "a":
+            if len(selected_skills) == len(importable):
+                selected_skills.clear()
+            else:
+                selected_skills = set(importable)
+            continue
+        transition = apply_list_key(key, selected_index=selected_index, item_count=len(skills))
+        selected_index = transition.selected_index
+        if transition.exit_requested:
+            return
+        if transition.matched_hotkey == "i" and selected_skills:
+            _run_selected_skill_import(app, bundle, sorted(selected_skills))
+            selected_skills.clear()
+            continue
+        if transition.matched_hotkey == "x" and skills:
+            names = sorted(selected_skills) or [skills[selected_index].name]
+            if _remove_skills_from_bundle(app, bundle, names):
+                skills = [skill for skill in skills if skill.name not in set(names)]
+                importable.difference_update(names)
+                selected_skills.clear()
+                selected_index = clamp_selected_index(selected_index, len(skills))
+            continue
+
+
+def _remove_skills_from_bundle(
+    app: "ToolkitTuiApp",
+    bundle: "SkillBundleSummary",
+    skill_names: list[str],
+) -> bool:
+    preview = ", ".join(skill_names[:8]) + ("..." if len(skill_names) > 8 else "")
+    confirmed = app._confirm_dangerous_action(
+        ["trim-skill-bundle", str(bundle.bundle_dir), *skill_names],
+        title="从 Bundle 移除 Skills",
+        subtitle="该操作会改写 Bundle：删除对应目录并重写 manifest，且无法恢复。",
+        warning=f"将从 Bundle 移除 {len(skill_names)} 个 Skills。",
+        impact=preview,
+    )
+    if not confirmed:
+        return False
+    result = remove_skills_from_bundle(app.paths, bundle.bundle_dir, skill_names)
+    app._show_detail_panel(
+        "从 Bundle 移除完成",
+        [
+            f"已移除：{result['removed']}（目录 {result['removed_dirs']} 个）",
+            f"Bundle 剩余：{result['remaining']} 个 Skills",
+        ],
+        border_codes=(Ansi.DIM, Ansi.GREEN),
+    )
+    return True
+
+
+def _run_selected_skill_import(
+    app: "ToolkitTuiApp",
+    bundle: "SkillBundleSummary",
+    skill_names: list[str],
+) -> None:
+    result = import_selected_skills_from_bundle(app.paths, bundle.bundle_dir, skill_names)
+    lines = [
+        f"已恢复：{result.restored_count}",
+        f"已存在：{result.already_present_count}",
+        f"冲突跳过：{result.conflict_skipped_count}",
+        f"失败：{result.failed_count}",
+    ]
+    lines.extend(f"[警告] {warning.code}: {warning.detail}" for warning in result.warnings[:8])
+    app._show_detail_panel(
+        f"导入 {len(skill_names)} 个 Skills 完成",
+        lines,
+        border_codes=(Ansi.DIM, Ansi.GREEN),
+    )
+
+
+def poller_wait_key(*, fallback_prompt: str) -> Optional[str]:
+    return KeyPoller(read_key).wait_key(fallback_prompt=fallback_prompt)
+
+
+def _delete_selected_skill_bundles(app: "ToolkitTuiApp", bundles: list["SkillBundleSummary"]) -> bool:
+    if not bundles:
+        app._show_detail_panel(
+            "删除 Skills Bundle",
+            ["当前没有可删除的 Bundle。"],
+            border_codes=(Ansi.DIM, Ansi.YELLOW),
+        )
+        return False
+    preview = [str(bundle.bundle_dir) for bundle in bundles[:8]]
+    if len(bundles) > 8:
+        preview.append(f"... 还有 {len(bundles) - 8} 个 Bundle")
+    confirmed = app._confirm_dangerous_action(
+        ["delete-skill-bundles", *[str(bundle.bundle_dir) for bundle in bundles]],
+        title="删除 Skills Bundle",
+        subtitle="该操作会删除本地 Skills Bundle 目录，且无法恢复。",
+        warning=f"将删除 {len(bundles)} 个本地 Skills Bundle 目录。",
+        impact="本地 Bundle 目录：" + "；".join(preview),
+    )
+    if not confirmed:
+        return False
+    results = delete_skill_bundles(app.paths, [bundle.bundle_dir for bundle in bundles])
+    deleted = [result for result in results if result.deleted]
+    failed = [result for result in results if result.error]
+    detail_lines = [f"已删除 Skills Bundle：{len(deleted)}", f"失败：{len(failed)}"]
+    detail_lines.extend(f"- {result.bundle_dir}" for result in deleted[:12])
+    detail_lines.extend(f"[失败] {result.bundle_dir}: {result.error}" for result in failed)
+    app._show_detail_panel("删除 Skills Bundle 完成", detail_lines, border_codes=(Ansi.DIM, Ansi.GREEN))
+    return True
 
 
 def _run_skill_bundle_import(

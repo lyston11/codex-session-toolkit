@@ -268,8 +268,17 @@ class ToolkitTuiApp:
             f"{style_text('Skill 数', Ansi.DIM)} : {bundle.bundled_skill_count}/{bundle.skill_count}",
             f"{style_text('路径', Ansi.DIM)}     : {bundle.bundle_dir}",
         ]
-        if bundle.skills:
-            lines.append(f"{style_text('包含', Ansi.DIM)}     : {', '.join(bundle.skills)}")
+        entries = _skill_bundle_manifest_entries(bundle.bundle_dir)
+        if entries:
+            lines.append("")
+            lines.append(style_text(f"包含 {len(entries)} 个 Skills：", Ansi.BOLD))
+            for skill in entries:
+                bundled_mark = "" if skill.get("bundled") else "（仅元数据）"
+                lines.append(f"  - {skill['name']}  [{skill.get('source_root') or '-'}]{bundled_mark}")
+        elif bundle.skills:
+            lines.append("")
+            lines.append(style_text(f"包含 {len(bundle.skills)} 个 Skills：", Ansi.BOLD))
+            lines.extend(f"  - {name}" for name in bundle.skills)
         return lines
 
     def _bundle_browser_snapshot(
@@ -599,3 +608,24 @@ class ToolkitTuiApp:
 
 def run_tui(context: ToolkitAppContext) -> int:
     return ToolkitTuiApp(context).run()
+
+
+def _skill_bundle_manifest_entries(bundle_dir: Path) -> List[dict]:
+    """Read per-skill entries from a bundle's skills manifest for detail views."""
+    from ..stores.skills_manifest import read_skills_manifest
+
+    try:
+        manifest = read_skills_manifest(Path(bundle_dir))
+    except Exception:
+        return []
+    if manifest is None:
+        return []
+    return [
+        {
+            "name": skill.name,
+            "source_root": skill.source_root,
+            "relative_dir": skill.relative_dir,
+            "bundled": skill.bundled,
+        }
+        for skill in manifest.skills
+    ]

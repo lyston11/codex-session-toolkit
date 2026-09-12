@@ -334,25 +334,6 @@ class PackagingSmokeTests(unittest.TestCase):
                 danger=False,
             )
 
-    def test_tui_bundle_import_menu_opens_bundle_browser(self) -> None:
-        test_case = self
-
-        class ImportApp:
-            def __init__(self) -> None:
-                self.open_calls = []
-
-            def _open_bundle_browser(self, *, mode):
-                test_case.assertEqual(mode, "import")
-                self.open_calls.append(mode)
-
-        action_name, cli_args = resolve_menu_action_request(
-            ImportApp(),
-            SimpleNamespace(action_id="import_bundles", label="导入 Bundle 为会话", cli_args=("import",)),
-        )
-
-        self.assertIsNone(action_name)
-        self.assertIsNone(cli_args)
-
     def test_tui_bundle_browse_menu_opens_management_browser(self) -> None:
         test_case = self
 
@@ -1140,7 +1121,6 @@ class PackagingSmokeTests(unittest.TestCase):
                 "export_desktop_all",
                 "export_desktop_active",
                 "export_cli_all",
-                "import_bundles",
             },
         )
         self.assertEqual(
@@ -1187,7 +1167,6 @@ class PackagingSmokeTests(unittest.TestCase):
         self.assertEqual(labels_by_action["export_desktop_all"], "导出全部 Desktop 会话为 Bundle")
         self.assertEqual(labels_by_action["export_desktop_active"], "导出全部 Active Desktop 会话为 Bundle")
         self.assertEqual(labels_by_action["export_cli_all"], "导出全部 CLI 会话为 Bundle")
-        self.assertEqual(labels_by_action["import_bundles"], "导入 Bundle 为会话")
         self.assertEqual(labels_by_action["list_skills"], "浏览并导出本机 Skills")
         self.assertEqual(labels_by_action["browse_skill_bundles"], "浏览并导入 Skills Bundle")
         self.assertEqual(labels_by_action["delete_skill"], "删除本机 Skills")

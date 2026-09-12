@@ -12,6 +12,7 @@ from typing import Optional, Sequence
 
 from ..errors import ToolkitError
 from ..models import (
+    BundleDeleteResult,
     LocalSkillSummary,
     OperationWarning,
     SkillBundleSummary,
@@ -21,6 +22,7 @@ from ..models import (
 )
 from ..paths import CodexPaths
 from ..stores.skills_manifest import SKILLS_MANIFEST_FILENAME, read_skills_manifest, write_skills_manifest
+from dataclasses import replace as _dataclass_replace
 from ..stores.skill_roots import root_by_id
 from ..stores.skill_roots_manifest import write_roots_manifest
 from ..stores.skills import (
@@ -146,6 +148,41 @@ def export_skills(
         shutil.rmtree(stage_root, ignore_errors=True)
 
 
+def delete_skill_bundles(
+    paths: CodexPaths,
+    bundle_dirs: Sequence[Path],
+    *,
+    dry_run: bool = False,
+) -> list[BundleDeleteResult]:
+    results: list[BundleDeleteResult] = []
+    seen: set[str] = set()
+    for bundle_dir in bundle_dirs:
+        bundle_dir = Path(bundle_dir).expanduser()
+        dir_key = _path_key(bundle_dir)
+        if dir_key in seen:
+            continue
+        seen.add(dir_key)
+        try:
+            restrict_to_local_bundle_workspace(paths, bundle_dir, "Skills bundle directory")
+            _assert_skill_bundle(bundle_dir)
+            if not dry_run:
+                shutil.rmtree(bundle_dir)
+            results.append(BundleDeleteResult(
+                bundle_dir=bundle_dir,
+                session_id=bundle_dir.name,
+                dry_run=dry_run,
+                deleted=not dry_run,
+            ))
+        except ToolkitError as exc:
+            results.append(BundleDeleteResult(
+                bundle_dir=bundle_dir,
+                session_id=bundle_dir.name,
+                dry_run=dry_run,
+                error=str(exc),
+            ))
+    return results
+
+
 def list_skill_bundles(
     paths: CodexPaths,
     *,
@@ -244,6 +281,116 @@ def _import_one_skill_bundle_dir(
         failed_count=failed,
         warnings=list(outcome.warnings),
     )
+
+
+def import_selected_skills_from_bundle(
+    paths: CodexPaths,
+    bundle_dir: Path,
+    skill_names: Sequence[str],
+    *,
+    skills_mode: str = "best-effort",
+) -> SkillImportResult:
+    """Restore only the named bundled Skills from one Skills Bundle."""
+    _assert_skill_bundle(bundle_dir)
+    manifest = read_skills_manifest(bundle_dir)
+    if manifest is None:
+        raise ToolkitError(f"Invalid skills manifest: {bundle_dir / SKILLS_MANIFEST_FILENAME}")
+    if skills_mode == "skip":
+        return SkillImportResult(bundle_dir=bundle_dir)
+    wanted = {name.strip() for name in skill_names if name.strip()}
+    selected = tuple(skill for skill in manifest.skills if skill.name in wanted and skill.bundled)
+    missing = sorted(wanted - {skill.name for skill in manifest.skills})
+    not_bundled = sorted(
+        name for name in wanted
+        if name not in missing and not any(s.name == name and s.bundled for s in manifest.skills)
+    )
+    subset = _dataclass_replace(
+        manifest,
+        skills=selected,
+        available_skill_count=len(selected),
+        used_skill_count=len(selected),
+        bundled_skill_count=len(selected),
+    )
+    outcome = restore_skills(subset, bundle_dir, paths.home, skills_mode=skills_mode, roots=paths.skill_roots())
+    counts = {status: sum(1 for r in outcome.results if r.status == status) for status in
+              ("restored", "already_present", "conflict_skipped", "missing", "failed")}
+    warnings = list(outcome.warnings)
+    if missing:
+        warnings.append(OperationWarning(
+            code="skill_not_in_bundle",
+            path=str(bundle_dir),
+            detail="not in bundle: " + ", ".join(missing),
+        ))
+    if not_bundled:
+        warnings.append(OperationWarning(
+            code="skill_not_bundled",
+            path=str(bundle_dir),
+            detail="metadata only, nothing to restore: " + ", ".join(not_bundled),
+        ))
+    return SkillImportResult(
+        bundle_dir=bundle_dir,
+        restored_count=counts["restored"],
+        already_present_count=counts["already_present"],
+        conflict_skipped_count=counts["conflict_skipped"],
+        missing_count=counts["missing"],
+        failed_count=counts["failed"],
+        warnings=warnings,
+    )
+
+
+def remove_skills_from_bundle(
+    paths: CodexPaths,
+    bundle_dir: Path,
+    skill_names: Sequence[str],
+) -> dict:
+    """Remove named skills from a Skills Bundle (dirs + manifest rewrite)."""
+    _assert_skill_bundle(bundle_dir)
+    bundle_dir = restrict_to_local_bundle_workspace(paths, bundle_dir, "Skills bundle directory")
+    manifest = read_skills_manifest(bundle_dir)
+    if manifest is None:
+        raise ToolkitError(f"Invalid skills manifest: {bundle_dir / SKILLS_MANIFEST_FILENAME}")
+    wanted = {name.strip() for name in skill_names if name.strip()}
+    if not wanted:
+        raise ToolkitError("Skill name is required.")
+    unknown = sorted(name for name in wanted if not any(s.name == name for s in manifest.skills))
+    if unknown:
+        raise ToolkitError(f"Skill not in bundle: {', '.join(unknown)}")
+
+    import shutil as _shutil
+
+    removed_dirs = 0
+    remaining = []
+    for skill in manifest.skills:
+        if skill.name in wanted:
+            if skill.bundled and skill.bundle_path:
+                target = bundle_dir / Path(*skill.bundle_path.split("/"))
+                if target.is_dir():
+                    _shutil.rmtree(target)
+                    removed_dirs += 1
+            continue
+        remaining.append(skill)
+
+    bundled_count = sum(1 for skill in remaining if skill.bundled)
+    subset = _dataclass_replace(
+        manifest,
+        skills=tuple(remaining),
+        available_skill_count=len(remaining),
+        used_skill_count=len(remaining),
+        bundled_skill_count=bundled_count,
+    )
+    write_skills_manifest(subset, bundle_dir)
+
+    env = _read_skill_bundle_manifest(bundle_dir / "manifest.env")
+    _write_skill_bundle_manifest(
+        bundle_dir / "manifest.env",
+        exported_at=env.get("EXPORTED_AT", ""),
+        machine_label=env.get("EXPORT_MACHINE", ""),
+        machine_key=env.get("EXPORT_MACHINE_KEY", ""),
+        export_group=env.get("EXPORT_GROUP", ""),
+        skill_count=len(remaining),
+        bundled_count=bundled_count,
+    )
+    return {"removed": len(wanted), "removed_dirs": removed_dirs, "remaining": len(remaining)}
 
 
 def import_all_skill_bundles(
@@ -485,11 +632,20 @@ def _resolve_local_skill_delete_matches(
 def _resolve_local_skill_matches(candidates: Sequence[LocalSkillSummary], input_value: str) -> list[LocalSkillSummary]:
     input_value = input_value.strip()
     candidate_path = Path(input_value).expanduser()
-    resolved_input = _path_key(candidate_path) if candidate_path.is_absolute() else ""
+    if candidate_path.is_absolute():
+        # An exact path selects one specific entry. Shared roots may hold
+        # symlinked copies resolving to the same real directory as the
+        # per-agent original, so literal matches must win over realpath
+        # matching or both entries would count as ambiguous matches.
+        literal_inputs = {input_value, str(candidate_path)}
+        literal = [candidate for candidate in candidates if str(candidate.skill_dir) in literal_inputs]
+        if literal:
+            return literal
+        resolved_input = _path_key(candidate_path)
+        return [candidate for candidate in candidates if _path_key(candidate.skill_dir) == resolved_input]
     return [
         candidate for candidate in candidates
-        if input_value in {candidate.name, candidate.relative_dir, str(candidate.skill_dir)}
-        or (resolved_input and _path_key(candidate.skill_dir) == resolved_input)
+        if input_value in {candidate.name, candidate.relative_dir}
     ]
 
 

@@ -339,10 +339,6 @@ def resolve_menu_action_request(app: "ToolkitTuiApp", menu_action: "TuiMenuActio
         app._open_local_skill_browser(mode="view")
         return None, None
 
-    if menu_action.action_id == "import_bundles":
-        app._open_bundle_browser(mode="import")
-        return None, None
-
     if menu_action.action_id == "import_skill_bundle":
         app._open_skill_bundle_browser(mode="view")
         return None, None

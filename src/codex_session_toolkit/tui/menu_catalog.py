@@ -66,16 +66,11 @@ TUI_ACTION_NOTES = {
         "粘贴项目路径后，只查看这个项目下的全部会话。",
         "支持当前会话、勾选多条导出，也支持按 a 选中该项目全部匹配项后按 e 导出。",
     ],
-    "browse_bundles": ["独立浏览和管理 Bundle 记录，不在这里执行导入。", "包含 Codex 与 Claude Code / Pi / ZCode 的会话 Bundle（详情显示 Agent），支持按类别、来源机器和历史范围筛选。"],
+    "browse_bundles": ["统一管理会话 Bundle：g Agent / s 类别 / m 机器 / l 历史筛选，详情显示 Agent。", "勾选后按 i 导入选中的 Bundle 为会话，按 x 删除本机 Bundle 目录。"],
     "validate_bundles": ["扫描 Bundle 导出目录里的 manifest、session JSONL 和 history JSONL。", "Codex Bundle 校验会话与历史记录；Claude Code / Pi / ZCode 的文件级 Bundle 校验路径与文件存在性。"],
     "export_desktop_all": ["默认归档到 ./codex_bundles/<machine>/sessions/desktop/<timestamp>/。", "范围包含 active + archived 的 Desktop 会话，并分别生成 Bundle。"],
     "export_desktop_active": ["默认归档到 ./codex_bundles/<machine>/sessions/active/<timestamp>/。", "仅导出 ~/.codex/sessions/ 下的 Desktop 会话，不会扫描 ~/.codex/archived_sessions/。"],
     "export_cli_all": ["默认归档到 ./codex_bundles/<machine>/sessions/cli/<timestamp>/。", "范围包含 active + archived 的 Codex CLI 会话；Claude Code / Pi / ZCode 的全量导出走 [1] Session / Browse 切换 Agent 后 a 全选 + e。"],
-    "import_bundles": [
-        "进入 Bundle 列表后可搜索、筛选、勾选再导入。",
-        "支持当前 Bundle、勾选多条导入，也支持按 a 选中全部匹配 Bundle 后按 i 导入；删除请回到浏览 Bundle。",
-        "Codex Bundle 导入会同步修复 history / index / Desktop 线程表和侧栏状态；Claude Code / Pi / ZCode 的文件级 Bundle 直接复制回对应 Agent 目录，冲突默认跳过。",
-    ],
     "list_skills": [
         "浏览本机已安装的 Skills，默认只读取共享自定义 Skills，不包含 Codex、Pi、ZCode 等 Agent 系统目录。",
         "可按 g 切换到 Codex、Pi、Claude Code、ZCode 等 Agent 根目录，或查看全部 Agent 汇总。",
@@ -86,6 +81,7 @@ TUI_ACTION_NOTES = {
     "browse_skill_bundles": [
         "浏览 standalone Skills Bundle，和会话 Bundle 分开管理。",
         "支持当前 Bundle、勾选多条导入，也支持按 a 选中全部匹配 Skills Bundle 后按 i 导入。",
+        "按 x 删除选中/当前的本机 Skills Bundle 目录；进入详情后可按 x 把勾选的 Skill 从 Bundle 中移除（均需确认）。",
     ],
     "import_skill_bundle": ["选择一个 Skills Bundle 导入；同内容复用，冲突默认跳过。"],
     "import_skill_bundles": ["批量导入 standalone Skills Bundle，可按来源机器过滤。"],
@@ -186,7 +182,6 @@ def build_tui_menu_actions() -> List[TuiMenuAction]:
         _menu_action("export_desktop_all", "b", "导出全部 Desktop 会话为 Bundle", ("export-desktop-all",)),
         _menu_action("export_desktop_active", "v", "导出全部 Active Desktop 会话为 Bundle", ("export-active-desktop-all",)),
         _menu_action("export_cli_all", "c", "导出全部 CLI 会话为 Bundle", ("export-cli-all",)),
-        _menu_action("import_bundles", "i", "导入 Bundle 为会话", ("import", "<bundle_dir...>")),
         _menu_action("list_skills", "s", "浏览并导出本机 Skills", ("list-skills",)),
         _menu_action("browse_skill_bundles", "i", "浏览并导入 Skills Bundle", ("list-skill-bundles",)),
         _menu_action("delete_skill", "d", "删除本机 Skills", ("delete-skill", "<skill_name>"), is_dangerous=True),

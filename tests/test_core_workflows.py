@@ -5147,6 +5147,35 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertTrue(removed.deleted)
             self.assertFalse(real_dir.exists())
 
+    def test_delete_local_skills_resolves_exact_paths_across_symlinked_shared_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir) / "home"
+            real_dir = write_test_skill(home / ".codex" / "skills", "shared-skill", "real content")
+            agents_skills = home / ".agents" / "skills"
+            agents_skills.mkdir(parents=True, exist_ok=True)
+            link_dir = agents_skills / "shared-skill"
+            link_dir.symlink_to(real_dir)
+            other_dir = write_test_skill(agents_skills, "standalone-skill", "other content")
+            paths = CodexPaths(home=home)
+
+            from codex_session_toolkit.errors import ToolkitError
+            with self.assertRaises(ToolkitError):
+                delete_local_skill(paths, "shared-skill")
+
+            unlinked = delete_local_skill(paths, str(link_dir))
+            self.assertTrue(unlinked.deleted)
+            self.assertEqual(unlinked.source_root, "agents")
+            self.assertFalse(link_dir.exists())
+            self.assertTrue(real_dir.is_dir())
+
+            removed = delete_local_skills(paths, [str(real_dir), str(other_dir)])
+            self.assertEqual(
+                [(result.source_root, result.relative_dir) for result in removed],
+                [("codex", "shared-skill"), ("agents", "standalone-skill")],
+            )
+            self.assertFalse(real_dir.exists())
+            self.assertFalse(other_dir.exists())
+
     def test_collect_agent_session_summaries_parses_claude_pi_zcode_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir) / "home"
@@ -5384,6 +5413,56 @@ class CoreWorkflowTests(unittest.TestCase):
                 (".claude/skills", "claude-skill"),
             ):
                 self.assertTrue((dst_home / root / name / "SKILL.md").is_file(), f"{root}/{name} not restored")
+
+    def test_import_selected_skills_from_bundle_restores_subset(self) -> None:
+        from codex_session_toolkit.paths import CodexPaths
+        from codex_session_toolkit.services.skills_transfer import export_skills, import_selected_skills_from_bundle
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            home = Path(tmpdir) / "home"
+            write_test_skill(home / ".pi" / "skills", "pick-me", "pick")
+            write_test_skill(home / ".zcode" / "skills", "leave-me", "leave")
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                export = export_skills(CodexPaths(home=home))
+            dst = Path(tmpdir) / "dst"
+            with pushd(workspace):
+                result = import_selected_skills_from_bundle(CodexPaths(home=dst), export.bundle_dir, ["pick-me"])
+            self.assertEqual(result.restored_count, 1)
+            self.assertTrue((dst / ".pi" / "skills" / "pick-me" / "SKILL.md").is_file())
+            self.assertFalse((dst / ".zcode" / "skills" / "leave-me").exists())
+
+    def test_remove_skills_from_bundle_trims_dirs_and_manifest(self) -> None:
+        from codex_session_toolkit.paths import CodexPaths
+        from codex_session_toolkit.services.skills_transfer import export_skills, remove_skills_from_bundle
+        from codex_session_toolkit.stores.skills_manifest import read_skills_manifest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            home = Path(tmpdir) / "home"
+            write_test_skill(home / ".pi" / "skills", "drop-me", "drop")
+            write_test_skill(home / ".zcode" / "skills", "keep-me", "keep")
+
+            with pushd(workspace), env_override("CST_MACHINE_LABEL", "MachineA"):
+                export = export_skills(CodexPaths(home=home))
+                result = remove_skills_from_bundle(
+                    CodexPaths(home=home),
+                    export.bundle_dir,
+                    ["drop-me"],
+                )
+            self.assertEqual(result["removed"], 1)
+            self.assertFalse((export.bundle_dir / "skills" / "pi" / "drop-me").exists())
+            manifest = read_skills_manifest(export.bundle_dir)
+            self.assertEqual([skill.name for skill in manifest.skills], ["keep-me"])
+            self.assertEqual(manifest.bundled_skill_count, 1)
+
+            from codex_session_toolkit.services.skills_transfer import list_skill_bundles
+            with pushd(workspace):
+                bundles = list_skill_bundles(CodexPaths(home=home), pattern="keep-me")
+            self.assertEqual(bundles[0].skill_count, 1)
 
     def test_validate_bundle_with_skills_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
